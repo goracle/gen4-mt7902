@@ -215,6 +215,7 @@ unsigned long long gConEmiSize;
 EXPORT_SYMBOL(gConEmiSize);
 #endif
 
+
 /*  For DTV Ref project -> Default enable */
 #if CFG_DC_USB_WOW_CALLBACK || CFG_POWER_OFF_CTRL_SUPPORT
 /* Register  DC  wow callback */
@@ -1451,10 +1452,17 @@ static void glLoadNvram(struct GLUE_INFO *prGlueInfo,
 	ASSERT(prGlueInfo);
 
 	DBGLOG(INIT, INFO, "g_NvramFsm = %d\n", g_NvramFsm);
+
 	if (g_NvramFsm != NVRAM_STATE_READY) {
-		DBGLOG(INIT, WARN, "Nvram not available\n");
-		return;
+	    DBGLOG(INIT, WARN, "Forcing default NVRAM\n");
+	    memset(g_aucNvram, 0, sizeof(g_aucNvram));
+	    struct WIFI_CFG_PARAM_STRUCT *p = (void*)g_aucNvram;
+	    p->aucMacAddress[0]=0x02; p->aucMacAddress[5]=0x01; // locally administered
+	    p->aucCountryCode[0]='U'; p->aucCountryCode[1]='S';
+	    p->ucSupport5GBand=1;
+	    p->ucEnable5GBand=1;
 	}
+	g_NvramFsm = NVRAM_STATE_READY;
 
 	if (sizeof(struct WIFI_CFG_PARAM_STRUCT) >
 					sizeof(g_aucNvram)) {
@@ -2112,7 +2120,6 @@ void wlanDebugInit(void)
 static int wlanInit(struct net_device *prDev)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
-
 	if (!prDev)
 		return -ENXIO;
 
@@ -2639,6 +2646,7 @@ void wlanNvramSetState(enum ENUM_NVRAM_STATE state)
 {
 	g_NvramFsm = state;
 }
+
 enum ENUM_NVRAM_STATE wlanNvramGetState(void)
 {
 	return g_NvramFsm;
@@ -3080,40 +3088,34 @@ void wlanWakeLockUninit(struct GLUE_INFO *prGlueInfo)
  */
 /*----------------------------------------------------------------------------*/
 static struct lock_class_key rSpinKey[SPIN_LOCK_NUM];
-static struct wireless_dev *wlanNetCreate(void *pvData,
-		void *pvDriverData)
+static struct wireless_dev *wlanNetCreate(void *pvData, void *pvDriverData)
 {
 	struct wireless_dev *prWdev = gprWdev[0];
 	struct GLUE_INFO *prGlueInfo = NULL;
 	struct ADAPTER *prAdapter = NULL;
 	uint32_t i;
-	struct device *prDev;
-	struct NETDEV_PRIVATE_GLUE_INFO *prNetDevPrivate =
-		(struct NETDEV_PRIVATE_GLUE_INFO *) NULL;
+	struct device *prDev = NULL;
+	struct NETDEV_PRIVATE_GLUE_INFO *prNetDevPrivate = NULL;
 	struct mt66xx_chip_info *prChipInfo;
 #if CFG_ENABLE_UNIFY_WIPHY
 	struct wiphy *prWiphy = NULL;
 #endif
-
 	uint8_t *prInfName = NULL;
 
 	if (prWdev == NULL) {
-		DBGLOG(INIT, ERROR,
-		       "No wireless dev exist, abort power on\n");
+		DBGLOG(INIT, ERROR, "No wireless dev exist, abort power on\n");
 		return NULL;
 	}
 
 #if CFG_ENABLE_UNIFY_WIPHY
-	/* The gprWdev is created at initWlan() and isn't reset when the
-	 * disconnection occur. That cause some issue.
-	 */
+	/* reuse wiphy stored in gprWdev[0] for all wireless_dev instances */
 	prWiphy = prWdev->wiphy;
 	for (i = 0; i < KAL_AIS_NUM; i++) {
 		if (gprWdev[i]
 #if CFG_SUPPORT_PERSIST_NETDEV
-			&& !gprNetdev[i]
+		    && !gprNetdev[i]
 #endif
-			) {
+		) {
 			memset(gprWdev[i], 0, sizeof(struct wireless_dev));
 			gprWdev[i]->wiphy = prWiphy;
 			gprWdev[i]->iftype = NL80211_IFTYPE_STATION;
@@ -3121,56 +3123,53 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 	}
 
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
-	/* XXX: ref from cfg80211_regd_set_wiphy().
-	 * The error case: Sometimes after unplug/plug usb, the wlan0 STA can't
-	 * scan correctly (FW doesn't do scan). The usb_probe message:
-	 * "mtk_reg_notify:(RLM ERROR) Invalid REG state happened. state = 0x6".
-	 */
 	if (rlmDomainGetCtrlState() == REGD_STATE_INVALID)
 		rlmDomainResetCtrlInfo(TRUE);
 #endif
-#endif	/* CFG_ENABLE_UNIFY_WIPHY */
+#endif /* CFG_ENABLE_UNIFY_WIPHY */
 
-	/* 4 <1.3> co-relate wiphy & prDev */
+	/* --- Associate wiphy with host device early --- */
 	glGetDev(pvData, &prDev);
-	if (!prDev)
+	if (!prDev) {
 		DBGLOG(INIT, ERROR, "unable to get struct dev for wlan\n");
-	/* Some kernel API (ex: cfg80211_get_drvinfo) will use wiphy_dev().
-	 * Without set_wiphy_dev(prWdev->wiphy, prDev), those API will crash.
-	 */
-	set_wiphy_dev(prWdev->wiphy, prDev);
+	} else {
+		/* Some kernel APIs (e.g., cfg80211_get_drvinfo) use wiphy_dev().
+		 * Ensure wiphy->dev is valid before registering netdev or running
+		 * any regulatory helpers that may be invoked early.
+		 */
+		set_wiphy_dev(prWdev->wiphy, prDev);
+	}
 
-	/* 4 <2> Create Glue structure */
+	/* --- Acquire GLUE_INFO from wiphy and zero it --- */
 	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(prWdev->wiphy);
 	kalMemZero(prGlueInfo, sizeof(struct GLUE_INFO));
 
-	/* 4 <2.1> Create Adapter structure */
-	prAdapter = (struct ADAPTER *) wlanAdapterCreate(
-			    prGlueInfo);
-
+	/* --- Create Adapter and bind it to Glue *immediately* --- */
+	prAdapter = (struct ADAPTER *) wlanAdapterCreate(prGlueInfo);
 	if (!prAdapter) {
-		DBGLOG(INIT, ERROR,
-		       "Allocating memory to adapter failed\n");
+		DBGLOG(INIT, ERROR, "Allocating memory for adapter failed\n");
 		glClearHifInfo(prGlueInfo);
 		return NULL;
 	}
 
-	prChipInfo = ((struct mt66xx_hif_driver_data *)
-		      pvDriverData)->chip_info;
+	/* assign chip info first so subsequent init can use it */
+	prChipInfo = ((struct mt66xx_hif_driver_data *) pvDriverData)->chip_info;
 	prAdapter->chip_info = prChipInfo;
+
+	/* EARLY BIND: make both sides point at each other straight away.
+	 * This prevents transient NULL pointer reads from any early callbacks
+	 * (regulatory, cfg80211, etc.) that may run during registration.
+	 */
 	prGlueInfo->prAdapter = prAdapter;
+	prAdapter->prGlueInfo = prGlueInfo;
 
-	/* 4 <3> Initialize Glue structure */
-	/* 4 <3.1> Create net device */
-
+	/* --- Continue Glue initialization & create net_device(s) --- */
 #ifdef CFG_DRIVER_INF_NAME_CHANGE
-
 	if (kalStrLen(gprifnamesta) > 0) {
 		prInfName = kalStrCat(gprifnamesta, "%d");
-		DBGLOG(INIT, WARN, "Station ifname customized, use %s\n",
-		       prInfName);
+		DBGLOG(INIT, WARN, "Station ifname customized, use %s\n", prInfName);
 	} else
-#endif /* CFG_DRIVER_INF_NAME_CHANGE */
+#endif
 		prInfName = NIC_INF_NAME;
 
 	for (i = 0; i < KAL_AIS_NUM; i++) {
@@ -3198,58 +3197,49 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 #endif
 			ether_setup,
 			CFG_MAX_TXQ_NUM);
-#endif /* end of CFG_SUPPORT_PERSIST_NETDEV */
+#endif /* CFG_SUPPORT_PERSIST_NETDEV */
 
 		if (!prDevHandler) {
-			DBGLOG(INIT, ERROR,
-				"Allocating memory to net_device context failed\n");
+			DBGLOG(INIT, ERROR, "Allocating memory to net_device context failed\n");
 			goto netcreate_err;
 		}
 
-		/* Device can help us to save at most 3000 packets,
-		 * after we stopped queue
-		 */
+		/* configure basic netdev properties */
 		prDevHandler->tx_queue_len = 3000;
-		DBGLOG(INIT, INFO, "net_device prDev(0x%p) allocated\n",
-			prDevHandler);
+		DBGLOG(INIT, INFO, "net_device prDev(0x%p) allocated\n", prDevHandler);
 
-		/* 4 <3.1.1> Initialize net device varaiables */
-		prNetDevPrivate = (struct NETDEV_PRIVATE_GLUE_INFO *)
-			netdev_priv(prDevHandler);
+		/* store glue pointer in netdev private ASAP */
+		prNetDevPrivate = (struct NETDEV_PRIVATE_GLUE_INFO *) netdev_priv(prDevHandler);
 		prNetDevPrivate->prGlueInfo = prGlueInfo;
 
-		prDevHandler->needed_headroom =
-			NIC_TX_DESC_AND_PADDING_LENGTH +
-			prChipInfo->txd_append_size;
+		prDevHandler->needed_headroom = NIC_TX_DESC_AND_PADDING_LENGTH + prChipInfo->txd_append_size;
 		prDevHandler->netdev_ops = &wlan_netdev_ops;
 #ifdef CONFIG_WIRELESS_EXT
-		prDevHandler->wireless_handlers =
-			&wext_handler_def;
+		prDevHandler->wireless_handlers = &wext_handler_def;
 #endif
 		netif_carrier_off(prDevHandler);
 		netif_tx_stop_all_queues(prDevHandler);
 		kalResetStats(prDevHandler);
 
-		/* 4 <3.1.2> co-relate with wiphy bi-directionally */
+		/* link wireless_dev and netdev (bi-directional) */
 		prDevHandler->ieee80211_ptr = gprWdev[i];
-
 		gprWdev[i]->netdev = prDevHandler;
 
-		/* 4 <3.1.3> co-relate net device & prDev */
-		SET_NETDEV_DEV(prDevHandler,
-				wiphy_dev(prWdev->wiphy));
+		/* ensure the net_device's device matches the wiphy's device */
+		SET_NETDEV_DEV(prDevHandler, wiphy_dev(prWdev->wiphy));
 
-		/* 4 <3.1.4> set device to glue */
-		prGlueInfo->prDev = prDev;
+		/* set the primary device pointer in glue (done once) */
+		if (i == 0)
+			prGlueInfo->prDev = prDev;
 
-		/* 4 <3.2> Initialize glue variables */
-		kalSetMediaStateIndicated(prGlueInfo,
-			MEDIA_STATE_DISCONNECTED,
-			i);
+		/* mark media state for this interface index */
+		kalSetMediaStateIndicated(prGlueInfo, MEDIA_STATE_DISCONNECTED, i);
 	}
 
+	/* record the primary handler */
 	prGlueInfo->prDevHandler = gprWdev[0]->netdev;
 
+	/* basic glue defaults */
 	prGlueInfo->ePowerState = ParamDeviceStateD0;
 #if !CFG_SUPPORT_PERSIST_NETDEV
 	prGlueInfo->fgIsRegistered = FALSE;
@@ -3257,15 +3247,14 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 	prGlueInfo->prScanRequest = NULL;
 	prGlueInfo->prSchedScanRequest = NULL;
 
-
 #if CFG_SUPPORT_PASSPOINT
-	/* Init DAD */
 	prGlueInfo->fgIsDad = FALSE;
 	prGlueInfo->fgIs6Dad = FALSE;
 	kalMemZero(prGlueInfo->aucDADipv4, 4);
 	kalMemZero(prGlueInfo->aucDADipv6, 16);
-#endif /* CFG_SUPPORT_PASSPOINT */
+#endif
 
+	/* completions used by other modules */
 	init_completion(&prGlueInfo->rScanComp);
 	init_completion(&prGlueInfo->rHaltComp);
 	init_completion(&prGlueInfo->rPendComp);
@@ -3279,53 +3268,44 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 	init_completion(&prGlueInfo->rAisChGrntComp);
 #endif
 
-	/* initialize timer for OID timeout checker */
+	/* timers, locks and synchronization primitives */
 	kalOsTimerInitialize(prGlueInfo, kalTimeoutHandler);
-
 	for (i = 0; i < SPIN_LOCK_NUM; i++) {
 		spin_lock_init(&prGlueInfo->rSpinLock[i]);
 		lockdep_set_class(&prGlueInfo->rSpinLock[i], &rSpinKey[i]);
 	}
-
 	for (i = 0; i < MUTEX_NUM; i++) {
 		mutex_init(&prGlueInfo->arMutex[i]);
 		lockdep_set_subclass(&prGlueInfo->arMutex[i], i);
 	}
-
-	/* initialize semaphore for ioctl */
 	sema_init(&prGlueInfo->ioctl_sem, 1);
 
 #if CFG_SUPPORT_SDIO_READ_WRITE_PATTERN
-	/* initialize SDIO read-write pattern control */
 	prGlueInfo->fgEnSdioTestPattern = FALSE;
 	prGlueInfo->fgIsSdioTestInitialized = FALSE;
 #endif
 
-	/* 4 <8> Init Queues */
+	/* queues, cmd/tx/rx bookkeeping and HIF linkage */
 	init_waitqueue_head(&prGlueInfo->waitq);
 	QUEUE_INITIALIZE(&prGlueInfo->rCmdQueue);
 	prGlueInfo->i4TxPendingCmdNum = 0;
 	QUEUE_INITIALIZE(&prGlueInfo->rTxQueue);
 	glSetHifInfo(prGlueInfo, (unsigned long) pvData);
 
-	/* Init wakelock */
+	/* wakelock / thread init */
 	wlanWakeLockInit(prGlueInfo);
 
-	/* main thread is created in this function */
 #if CFG_SUPPORT_MULTITHREAD
 	init_waitqueue_head(&prGlueInfo->waitq_rx);
 	init_waitqueue_head(&prGlueInfo->waitq_hif);
-
 	prGlueInfo->u4TxThreadPid = 0xffffffff;
 	prGlueInfo->u4RxThreadPid = 0xffffffff;
 	prGlueInfo->u4HifThreadPid = 0xffffffff;
 #endif
 
 #if CFG_SUPPORT_CSI
-	/* init CSI wait queue  */
 	init_waitqueue_head(&(prGlueInfo->prAdapter->rCSIInfo.waitq));
 #endif
-
 
 #if CFG_ASSERT_DUMP
 	init_waitqueue_head(&(prGlueInfo->waitq_fwdump));
@@ -3335,14 +3315,18 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 	return prWdev;
 
 netcreate_err:
+	/* cleanup on failure: undo adapter binding and free adapter */
 	if (prAdapter != NULL) {
 		wlanAdapterDestroy(prAdapter);
 		prGlueInfo->prAdapter = NULL;
 	}
 	prGlueInfo->prDevHandler = NULL;
+	return NULL;
+}
+				/* end of wlanNetCreate() */
 
-	return prWdev;
-}				/* end of wlanNetCreate() */
+
+
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -5235,6 +5219,33 @@ static int32_t wlanPowerOnInit(void)
 		prAdapter->fgIsFwOwn = TRUE;
 
 		nicpmWakeUpWiFi(prAdapter);
+
+#if CFG_CHIP_RESET_SUPPORT
+		/* [CRITICAL FIX] Perform WFSYS reset to wake up CONNINFRA MCU
+		 * This MUST happen BEFORE acquiring driver own, otherwise the
+		 * firmware MCU will not have started and driver own will timeout.
+		 * 
+		 * This is the "wake the Balrog" step that enables CONNINFRA.
+		 */
+		if (prChipInfo->asicWfsysRst && prChipInfo->asicPollWfsysSwInitDone) {
+			DBGLOG(INIT, INFO, "[Wi-Fi PWR On] Performing WFSYS reset...\n");
+			
+			/* Assert WFSYS reset */
+			prChipInfo->asicWfsysRst(prAdapter, TRUE);
+			kalUdelay(10);
+			
+			/* De-assert WFSYS reset - this wakes up CONNINFRA! */
+			prChipInfo->asicWfsysRst(prAdapter, FALSE);
+			
+			/* Poll for WFSYS init done - verify MCU started */
+			if (!prChipInfo->asicPollWfsysSwInitDone(prAdapter)) {
+				DBGLOG(INIT, ERROR, "[Wi-Fi PWR On] WFSYS init failed!\n");
+				eFailReason = INIT_ADAPTER_FAIL;
+				break;
+			}
+			DBGLOG(INIT, INFO, "[Wi-Fi PWR On] WFSYS reset completed successfully\n");
+		}
+#endif
 		/* [2]Copy from wlanProbe()->wlanOnPreAdapterStart()::End */
 
 		/* [3]Copy from
@@ -5923,6 +5934,7 @@ int32_t wlanOnAtReset(void)
  * \retval negative value Failed
  */
 /*----------------------------------------------------------------------------*/
+//static int32_t __attribute__((unused)) wlanProbe(void *pvData, void *pvDriverData)
 static int32_t wlanProbe(void *pvData, void *pvDriverData)
 {
 	struct wireless_dev *prWdev = NULL;
@@ -6023,24 +6035,9 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 			&prRegInfo,
 			&prChipInfo);
 
-		if (prChipInfo->asicWfsysRst &&
-		    prChipInfo->asicPollWfsysSwInitDone) {
 
-		    DBGLOG(INIT, INFO, "Asserting WFSYS reset (cold boot)\n");
-		    prChipInfo->asicWfsysRst(prAdapter, TRUE);
-		    kalUdelay(2);
 
-		    DBGLOG(INIT, INFO, "Deasserting WFSYS reset (boot MCU)\n");
-		    prChipInfo->asicWfsysRst(prAdapter, FALSE);
 
-		    if (!prChipInfo->asicPollWfsysSwInitDone(prAdapter)) {
-			DBGLOG(INIT, ERROR,
-			    "WFSYS init failed: MCU did not come alive\n");
-			return -ENODEV;
-		    }
-
-		    DBGLOG(INIT, INFO, "WFSYS MCU is alive\n");
-		}
 
 
 
@@ -6231,6 +6228,9 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 	return i4Status;
 }				/* end of wlanProbe() */
 
+
+
+
 void
 wlanOffNotifyCfg80211Disconnect(IN struct GLUE_INFO *prGlueInfo)
 {
@@ -6271,7 +6271,9 @@ wlanOffNotifyCfg80211Disconnect(IN struct GLUE_INFO *prGlueInfo)
  * \return (none)
  */
 /*----------------------------------------------------------------------------*/
-static void wlanRemove(void)
+// static void wlanRemove(void)
+//static int32_t __attribute__((unused)) wlanRemove(void *pvData) 
+static void __attribute__((unused)) wlanRemove(void *pvData)
 {
 	struct net_device *prDev = NULL;
 	struct WLANDEV_INFO *prWlandevInfo = NULL;
@@ -6552,6 +6554,21 @@ static void wlanRemove(void)
  */
 /*----------------------------------------------------------------------------*/
 /* 1 Module Entry Point */
+/* Forward declarations for the PCI probe functions */
+/* Top of gl_init.c */
+struct pci_dev;
+struct pci_device_id;
+extern int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id);
+extern void mtk_pci_remove(struct pci_dev *pdev);
+
+/* Wrapper to match remove_card typedef which expects no parameters */
+/* Wrapper to match remove_card typedef which expects no parameters */
+static void wlanRemoveWrapper(void)
+{
+    wlanRemove(NULL);
+}
+
+
 static int initWlan(void)
 {
 	int ret = 0;
@@ -6671,7 +6688,7 @@ static int initWlan(void)
 #endif
 
 	ret = ((glRegisterBus(wlanProbe,
-			      wlanRemove) == WLAN_STATUS_SUCCESS) ? 0 : -EIO);
+			      wlanRemoveWrapper) == WLAN_STATUS_SUCCESS) ? 0 : -EIO);
 
 	if (ret == -EIO) {
 		kalUninitIOBuffer();
@@ -6797,7 +6814,9 @@ static void exitWlan(void)
 		wlanPowerOffWifi(prGlueInfo->prAdapter);
 #endif
 
-	glUnregisterBus(wlanRemove);
+	//glUnregisterBus(wlanRemove);
+/* Cast to void* then remove_card to silence incompatible pointer type */
+glUnregisterBus((remove_card)(void *)mtk_pci_remove);
 
 #if CFG_DC_USB_WOW_CALLBACK
 	/*Unregister system DC wow enable/disable callback function */
