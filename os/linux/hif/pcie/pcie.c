@@ -79,12 +79,12 @@
 
 #include <linux/mm.h>
 #include <linux/pm.h>
+#include <linux/pm_runtime.h>
 #ifndef CONFIG_X86
 #include <asm/memory.h>
 #endif
 
 #include "mt66xx_reg.h"
-
 
 /*******************************************************************************
  *                              C O N S T A N T S
