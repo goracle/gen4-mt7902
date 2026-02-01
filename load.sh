@@ -1,43 +1,53 @@
 #!/bin/bash
 
-MODULE_PATH="./mt7902.ko"
+MODULE="./mt7902.ko"
+LOGFILE="mt7902_dmesg.log"
 
-# Check if the module file exists
-if [ ! -f "$MODULE_PATH" ]; then
-    echo "Error: $MODULE_PATH not found. Run this from your build directory."
+# --- Check module exists ---
+if [ ! -f "$MODULE" ]; then
+    echo "Error: $MODULE not found. Run this from your build directory."
     exit 1
 fi
 
-echo "--- Scanning dependencies for $MODULE_PATH ---"
+MODULE_PATH=$(realpath "$MODULE")
+echo "--- Using module: $MODULE_PATH ---"
 
-# Extract dependencies using modinfo
-# The 'depends' line looks like: depends: cfg80211,mac80211,bluetooth
-#DEPS=$(modinfo -F depends "$MODULE_PATH" | tr ',' ' ')
-# To this (adding the absolute path helps modinfo):
-DEPS=$(modinfo -F depends "$(realpath $MODULE_PATH)" | tr ',' ' ')
-
+# --- Scan and load dependencies ---
+DEPS=$(modinfo -F depends "$MODULE_PATH" | tr ',' ' ')
 if [ -z "$DEPS" ]; then
     echo "No dependencies found."
 else
     echo "Found dependencies: $DEPS"
     for dep in $DEPS; do
-        echo "Loading dependency: $dep..."
-        sudo modprobe "$dep" || { echo "Failed to load $dep"; exit 1; }
+        if ! lsmod | grep -q "^$dep"; then
+            echo "Loading dependency: $dep..."
+            sudo modprobe "$dep" || { echo "Failed to load $dep"; exit 1; }
+        else
+            echo "$dep already loaded."
+        fi
     done
 fi
 
-sudo rmmod -f mt7902
-sudo lsmod
-
-echo "--- Inserting mt7902.ko ---"
-sudo insmod "$MODULE_PATH"
-sudo dmesg > err.txt
-
-if [ $? -eq 0 ]; then
-    echo "Success! Module mt7902 inserted."
-    # Check dmesg to confirm it initialized correctly
-    sudo dmesg | tail -n 10
-else
-    echo "Failed to insert mt7902.ko."
-    echo "Check 'dmesg | tail' for specific missing symbols."
+# --- Unload existing module if present ---
+if lsmod | grep -q "^mt7902"; then
+    echo "Unloading existing mt7902 module..."
+    sudo rmmod -f mt7902
 fi
+
+# --- Clear old dmesg logs ---
+sudo dmesg -C
+
+# --- Insert module ---
+echo "--- Inserting mt7902.ko ---"
+if sudo insmod "$MODULE_PATH"; then
+    echo "Module inserted successfully!"
+else
+    echo "Failed to insert module. Exiting..."
+    exit 1
+fi
+
+# --- Capture initialization logs ---
+echo "--- Capturing dmesg logs ---"
+sudo dmesg | tee "$LOGFILE" | grep --color=always -i mt7902
+
+echo "--- Done. Logs saved to $LOGFILE ---"
