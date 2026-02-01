@@ -1,4 +1,4 @@
-/*******************************************************************************
+/********************************************************************************
  *
  * This file is provided under a dual license.  When you use or
  * distribute this software, you may choose to be licensed under
@@ -5923,6 +5923,86 @@ int32_t wlanOnAtReset(void)
  * \retval negative value Failed
  */
 /*----------------------------------------------------------------------------*/
+/* helper: try to cold-boot WFSYS MCU and verify it comes up */
+static int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter)
+{
+    struct mt66xx_chip_info *prChipInfo;
+    int attempts = 2;
+    int ret = -ETIMEDOUT;
+
+    if (!prAdapter) return -EINVAL;
+    prChipInfo = prAdapter->chip_info;
+    if (!prChipInfo || !prChipInfo->asicWfsysRst || !prChipInfo->asicPollWfsysSwInitDone) {
+        DBGLOG(INIT, WARN, "WFSYS reset/poll hooks not present\n");
+        return -ENOTSUPP;
+    }
+
+    /* If it is already alive, skip everything */
+    if (prChipInfo->asicPollWfsysSwInitDone(prAdapter)) {
+        DBGLOG(INIT, INFO, "WFSYS already initialized before reset\n");
+        return 0;
+    }
+
+    while (attempts-- > 0) {
+      //uint32_t pre_rev = 0, post_rev = 0;
+        DBGLOG(INIT, INFO, "WFSYS cold-boot attempt %d\n", 2 - attempts);
+
+        /* Optional: read and log some CONNINFRA rev if available
+         * Replace HAL_MCR_RD/CONNINFRA_REV with the driver macro if available.
+         */
+        #ifdef CONNINFRA_INFRACON_REV_ADDR
+        HAL_MCR_RD(prAdapter, CONNINFRA_INFRACON_REV_ADDR, &pre_rev);
+        DBGLOG(INIT, INFO, "CONNINFRA rev pre-reset: 0x%08x\n", pre_rev);
+        #endif
+
+        /* Assert reset (hold MCU) */
+        prChipInfo->asicWfsysRst(prAdapter, TRUE);
+
+        /* Wait briefly for reset to take effect.
+         * Use msleep if you can sleep in this context; otherwise udelay.
+         */
+        mdelay(5); /* 5ms settle */
+
+        /* Deassert reset */
+        prChipInfo->asicWfsysRst(prAdapter, FALSE);
+
+        /* Allow MCU ROM + early boot to run. Longer wait here helps a lot. */
+        /* Poll for up to 1000 ms, checking every 10 ms */
+        {
+            int i;
+            bool ok = false;
+            for (i = 0; i < 100; i++) {
+                if (prChipInfo->asicPollWfsysSwInitDone(prAdapter)) {
+                    ok = true;
+                    break;
+                }
+                mdelay(10);
+            }
+            if (ok) {
+                DBGLOG(INIT, INFO, "WFSYS MCU signaled init-done\n");
+                #ifdef CONNINFRA_INFRACON_REV_ADDR
+                HAL_MCR_RD(prAdapter, CONNINFRA_INFRACON_REV_ADDR, &post_rev);
+                DBGLOG(INIT, INFO, "CONNINFRA rev post-reset: 0x%08x\n", post_rev);
+                #endif
+                ret = 0;
+                break;
+            } else {
+                DBGLOG(INIT, WARN, "WFSYS init timeout on attempt, dumping debug registers\n");
+                /* Call driver debug dump helpers here to capture more info */
+                /* e.g. mt7902_show_debug_sop_info(prAdapter); or pcie_mt7902_dump_conninfra_debug_cr(prAdapter); */
+                /* If a graceful full reset mechanism exists, trigger it here */
+            }
+        }
+
+        /* Short backoff before retry */
+        mdelay(50);
+    }
+
+    return ret;
+}
+
+
+
 static int32_t wlanProbe(void *pvData, void *pvDriverData)
 {
 	struct wireless_dev *prWdev = NULL;
@@ -6023,25 +6103,15 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 			&prRegInfo,
 			&prChipInfo);
 
-		if (prChipInfo->asicWfsysRst &&
-		    prChipInfo->asicPollWfsysSwInitDone) {
-
-		    DBGLOG(INIT, INFO, "Asserting WFSYS reset (cold boot)\n");
-		    prChipInfo->asicWfsysRst(prAdapter, TRUE);
-		    kalUdelay(2);
-
-		    DBGLOG(INIT, INFO, "Deasserting WFSYS reset (boot MCU)\n");
-		    prChipInfo->asicWfsysRst(prAdapter, FALSE);
-
-		    if (!prChipInfo->asicPollWfsysSwInitDone(prAdapter)) {
-			DBGLOG(INIT, ERROR,
-			    "WFSYS init failed: MCU did not come alive\n");
-			return -ENODEV;
-		    }
-
-		    DBGLOG(INIT, INFO, "WFSYS MCU is alive\n");
+		/* Try to cold-boot WFSYS MCU and wait for it */
+		if (mt79xx_wfsys_cold_boot_and_wait(prAdapter) != 0) {
+		    DBGLOG(INIT, ERROR,
+			"WFSYS init failed: MCU did not come alive\n");
+		    return -ENODEV;
 		}
 
+		/* At this point MCU is alive */
+		DBGLOG(INIT, INFO, "WFSYS MCU is alive, continuing adapter start\n");
 
 
 		if (wlanAdapterStart(prAdapter,
