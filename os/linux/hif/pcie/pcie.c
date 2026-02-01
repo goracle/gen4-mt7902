@@ -715,6 +715,12 @@ void glSetHifInfo(struct GLUE_INFO *prGlueInfo, unsigned long ulCookie)
 
 	SET_NETDEV_DEV(prGlueInfo->prDevHandler, &prHif->pdev->dev);
 
+	/* Disable runtime PM — MTK firmware assumes the platform never does
+	 * surprise PM. On Android the WiFi service owns this. On Linux, nothing
+	 * does. This card draws ~2mW idle anyway. */
+	pm_runtime_forbid(&prHif->pdev->dev);
+	pm_runtime_set_active(&prHif->pdev->dev);
+
 	prGlueInfo->u4InfType = MT_DEV_INF_PCIE;
 
 	prHif->rErrRecoveryCtl.eErrRecovState = ERR_RECOV_STOP_IDLE;

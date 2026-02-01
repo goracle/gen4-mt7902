@@ -406,7 +406,7 @@ else
 endif
 
 ifeq ($(CONFIG_MTK_WIFI_11AX_SUPPORT), y)
-    ccflags-y += -DCFG_SUPPORT_802_11AX=1
+    ccflags-y += -DCFG_SUPPORT_802_11AX=0
 else
     ccflags-y += -DCFG_SUPPORT_802_11AX=0
 endif

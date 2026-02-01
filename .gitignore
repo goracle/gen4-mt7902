@@ -1,4 +1,5 @@
 *.o
+mt7902_dmesg.log
 *undo-tree*
 *\#*\#
 *.o.cmd

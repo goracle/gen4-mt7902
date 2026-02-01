@@ -133,6 +133,14 @@ static void halCheckHifState(struct ADAPTER *prAdapter)
 				prAdapter->u4HifDbgFlag |= DEG_HIF_ALL;
 			else
 				halShowLitePleInfo(prAdapter);
+
+			/* TX engine is wedged — trigger L0.5 reset to recover
+			 * without unloading the driver. On Android the WiFi
+			 * service restarts the stack; on Linux nothing does,
+			 * so we have to do it ourselves. */
+			GL_DEFAULT_RESET_TRIGGER(prAdapter, RST_SER_L1_FAIL);
+
+
 		}
 	}
 
