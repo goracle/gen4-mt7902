@@ -1,40 +1,38 @@
 #!/bin/bash
-# Manual patch for glResetTriggerMobile in os/linux/gl_rst.c
-# This adds the carrier_off code that the automatic script missed
+# Fix gl_init.c to use prGlueInfo->prDevHandler instead of extern static variables
 
 DRIVER_PATH=~/builds/gen4-mt7902
-TARGET_FILE="$DRIVER_PATH/os/linux/gl_rst.c"
+TARGET_FILE="$DRIVER_PATH/os/linux/gl_init.c"
 
-# Backup first
-cp "$TARGET_FILE" "$TARGET_FILE.backup_mobile_$(date +%Y%m%d_%H%M%S)"
+# Backup
+cp "$TARGET_FILE" "$TARGET_FILE.backup_compilefix_$(date +%Y%m%d_%H%M%S)"
 
-echo "Patching glResetTriggerMobile in $TARGET_FILE..."
+echo "Fixing gl_init.c..."
 
-# Insert after line 399 (fgIsResetting = TRUE;)
-sed -i '399 a\
-\
-	/* ===== MT7902 FIX #2A: Quarantine netdev during reset (Mobile) ===== */\
-	{\
-		struct net_device *prDev = NULL;\
-		if (prAdapter && prAdapter->prGlueInfo) {\
-			extern uint32_t u4WlanDevNum;\
-			extern struct WLANDEV_INFO arWlanDevInfo[];\
-			if (u4WlanDevNum > 0 && u4WlanDevNum <= CFG_MAX_WLAN_DEVICES)\
-				prDev = arWlanDevInfo[u4WlanDevNum - 1].prDev;\
-			if (prDev && netif_running(prDev)) {\
-				DBGLOG(INIT, WARN,\
-				       "MT7902-FIX: Carrier OFF during reset (Mobile)\\n");\
-				netif_carrier_off(prDev);\
-				netif_tx_stop_all_queues(prDev);\
-			}\
-		}\
-	}\
-	/* ===== END FIX #2A ===== */\
-' "$TARGET_FILE"
+# Remove the old patch
+sed -i '/MT7902 FIX #2B.*Restore carrier after reset/,/END FIX #2B/d' "$TARGET_FILE"
 
-echo "Patch applied!"
+echo "Removed old patch"
+
+# Find where u4ReadyFlag = 1 is set
+LINE_READY=$(grep -n "prGlueInfo->u4ReadyFlag = 1;" "$TARGET_FILE" | head -1 | cut -d: -f1)
+
+# Add the working version after the update_driver_loaded_status call (3 lines after)
+LINE_INSERT=$((LINE_READY + 3))
+
+sed -i "${LINE_INSERT} a\\
+\\
+	/* ===== MT7902 FIX #2B: Restore carrier after reset ===== */\\
+	if (kalIsResetting() && prGlueInfo->prDevHandler) {\\
+		DBGLOG(INIT, WARN,\\
+		       \"MT7902-FIX: Carrier ON after reset recovery\\\\n\");\\
+		netif_carrier_on(prGlueInfo->prDevHandler);\\
+		netif_tx_wake_all_queues(prGlueInfo->prDevHandler);\\
+	}\\
+	/* ===== END FIX #2B ===== */\\
+" "$TARGET_FILE"
+
+echo "Applied working fix at line $LINE_INSERT"
 echo ""
 echo "Verify with:"
-echo "  sed -n '393,425p' $TARGET_FILE"
-echo ""
-echo "You should now see the carrier_off code after fgIsResetting = TRUE"
+echo "  sed -n '5040,5055p' $TARGET_FILE"
