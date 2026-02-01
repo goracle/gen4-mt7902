@@ -398,15 +398,23 @@ void glResetTriggerMobile(IN struct ADAPTER *prAdapter, IN uint32_t u4RstFlag)
 
 	fgIsResetting = TRUE;
 
-	/* ===== MT7902 FIX #2A: Carrier OFF during reset (Mobile) ===== */
-	if (prAdapter && prAdapter->prGlueInfo && prAdapter->prGlueInfo->prDevHandler) {
-		DBGLOG(INIT, WARN, "MT7902-FIX: Carrier OFF during reset (Mobile)\n");
-		netif_carrier_off(prAdapter->prGlueInfo->prDevHandler);
-		netif_tx_stop_all_queues(prAdapter->prGlueInfo->prDevHandler);
+	/* ===== MT7902 FIX #2A: Quarantine netdev during reset (Mobile) ===== */
+	{
+		struct net_device *prDev = NULL;
+		if (prAdapter && prAdapter->prGlueInfo) {
+			extern uint32_t u4WlanDevNum;
+			extern struct WLANDEV_INFO arWlanDevInfo[];
+			if (u4WlanDevNum > 0 && u4WlanDevNum <= CFG_MAX_WLAN_DEVICES)
+				prDev = arWlanDevInfo[u4WlanDevNum - 1].prDev;
+			if (prDev && netif_running(prDev)) {
+				DBGLOG(INIT, WARN,
+				       "MT7902-FIX: Carrier OFF during reset (Mobile)\n");
+				netif_carrier_off(prDev);
+				netif_tx_stop_all_queues(prDev);
+			}
+		}
 	}
 	/* ===== END FIX #2A ===== */
-
-
 
 #if (CFG_SUPPORT_CONNINFRA == 1)
 	prChipInfo = prAdapter->chip_info;
@@ -578,15 +586,23 @@ void glResetTriggerCe(IN struct ADAPTER *prAdapter, IN uint32_t u4RstFlag)
 	if (u4RstFlag & RST_FLAG_DO_WHOLE_RESET) {
 		fgIsResetting = TRUE;
 
-	/* ===== MT7902 FIX #2A: Carrier OFF during reset (CE) ===== */
-	if (prAdapter && prAdapter->prGlueInfo && prAdapter->prGlueInfo->prDevHandler) {
-		DBGLOG(INIT, WARN, "MT7902-FIX: Carrier OFF during reset (CE)\n");
-		netif_carrier_off(prAdapter->prGlueInfo->prDevHandler);
-		netif_tx_stop_all_queues(prAdapter->prGlueInfo->prDevHandler);
+	/* ===== MT7902 FIX #2A: Quarantine netdev during reset (CE) ===== */
+	{
+		struct net_device *prDev = NULL;
+		if (prAdapter && prAdapter->prGlueInfo) {
+			extern uint32_t u4WlanDevNum;
+			extern struct WLANDEV_INFO arWlanDevInfo[];
+			if (u4WlanDevNum > 0 && u4WlanDevNum <= CFG_MAX_WLAN_DEVICES)
+				prDev = arWlanDevInfo[u4WlanDevNum - 1].prDev;
+			if (prDev && netif_running(prDev)) {
+				DBGLOG(INIT, WARN,
+				       "MT7902-FIX: Carrier OFF during reset (CE)\n");
+				netif_carrier_off(prDev);
+				netif_tx_stop_all_queues(prDev);
+			}
+		}
 	}
 	/* ===== END FIX #2A ===== */
-
-
 
 		fgSimplifyResetFlow = FALSE;
 		wifi_rst.prGlueInfo = prAdapter->prGlueInfo;
