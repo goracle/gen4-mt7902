@@ -2426,9 +2426,9 @@ void kalP2pIndicateChnlSwitch(IN struct ADAPTER *prAdapter,
 		prNetdevice = prP2PInfo->prDevHandler;
 
 #if (CFG_ADVANCED_80211_MLO == 1)
-	cfg80211_ch_switch_notify(prNetdevice, prP2PInfo->chandef, linkIdx);
+	cfg80211_ch_switch_notify(prNetdevice, prP2PInfo->chandef, linkIdx, true);
 #else
-	cfg80211_ch_switch_notify(prNetdevice, prP2PInfo->chandef);
+	cfg80211_ch_switch_notify(prNetdevice, prP2PInfo->chandef, true);
 #endif
 	netif_carrier_on(prNetdevice);
 	netif_tx_start_all_queues(prNetdevice);
