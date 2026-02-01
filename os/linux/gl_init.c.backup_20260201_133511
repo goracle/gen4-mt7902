@@ -5042,23 +5042,6 @@ int32_t wlanOnWhenProbeSuccess(struct GLUE_INFO *prGlueInfo,
 	update_driver_loaded_status(prGlueInfo->u4ReadyFlag);
 #endif
 
-	/* ===== MT7902 FIX #2B: Restore carrier after reset ===== */
-	if (kalIsResetting()) {
-		struct net_device *prDev = NULL;
-		extern uint32_t u4WlanDevNum;
-		extern struct WLANDEV_INFO arWlanDevInfo[];
-		if (u4WlanDevNum > 0 && u4WlanDevNum <= CFG_MAX_WLAN_DEVICES)
-			prDev = arWlanDevInfo[u4WlanDevNum - 1].prDev;
-		if (prDev && netif_running(prDev)) {
-			DBGLOG(INIT, WARN,
-			       "MT7902-FIX: Carrier ON after reset recovery\n");
-			netif_carrier_on(prDev);
-			netif_tx_wake_all_queues(prDev);
-		}
-	}
-	/* ===== END FIX #2B ===== */
-
-
 	kalSetHalted(FALSE);
 
 	wlanDbgGetGlobalLogLevel(ENUM_WIFI_LOG_MODULE_FW,
