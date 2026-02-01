@@ -6673,7 +6673,7 @@ void rlmDomainParsingChannel(IN struct wiphy *pWiphy)
 			}
 
 			/* Allowable channel */
-			if (ch_count == MAXIMUM_OPERATION_CHANNEL_LIST) {
+			if (ch_count == MAX_CHN_NUM) {
 				DBGLOG(RLM, ERROR,
 				       "%s(): no buffer to store channel information.\n",
 				       __func__);
