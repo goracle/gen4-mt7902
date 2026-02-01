@@ -720,6 +720,8 @@ void glSetHifInfo(struct GLUE_INFO *prGlueInfo, unsigned long ulCookie)
 	 * does. This card draws ~2mW idle anyway. */
 	pm_runtime_forbid(&prHif->pdev->dev);
 	pm_runtime_set_active(&prHif->pdev->dev);
+	/* Force ASPM off - link state transitions can wedge PDMA during reset */
+	glBusConfigASPM(prHif->pdev, 0);
 
 	prGlueInfo->u4InfType = MT_DEV_INF_PCIE;
 
