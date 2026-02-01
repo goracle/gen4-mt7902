@@ -1,359 +1,278 @@
-[   52.096011] mt7902: loading out-of-tree module taints kernel.
-[   52.096018] mt7902: module verification failed: signature and/or required key missing - tainting kernel
-[   52.187547] [wlan]Set ALL DBG module log level to [0x2f]
-[   52.187550] [wlan]Reset ALL DBG module log level to DEFAULT!
-[   52.187678] [wlan][6047]rlmDomainCountryCodeUpdateSanity:(RLM ERROR) prGlueInfo is NULL!
-[   52.187679] [wlan][6047]mtk_reg_notify:(RLM ERROR) sanity check failed, skip!
-[   52.187716] [wlan][6047]wlanCreateWirelessDevice:(INIT INFO) Create wireless device success
-[   52.187717] [wlan][6047]glP2pCreateWirelessDevice:(INIT INFO) glP2pCreateWirelessDevice (00000000bb5c2945)
-[   52.187947] [wlan][6047]mtk_pci_probe:(INIT INFO) pci_enable_device done!
-[   52.187948] [wlan][6047]wlanProbe:(INIT INFO) enter wlanProbe
-[   52.187975] [wlan][6047]glBusInit:(INIT INFO) ioremap for device 0000:02:00.0, region 0x100000 @ 0x6000000000
-[   52.188512] [wlan][6047]wlanNetCreate:(INIT INFO) net_device prDev(0x00000000ff18f7a5) allocated
-[   52.188544] [wlan][6047]glBusConfigASPM:(INIT INFO) ASPM STATUS 0
-[   52.188566] [wlan][6047]wlanCfgInit:(INIT INFO) Init wifi config len 0 max entry 256
-[   52.188668] [wlan][6047]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
-[   52.189573] [wlan][6047]kalRequestFirmware:(INIT INFO) kalRequestFirmware(): mediatek/mt7902/wifi.cfg OK
-[   52.189579] [wlan][6047]wlanCfgInit:(INIT INFO) Init wifi config len 185 max entry 256
-[   52.189658] [wlan][6047]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
-[   52.189749] [wlan][6047]wlanCfgParse:(INIT INFO) wlanCfgParse()
-[   52.189750] [wlan][6047]wlanCfgParse:(INIT INFO)  nargs= 0 STATE_TEXT = WIFI_RAM_CODE=WIFI_RAM_CODE_MT7902_1.bin, SIZE = 40
-[   52.189751] [wlan][6047]wlanCfgParse:(INIT INFO)  nargs= 1 STATE_TEXT = WIFI_PATCH_MCU=WIFI_MT7902_patch_mcu_1_1_hdr.bin, SIZE = 48
-[   52.189752] [wlan][6047]wlanCfgParse:(INIT INFO) STATE_NEWLINE
-[   52.189752] [wlan][6047]wlanCfgParse:(INIT WARN) Save to driver temp buffer as [WIFI_PATCH_MCU=WIFI_MT7902_patch_mcu_1_1_hdr.bin]
-[   52.189755] [wlan][6047]glLoadNvram:(INIT INFO) g_NvramFsm = 0
-[   52.189755] [wlan][6047]glLoadNvram:(INIT WARN) Nvram not available
-[   52.189760] [wlan][6047]mt79xx_wfsys_cold_boot_and_wait:(INIT WARN) WFSYS already initialized! Forcing cold boot anyway.
-[   52.189760] [wlan][6047]mt79xx_wfsys_cold_boot_and_wait:(INIT INFO) WFSYS cold-boot attempt 1
-[   52.189773] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x1010B870
-[   52.189774] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0xDEAD0003
-[   52.189775] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
-[   52.189776] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL ERROR) [SER][L0.5] WFDMA BUSY!
-[   52.189789] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x1010B870
-[   52.189790] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0xDEAD0003
-[   52.189790] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
-[   52.189791] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL ERROR) [SER][L0.5] WFDMA BUSY!
-[   52.295479] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x1010B870
-[   52.295498] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0xDEAD0003
-[   52.295503] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
-[   52.295508] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL ERROR) [SER][L0.5] WFDMA BUSY!
-[   52.399532] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x1010B870
-[   52.399553] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0xDEAD0003
-[   52.399558] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
-[   52.399563] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL ERROR) [SER][L0.5] WFDMA BUSY!
-[   52.503584] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x1010B870
-[   52.503608] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0xDEAD0003
-[   52.503615] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
-[   52.503622] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL ERROR) [SER][L0.5] WFDMA BUSY!
-[   52.607633] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x1010B870
-[   52.607653] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0xDEAD0003
-[   52.607658] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
-[   52.607662] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL ERROR) [SER][L0.5] WFDMA BUSY!
-[   52.711573] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x1010B870
-[   52.711602] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0xDEAD0003
-[   52.711608] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
-[   52.711612] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL ERROR) [SER][L0.5] WFDMA BUSY!
-[   52.815725] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x1010B870
-[   52.815753] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0xDEAD0003
-[   52.815760] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
-[   52.815765] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL ERROR) [SER][L0.5] WFDMA BUSY!
-[   52.919844] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x1010B870
-[   52.919866] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0xDEAD0003
-[   52.919872] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
-[   52.919877] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL ERROR) [SER][L0.5] WFDMA BUSY!
-[   53.023898] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x1010B870
-[   53.023917] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0xDEAD0003
-[   53.023922] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
-[   53.023926] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL ERROR) [SER][L0.5] WFDMA BUSY!
-[   53.127909] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x1010B870
-[   53.127931] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0xDEAD0003
-[   53.127937] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
-[   53.127942] [wlan][6047]mt7961HalPollWfdmaIdle:(HAL ERROR) [SER][L0.5] WFDMA BUSY!
-[   53.231877] [wlan][6047]mt7961HalCbtopRguWfRst:(HAL ERROR) [SER][L0.5]SER Polling WFDMA Idle Fail!
-[   53.236909] [wlan][6047]mt79xx_wfsys_cold_boot_and_wait:(INIT INFO) WFSYS MCU signaled init-done
-[   53.236912] [wlan][6047]wlanProbe:(INIT INFO) WFSYS MCU is alive, continuing adapter start
-[   53.237090] [wlan][6047]wlanAdapterStart:(INIT INFO) wlanAdapterStart(): Acquiring LP-OWN
-[   55.287089] [wlan][6047]halDriverOwnTimeout:(INIT ERROR) LP cannot be own back, Timeout[1](2049ms), BusAccessError[0]
-[   55.287093] [wlan][6047]halDriverOwnTimeout:(INIT ERROR) Resetting[0], CardRemoved[0] NoAck[0] Cnt[0]
-[   55.287095] [wlan][6047]halDriverOwnTimeout:(INIT INFO) Skip LP own back failed log for next 2000ms
-[   55.287107] [wlan][6047]glBusConfigASPM:(INIT INFO) ASPM STATUS 0
-[   55.287108] [wlan][6047]halSetDriverOwn:(INIT WARN) DRIVER OWN Fail!
-[   55.287118] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) Current PC LOG: 0x0080093a
-[   55.287129] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log contorl=0x0029fffb
-[   55.287135] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(0)=0x008019c2
-[   55.287142] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(1)=0x00800e9c
-[   55.287148] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(2)=0x00800e9c
-[   55.287154] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(3)=0x008019c4
-[   55.287161] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(4)=0x008019d4
-[   55.287167] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(5)=0x00802982
-[   55.287173] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(6)=0x008029ca
-[   55.287180] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(7)=0x008019d8
-[   55.287186] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(8)=0x008019ea
-[   55.287192] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(9)=0x00800324
-[   55.287198] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(10)=0x00800398
-[   55.287205] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(11)=0x00800028
-[   55.287211] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(12)=0x00800028
-[   55.287218] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(13)=0x00800292
-[   55.287224] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(14)=0x008002b6
-[   55.287230] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(15)=0x00800172
-[   55.287236] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(16)=0x008002ca
-[   55.287243] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(17)=0x00800920
-[   55.287249] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(18)=0x00800938
-[   55.287255] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(19)=0x00800d86
-[   55.287261] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(20)=0x00800da2
-[   55.287268] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(21)=0x0080093a
-[   55.287274] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(22)=0x00800b68
-[   55.287280] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(23)=0x0080099a
-[   55.287287] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(24)=0x0080099a
-[   55.287293] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(25)=0x008002ce
-[   55.287299] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(26)=0x0080028e
-[   55.287305] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(27)=0x00801928
-[   55.287312] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(28)=0x0080192a
-[   55.287318] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(29)=0x008016f4
-[   55.287324] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(30)=0x008016fc
-[   55.287330] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) PC log(31)=0x0080192e
-[   55.287337] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log contorl=0x003803fb
-[   55.287343] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(0)=0x0080a456
-[   55.287350] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(1)=0x0080a47e
-[   55.287356] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(2)=0x0080a47e
-[   55.287362] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(3)=0x00800b06
-[   55.287368] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(4)=0x00800b06
-[   55.287375] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(5)=0x00800b26
-[   55.287381] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(6)=0x00800b26
-[   55.287387] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(7)=0x0080a47e
-[   55.287394] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(8)=0x0080a47e
-[   55.287400] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(9)=0x0080097c
-[   55.287406] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(10)=0x0080097c
-[   55.287412] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(11)=0x00800980
-[   55.287419] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(12)=0x00800980
-[   55.287425] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(13)=0x0080099a
-[   55.287431] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(14)=0x0080099a
-[   55.287438] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(15)=0x008002ce
-[   55.287444] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(16)=0x008002ce
-[   55.287450] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(17)=0x0080192e
-[   55.287457] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(18)=0x0080192e
-[   55.287463] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(19)=0x008019c4
-[   55.287469] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(20)=0x008019c4
-[   55.287475] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(21)=0x008019d8
-[   55.287482] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(22)=0x008019d8
-[   55.287488] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(23)=0x008019ee
-[   55.287494] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(24)=0x008019ee
-[   55.287500] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(25)=0x00801286
-[   55.287507] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(26)=0x00801286
-[   55.287513] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(27)=0x008002ce
-[   55.287519] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(28)=0x008002ce
-[   55.287525] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(29)=0x0080093a
-[   55.287532] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(30)=0x00800ae0
-[   55.287538] [wlan][6047]pcie_show_mcu_debug_info:(INIT INFO) LR log(31)=0x0080a456
-[   55.287541] [wlan][6047]mt7902_show_debug_sop_info:(HAL ERROR) Slave no response!
-[   55.287542] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) --WFSYS sel CR: 0x18060164, status CR: 0x18060168 loop start--
-[   55.287546] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00010001, Val: 0x00000000
-[   55.287550] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00020001, Val: 0x00000000
-[   55.287558] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00030001, Val: 0x00000000
-[   55.287562] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00040001, Val: 0x00000000
-[   55.287566] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00050001, Val: 0x00000000
-[   55.287569] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00060001, Val: 0x00000000
-[   55.287573] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00070001, Val: 0x00000000
-[   55.287577] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00080001, Val: 0x00000000
-[   55.287580] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00090001, Val: 0x00000000
-[   55.287584] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x000a0001, Val: 0x00000000
-[   55.287588] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x000b0001, Val: 0x00000000
-[   55.287591] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x000c0001, Val: 0x00000000
-[   55.287595] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x000d0001, Val: 0x00000000
-[   55.287599] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x000e0001, Val: 0x00000000
-[   55.287603] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x000f0001, Val: 0x00000000
-[   55.287606] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00100001, Val: 0x00000000
-[   55.287610] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00010002, Val: 0x00000000
-[   55.287614] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00010003, Val: 0x00000000
-[   55.287614] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) --WFSYS sel CR: 0x18060164, status CR: 0x18060168 loop end--
-[   55.287615] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) --WFSYS sel CR: 0x18060094, status CR: 0x1806021C loop start--
-[   55.287618] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00100000, Val: 0x82940cf3
-[   55.287622] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00108421, Val: 0xa480a3bd
-[   55.287626] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00184210, Val: 0x0000800b
-[   55.287630] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x00194a52, Val: 0x000084e1
-[   55.287634] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x001bdef7, Val: 0x00000002
-[   55.287637] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x001c6318, Val: 0x02f8718e
-[   55.287641] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x001e739c, Val: 0xf882bda8
-[   55.287645] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sel: 0x001ef7bd, Val: 0xf882feff
-[   55.287646] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) --WFSYS sel CR: 0x18060094, status CR: 0x1806021C loop end--
-[   55.287649] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS BUS CR: 0x88000444, Val: 0xdead0003
-[   55.287653] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS BUS CR: 0x88000430, Val: 0xdead0003
-[   55.287656] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS BUS CR: 0x8800044C, Val: 0xdead0003
-[   55.287660] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS BUS CR: 0x88000450, Val: 0xdead0003
-[   55.287660] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) --WFSYS sel CR: 0x18060094, status CR: 0x1806021C loop start--
-[   55.287664] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sleep sel: 0x00100000, Val: 0x82940cf3
-[   55.287668] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sleep sel: 0x00108421, Val: 0xa480a3bd
-[   55.287672] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sleep sel: 0x00184210, Val: 0x0000800b
-[   55.287675] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sleep sel: 0x001bdef7, Val: 0x00000002
-[   55.287679] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) WFSYS sleep sel: 0x001ef7bd, Val: 0xf882feff
-[   55.287680] [wlan][6047]pcie_mt7902_dump_wfsys_debug_cr:(HAL INFO) --WFSYS sel CR: 0x18060094, status CR: 0x1806021C loop end--
-[   55.287680] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) --BGF sel CR: 0x180600A8, status CR: 0x1806022C loop start--
-[   55.287684] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00767501, Val: 0x00000000
-[   55.287688] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00787701, Val: 0x00000000
-[   55.287692] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x007a7901, Val: 0x00000000
-[   55.287695] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x007c7b01, Val: 0x00000000
-[   55.287699] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x007e7d01, Val: 0x00000000
-[   55.287703] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00807f01, Val: 0x00000000
-[   55.287706] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00828101, Val: 0x00000000
-[   55.287710] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00848301, Val: 0x00000000
-[   55.287714] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00868501, Val: 0x00000000
-[   55.287718] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00888701, Val: 0x00000000
-[   55.287721] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x008a8901, Val: 0x00000000
-[   55.287725] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x008c8b01, Val: 0x00000000
-[   55.287729] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x008e8d01, Val: 0x00000000
-[   55.287732] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00908f01, Val: 0x00000000
-[   55.287736] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00929101, Val: 0x00000000
-[   55.287740] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00949301, Val: 0x00000000
-[   55.287743] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00969501, Val: 0x00000000
-[   55.287747] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00989701, Val: 0x00000000
-[   55.287751] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x009a9901, Val: 0x00007034
-[   55.287755] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x009c9b01, Val: 0x00008102
-[   55.287758] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x009e9d01, Val: 0x00000002
-[   55.287767] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00a09f01, Val: 0x00000000
-[   55.287771] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00a2a101, Val: 0x00000000
-[   55.287774] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00a4a301, Val: 0x00000000
-[   55.287778] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00a6a501, Val: 0x00000000
-[   55.287782] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00a8a701, Val: 0x00000000
-[   55.287786] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00aaa901, Val: 0x00000000
-[   55.287789] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00acab01, Val: 0x00000000
-[   55.287793] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00aead01, Val: 0x00000000
-[   55.287797] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS bus sel: 0x00b0af01, Val: 0x00000000
-[   55.287798] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) --BGF sel CR: 0x180600A8, status CR: 0x1806022C loop end--
-[   55.287799] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) --BGF sel CR: 0x180600AC, status CR: 0x1806023C loop start--
-[   55.287802] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000080, Val: 0xc840fa82
-[   55.287806] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000081, Val: 0xc84083c3
-[   55.287810] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000082, Val: 0xc8409b43
-[   55.287814] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000083, Val: 0xc8405413
-[   55.287818] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000084, Val: 0xc840ffe3
-[   55.287822] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000085, Val: 0xc8400623
-[   55.287826] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000086, Val: 0xc840e763
-[   55.287830] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000087, Val: 0xc840e3a3
-[   55.287834] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000088, Val: 0xc8400193
-[   55.287838] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000089, Val: 0xc840c8e3
-[   55.287842] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x0000008a, Val: 0xc840f5c3
-[   55.287846] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x0000008b, Val: 0xc8400343
-[   55.287850] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x0000008c, Val: 0xc840c343
-[   55.287853] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x0000008d, Val: 0xc8400101
-[   55.287857] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x0000008e, Val: 0xc840c010
-[   55.287861] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x0000008f, Val: 0xc8408008
-[   55.287865] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000090, Val: 0xc840fe00
-[   55.287869] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000091, Val: 0xc8400383
-[   55.287873] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000092, Val: 0xc8400101
-[   55.287877] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x00000093, Val: 0xc8400000
-[   55.287880] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000c0, Val: 0xc84011ff
-[   55.287884] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000c1, Val: 0xc840c8ff
-[   55.287888] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000c2, Val: 0xc840a023
-[   55.287892] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000c3, Val: 0xc8401c00
-[   55.287896] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000c4, Val: 0xc8400003
-[   55.287899] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000c5, Val: 0xc8400004
-[   55.287903] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000c6, Val: 0xc840005b
-[   55.287907] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000c7, Val: 0xc84000ff
-[   55.287911] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000c8, Val: 0xc840ffff
-[   55.287914] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000d0, Val: 0xc8400000
-[   55.287918] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000d1, Val: 0xc8400000
-[   55.287922] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000d2, Val: 0xc8400000
-[   55.287925] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000d3, Val: 0xc840ffff
-[   55.287929] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000d4, Val: 0xc8400000
-[   55.287933] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000d5, Val: 0xc8400000
-[   55.287937] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000d6, Val: 0xc840ffff
-[   55.287940] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000d7, Val: 0xc8400000
-[   55.287944] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000d8, Val: 0xc8400000
-[   55.287948] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000d9, Val: 0xc8400000
-[   55.287952] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000da, Val: 0xc8400000
-[   55.287955] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000db, Val: 0xc8400000
-[   55.287959] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000dc, Val: 0xc8408100
-[   55.287963] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000dd, Val: 0xc8400000
-[   55.287967] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000de, Val: 0xc840fff8
-[   55.287971] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000e0, Val: 0xc840f7ef
-[   55.287974] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000e1, Val: 0xc840fe1d
-[   55.287978] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000e2, Val: 0xc8400c10
-[   55.287982] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) BGFSYS sel: 0x000000e3, Val: 0xc84018a2
-[   55.287983] [wlan][6047]pcie_mt7902_dump_bgfsys_debug_cr:(HAL INFO) --BGF sel CR: 0x180600AC, status CR: 0x1806023C loop end--
-[   55.287984] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) --CONNINFRA sel CR: 0x1806015C, status CR: 0x180602C8 loop start--
-[   55.287988] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00000000, Val: 0x02303ff9
-[   55.287992] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00000001, Val: 0x00000008
-[   55.287995] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00000002, Val: 0xc0100010
-[   55.287999] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00000003, Val: 0xcbe9c010
-[   55.288003] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00000004, Val: 0xb002101f
-[   55.288007] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00000005, Val: 0x00000000
-[   55.288008] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) --CONNINFRA sel CR: 0x1806015C, status CR: 0x180602C8 loop end--
-[   55.288011] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA STRAP: 0x000e0294, Val: 0x676f9b76
-[   55.288015] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000f1514, Val: 0x00000000
-[   55.288019] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000f1504, Val: 0x00008000
-[   55.288023] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000f1564, Val: 0x00008000
-[   55.288027] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000f1554, Val: 0x00008000
-[   55.288031] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000f1544, Val: 0x0a000000
-[   55.288035] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000f1524, Val: 0x00000000
-[   55.288039] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000f1534, Val: 0x00000000
-[   55.288043] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000fe2a0, Val: 0x080d140d
-[   55.288047] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000fe2a8, Val: 0x0803197e
-[   55.288051] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000fe2a4, Val: 0x00007500
-[   55.288055] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000ff408, Val: 0xc0171513
-[   55.288059] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000ff40c, Val: 0x07fc017f
-[   55.288063] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000ff410, Val: 0xfffe0001
-[   55.288066] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000ff414, Val: 0x7fe00011
-[   55.288070] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000ff418, Val: 0x0000001d
-[   55.288074] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000ff41c, Val: 0xffe00015
-[   55.288078] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000ff420, Val: 0xfe00011f
-[   55.288082] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000ff424, Val: 0x000001ff
-[   55.288086] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000ff428, Val: 0x77023113
-[   55.288090] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000ff42c, Val: 0x00007777
-[   55.288094] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000ff430, Val: 0x00000011
-[   55.288098] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000e0414, Val: 0x18001644
-[   55.288101] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000e0418, Val: 0x00006040
-[   55.288105] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000e042c, Val: 0x18004058
-[   55.288108] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000e0430, Val: 0x00000002
-[   55.288112] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000e041c, Val: 0x00000000
-[   55.288115] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000e0420, Val: 0x00000000
-[   55.288119] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000e0410, Val: 0x00000000
-[   55.288123] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA bus cr: 0x000fe370, Val: 0x07fc600a
-[   55.288126] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA off domain cr: 0x18060000, Val: 0x00000006
-[   55.288130] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA off domain bus hang!!!
-[   55.288134] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA off domain cr: 0x18001000, Val: 0x02060003
-[   55.288134] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) --CONNINFRA sel CR: 0x18060138, status CR: 0x18060150 loop start--
-[   55.288138] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00010001, Val: 0xc0121613
-[   55.288142] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00020001, Val: 0x07bc017f
-[   55.288146] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00010002, Val: 0xfffe0001
-[   55.288149] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00020002, Val: 0x7fe00011
-[   55.288154] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00030002, Val: 0x0000001d
-[   55.288158] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00010003, Val: 0xffe00015
-[   55.288162] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00020003, Val: 0xfe00011f
-[   55.288165] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00030003, Val: 0x000001ff
-[   55.288169] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00010004, Val: 0x77023113
-[   55.288173] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00020004, Val: 0x00007777
-[   55.288177] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) CONNINFRA sel: 0x00010005, Val: 0x00000011
-[   55.288178] [wlan][6047]pcie_mt7902_dump_conninfra_debug_cr:(HAL INFO) --CONNINFRA sel CR: 0x18060138, status CR: 0x18060150 loop end--
-[   55.288178] [wlan][6047]halSetDriverOwn:(INIT INFO) DRIVER OWN Done[2050101 us]
-[   55.288185] [wlan][6047]wlanAdapterStart:(INIT INFO) wlanAdapterStart(): Acquiring LP-OWN-end
-[   55.288186] [wlan][6047]wlanAdapterStart:(INIT ERROR) nicpmSetDriverOwn() failed!
-[   55.288187] [wlan][6047]halShowHostCsrInfo:(HAL INFO) Host CSR Configuration Info:
-
-[   55.288196] [wlan][6047]halShowHostCsrInfo:(HAL INFO) Get 0x87654321: 0x00007100 = 0xdead0003
-[   55.288200] [wlan][6047]halShowHostCsrInfo:(HAL INFO) Driver own info: 0x00007100 = 0xdead0003
-[   55.288204] [wlan][6047]halShowHostCsrInfo:(HAL INFO) MCU programming Counter info (no sync): 0x00007104 = 0xdead0003
-[   55.288207] [wlan][6047]halShowHostCsrInfo:(HAL INFO) MCU programming Counter info (no sync): 0x00007104 = 0xdead0003
-[   55.288211] [wlan][6047]halShowHostCsrInfo:(HAL INFO) MCU programming Counter info (no sync): 0x00007104 = 0xdead0003
-[   55.288215] [wlan][6047]halShowHostCsrInfo:(HAL INFO) MCU programming Counter info (no sync): 0x00007104 = 0xdead0003
-[   55.288218] [wlan][6047]halShowHostCsrInfo:(HAL INFO) MCU programming Counter info (no sync): 0x00007104 = 0xdead0003
-[   55.288222] [wlan][6047]halShowHostCsrInfo:(HAL INFO) RGU Info: 0x00007108 = 0xdead0003
-[   55.288226] [wlan][6047]halShowHostCsrInfo:(HAL INFO) HIF_BUSY / CIRQ / WFSYS_ON info: 0x0000710c = 0xdead0003
-[   55.288229] [wlan][6047]halShowHostCsrInfo:(HAL INFO) Pinmux/mon_flag info: 0x00007110 = 0xdead0003
-[   55.288233] [wlan][6047]halShowHostCsrInfo:(HAL INFO) Bit[5] mcu_pwr_stat: 0x00007114 = 0xdead0003
-[   55.288236] [wlan][6047]halShowHostCsrInfo:(HAL INFO) Bit[15] fw_own_stat: 0x00007118 = 0xdead0003
-[   55.288240] [wlan][6047]halShowHostCsrInfo:(HAL INFO) WF Mailbox[0]: 0x0000711c = 0xdead0003
-[   55.288244] [wlan][6047]halShowHostCsrInfo:(HAL INFO) MCU Mailbox[1]: 0x00007120 = 0xdead0003
-[   55.288247] [wlan][6047]halShowHostCsrInfo:(HAL INFO) BT Mailbox[2]: 0x00007124 = 0xdead0003
-[   55.288251] [wlan][6047]halShowHostCsrInfo:(HAL INFO) GPS Mailbox[3]: 0x00007128 = 0xdead0003
-[   55.288254] [wlan][6047]halShowHostCsrInfo:(HAL INFO) Conn_cfg_on info: 0x0000712c = 0xdead0003
-[   55.288259] [wlan][6047]halShowHostCsrInfo:(HAL INFO) Bit[17]/[16], Get HCLK info: 0x00007000 = 0xdead0003
-[   55.288259] [wlan][6047]wlanAdapterStart:(INIT WARN) Fail reason: 1
-[   55.288289] [wlan][6047]wlanProbe:(INIT ERROR) wlanProbe: probe failed, reason:3
-[   55.288349] [wlan][6047]halUninitMsduTokenInfo:(HAL INFO) Msdu Token Uninit: Tot[1024] Used[0]
-[   55.288392] [wlan][6047]wlanFreeNetDev:(INIT INFO) free_netdev wlan0 netdev start.
-[   55.288398] [wlan][6047]wlanFreeNetDev:(INIT INFO) free_netdev wlan0 netdev end.
-[   55.288399] [wlan][6047]mtk_pci_probe:(INIT INFO) pfWlanProbe fail!call pfWlanRemove()
-[   55.288399] [wlan][6047]wlanRemove:(INIT INFO) Remove wlan!
-[   55.288400] [wlan][6047]wlanRemove:(INIT ERROR) u4WlanDevNum = 0
-[   55.288401] [wlan][6047]mtk_pci_probe:(INIT INFO) mtk_pci_probe() done(-1)
-[   55.288403] wlan: probe of 0000:02:00.0 failed with error -1
-[   55.288448] [wlan][6047]initWlan:(INIT INFO) initWlan::End
+[   34.078371] mt7902: loading out-of-tree module taints kernel.
+[   34.078383] mt7902: module verification failed: signature and/or required key missing - tainting kernel
+[   34.238326] [wlan]Set ALL DBG module log level to [0x2f]
+[   34.238330] [wlan]Reset ALL DBG module log level to DEFAULT!
+[   34.238499] [wlan][4531]rlmDomainCountryCodeUpdateSanity:(RLM ERROR) prGlueInfo is NULL!
+[   34.238502] [wlan][4531]mtk_reg_notify:(RLM ERROR) sanity check failed, skip!
+[   34.238550] [wlan][4531]wlanCreateWirelessDevice:(INIT INFO) Create wireless device success
+[   34.238559] [wlan][4531]glP2pCreateWirelessDevice:(INIT INFO) glP2pCreateWirelessDevice (0000000055b2ed7e)
+[   34.238910] [wlan][4531]mtk_pci_probe:(INIT INFO) pci_enable_device done!
+[   34.238915] [wlan][4531]wlanProbe:(INIT INFO) enter wlanProbe
+[   34.238944] [wlan][4531]glBusInit:(INIT INFO) ioremap for device 0000:02:00.0, region 0x100000 @ 0x6000000000
+[   34.239375] [wlan][4531]wlanNetCreate:(INIT INFO) net_device prDev(0x00000000d0de191e) allocated
+[   34.239393] [wlan][4531]glBusConfigASPM:(INIT INFO) ASPM STATUS 0
+[   34.239420] [wlan][4531]wlanCfgInit:(INIT INFO) Init wifi config len 0 max entry 256
+[   34.239616] [wlan][4531]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
+[   34.241253] [wlan][4531]kalRequestFirmware:(INIT INFO) kalRequestFirmware(): mediatek/mt7902/wifi.cfg OK
+[   34.241259] [wlan][4531]wlanCfgInit:(INIT INFO) Init wifi config len 185 max entry 256
+[   34.241389] [wlan][4531]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
+[   34.241555] [wlan][4531]wlanCfgParse:(INIT INFO) wlanCfgParse()
+[   34.241560] [wlan][4531]wlanCfgParse:(INIT INFO)  nargs= 0 STATE_TEXT = WIFI_RAM_CODE=WIFI_RAM_CODE_MT7902_1.bin, SIZE = 40
+[   34.241564] [wlan][4531]wlanCfgParse:(INIT INFO)  nargs= 1 STATE_TEXT = WIFI_PATCH_MCU=WIFI_MT7902_patch_mcu_1_1_hdr.bin, SIZE = 48
+[   34.241566] [wlan][4531]wlanCfgParse:(INIT INFO) STATE_NEWLINE
+[   34.241567] [wlan][4531]wlanCfgParse:(INIT WARN) Save to driver temp buffer as [WIFI_PATCH_MCU=WIFI_MT7902_patch_mcu_1_1_hdr.bin]
+[   34.241571] [wlan][4531]glLoadNvram:(INIT INFO) g_NvramFsm = 0
+[   34.241572] [wlan][4531]glLoadNvram:(INIT WARN) Nvram not available
+[   34.241577] [wlan][4531]mt79xx_wfsys_cold_boot_and_wait:(INIT WARN) WFSYS already initialized! Forcing cold boot anyway.
+[   34.241578] [wlan][4531]mt79xx_wfsys_cold_boot_and_wait:(INIT INFO) WFSYS cold-boot attempt 1
+[   34.241588] [wlan][4531]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x5030B870
+[   34.241590] [wlan][4531]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0x001C2000
+[   34.241591] [wlan][4531]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
+[   34.353908] [wlan][4531]mt79xx_wfsys_cold_boot_and_wait:(INIT INFO) WFSYS MCU signaled init-done
+[   34.353959] [wlan][4531]wlanProbe:(INIT INFO) WFSYS MCU is alive, continuing adapter start
+[   34.354375] [wlan][4531]wlanAdapterStart:(INIT INFO) wlanAdapterStart(): Acquiring LP-OWN
+[   34.355423] [wlan][4531]glBusConfigASPM:(INIT INFO) ASPM STATUS 0
+[   34.355436] [wlan][4531]halSetDriverOwn:(INIT INFO) DRIVER OWN Done[1051 us]
+[   34.355464] [wlan][4531]wlanAdapterStart:(INIT INFO) wlanAdapterStart(): Acquiring LP-OWN-end
+[   34.356165] [wlan][4531]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
+[   34.361907] [wlan][4531]mt7902SetRxRingHwAddr:(HAL ERROR) not supported ring idx 4
+[   34.362397] [wlan][4531]halInitMsduTokenInfo:(HAL INFO) Msdu Token Init: Tot[1024] Used[0]
+[   34.362411] [wlan][4531]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x03] SEQ[1] LEN[76]
+[   34.362567] [wlan][4531]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x03] SEQ[2] LEN[76]
+[   34.362705] [wlan][4531]wlanSetChipEcoInfo:(INIT INFO) Chip ID[7902] Version[E1] HW[0x00008a00] SW[0x00008a00]
+[   34.362718] [wlan][4531]wlanDownloadPatch:(INIT INFO) Patch download start
+[   34.363788] [wlan][4531]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x10] SEQ[3] LEN[68]
+[   34.363968] [wlan][4531]wlanGetPatchInfoAndDownloadV2:(INIT INFO) PATCH INFO: platform[ALPS] HW/SW ver[0x108A108A] ver[0xFFFFFFFF]
+[   34.363972] [wlan][4531]wlanGetPatchInfoAndDownloadV2:(INIT INFO) date[20220729160652a
+               ]
+[   34.363974] [wlan][4531]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Patch ver: 0x11223344, Section num: 0x1, subsys: 0x4
+[   34.363977] [wlan][4531]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Section 0: type = 0x40002, offset = 0xa0, size = 0x1ce00
+[   34.363980] [wlan][4531]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Target address: 0x900000, length: 0x1ce00
+[   34.363982] [wlan][4531]wlanGetPatchInfoAndDownloadV2:(INIT INFO) FormatV2 num_of_regoin[1] datamode[0x80000009]
+[   34.363985] [wlan][4531]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x05] SEQ[4] LEN[76]
+[   34.365447] [wlan][4531]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x07] SEQ[5] LEN[68]
+[   34.365453] [wlan][4531]wlanPatchSendComplete:(INIT INFO) PATCH FINISH CMD send, waiting for RSP
+[   34.380457] [wlan][4531]wlanPatchSendComplete:(INIT INFO) PATCH FINISH EVT success!!
+[   34.380473] [wlan][4531]wlanDownloadPatch:(INIT INFO) Patch download end[0].
+[   34.380475] [wlan][4531]wlanDownloadFW:(INIT INFO) FW download Start
+[   34.383440] [wlan][4531]wlanGetConnacTailerInfo:(INIT INFO) N9 INFO: chip_info[19:E1] region_num[3]
+[   34.383448] [wlan][4531]wlanGetConnacTailerInfo:(INIT INFO) date[20250521121249] version[____00000020250521121249]
+[   34.383450] [wlan][4531]fwDlGetReleaseInfoSection:(INIT INFO) Release info tag[0] len[68]
+[   34.383452] [wlan][4531]fwDlGetReleaseInfoSection:(INIT INFO) Release info tag[1] len[62] padding[2]
+[   34.383454] [wlan][4531]fwDlGetReleaseManifest:(INIT INFO) Release manifest: t-neptune-main-mt7902-2046-MT7902_E1_ASIC_CCN10-20250521120616
+[   34.383456] [wlan][4531]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[0] addr[0x00918400] len[414608] datamode[0x80000009]
+[   34.383461] [wlan][4531]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[6] LEN[76]
+[   34.385540] [wlan][4531]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[414608] addr[0x02015c00] len[287696] datamode[0x80000009]
+[   34.385544] [wlan][4531]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[7] LEN[76]
+[   34.390355] [wlan][4531]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[702304] addr[0x00404400] len[10768] datamode[0x80000009]
+[   34.390359] [wlan][4531]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[8] LEN[76]
+[   34.398300] [wlan][4531]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[9] LEN[72]
+[   34.398305] [wlan][4531]wlanConfigWifiFunc:(INIT INFO) FW_START CMD send, waiting for RSP
+[   34.446723] [wlan][4531]wlanConfigWifiFunc:(INIT INFO) FW_START EVT success!!
+[   34.446750] [wlan][4531]wlanDownloadFW:(INIT INFO) FW download End
+[   34.446751] [wlan][4531]wlanAdapterStart:(INIT INFO) Waiting for Ready bit..
+[   34.446753] [wlan][4531]wlanCheckWifiFunc:(INIT INFO) Check ready_bits(=0x3)
+[   34.446758] [wlan][4531]wlanCheckWifiFunc:(INIT INFO) Ready bit asserted
+[   34.446760] [wlan][4531]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x00] SEQ[10] SET[1] LEN[64]
+[   34.446766] [wlan][4531]wlanQueryNicCapabilityV2:(INIT INFO) Support NIC_CAPABILITY_V2 feature
+[   34.446767] [wlan][4531]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x8A] SEQ[11] SET[0] LEN[64]
+[   34.451018] [wlan][4531]nicCmdEventQueryNicCsumOffload:(INIT INFO) nicCmdEventQueryNicCsumOffload: ucIsSupportCsumOffload = 1
+[   34.451030] [wlan][4531]nicCfgChipCapMacCap:(INIT INFO) ucHwBssIdNum: 4.
+[   34.451031] [wlan][4531]nicCfgChipCapMacCap:(INIT INFO) ucWtblEntryNum: 20.
+[   34.451032] [wlan][4531]nicCfgChipCapMacCap:(INIT INFO) ucWmmSetNum: 4.
+[   34.451034] [wlan][4531]nicCfgChipAdieHwVersion:(INIT INFO) A DieID = 0x0
+[   34.451039] [wlan][4531]wlanPrintVersion:(SW4 INFO) 
+               N9 FW version -0.0.0[DEC] ()
+               Tailer Ver[2:1] ____000000 (20250521121249) info 19:E1
+               Release manifest: t-neptune-main-mt7902-2046-MT7902_E1_ASIC_CCN10-20250521120616
+               Patch platform ALPS version 0xFFFFFFFF 20220729160652a
+               
+               Drv version 0.0[DEC]
+[   34.451040] [wlan][4531]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[12] SET[1] LEN[76]
+[   34.451047] [wlan][4531]kalRetrieveNetworkAddress:(INIT INFO) glLoadNvram fail
+[   34.451048] [wlan][4531]wlanUpdateNetworkAddress:(INIT INFO) Using embedded MAC address
+[   34.451050] [wlan][4531]kalUpdateMACAddress:(INIT INFO) c46fba8:50:**:**:**:5a, 96:d201000:**:**:**:d201000.
+[   34.451064] [wlan][4531]kalIndicateStatusAndComplete:(INIT INFO) [wifi] wlan%d netif_carrier_off
+[   34.451066] [wlan][4531]kalIndicateStatusAndComplete:(INIT INFO) Skip report DISCONNECTED when using supplicant SME
+[   34.451093] [wlan][4531]p2pFuncSwitchSapChannel:(P2P WARN) Not support concurrent STA + SAP
+[   34.451178] [wlan][4531]aisFsmInit:(SW1 INFO) ->aisFsmInit(0)
+[   34.451181] [wlan][4531]nicFreq2ChannelNum:(BSS INFO) Return Invalid Channelnum = 0.
+[   34.451183] [wlan][4531]wlanOnPostFirmwareReady:(INIT WARN) wlanOnPostFirmwareReady: load manufacture data fail
+[   34.451482] [wlan][4534]main_thread:(INIT INFO) main_thread:4534 starts running...
+[   34.451805] [wlan][4535]hif_thread:(INIT INFO) hif_thread:4535 starts running...
+[   34.452059] [wlan][4531]wlanConnac2XDownloadBufferBin:(INIT INFO) Start Efuse Buffer Mode ..
+[   34.452064] [wlan][4531]wlanConnac2XDownloadBufferBin:(INIT INFO) ucEfuseBUfferModeCal is 0
+[   34.452064] [wlan][4536]rx_thread:(INIT INFO) rx_thread:4536 starts running...
+[   34.452073] [wlan][4531]wlanConnac2XDownloadBufferBin:(INIT INFO) [0/0] load buffer size: 0x0
+[   34.452080] [wlan][4534]wlanoidConnacSetEfusBufferMode:(OID INFO) u4SetBufferLen = 4
+[   34.452093] [wlan][4534]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0xED] SEQ[13] SET[0] LEN[68]
+[   34.452096] [wlan][4534]kalEnqueueCommand:(INIT INFO) EN-Q CMD TYPE[1] ID[0xED] SEQ[13] to CMD Q
+[   34.454232] [wlan][4531]rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode:(RLM ERROR) Cannot find the 00 RegDomain. Set to default WW
+[   34.454237] [wlan][4531]kalApplyCustomRegulatory:(RLM INFO) kalApplyCustomRegulatory()
+[   34.454243] [wlan][4531]rlmDomainCountryCodeUpdate:(RLM INFO) g_mtk_regd_control.alpha2 = 00
+[   34.454245] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][0]: ch1 (freq = 2412) flgs=0x80180 [NO_80MHZ NO_160MHZ ]
+[   34.454248] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][1]: ch2 (freq = 2417) flgs=0x80180 [NO_80MHZ NO_160MHZ ]
+[   34.454249] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][2]: ch3 (freq = 2422) flgs=0x80180 [NO_80MHZ NO_160MHZ ]
+[   34.454251] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][3]: ch4 (freq = 2427) flgs=0x80180 [NO_80MHZ NO_160MHZ ]
+[   34.454252] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][4]: ch5 (freq = 2432) flgs=0x80180 [NO_80MHZ NO_160MHZ ]
+[   34.454253] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][5]: ch6 (freq = 2437) flgs=0x80180 [NO_80MHZ NO_160MHZ ]
+[   34.454255] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][6]: ch7 (freq = 2442) flgs=0x80180 [NO_80MHZ NO_160MHZ ]
+[   34.454256] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][7]: ch8 (freq = 2447) flgs=0x80180 [NO_80MHZ NO_160MHZ ]
+[   34.454257] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][8]: ch9 (freq = 2452) flgs=0x80180 [NO_80MHZ NO_160MHZ ]
+[   34.454259] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][9]: ch10 (freq = 2457) flgs=0x80180 [NO_80MHZ NO_160MHZ ]
+[   34.454260] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][10]: ch11 (freq = 2462) flgs=0x80180 [NO_80MHZ NO_160MHZ ]
+[   34.454262] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][11]: ch12 (freq = 2467) flgs=0x80180 [NO_80MHZ NO_160MHZ ]
+[   34.454263] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][12]: ch13 (freq = 2472) flgs=0x80180 [NO_80MHZ NO_160MHZ ]
+[   34.454265] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[0][13]: ch14 (freq = 2484) flgs=0x801b0 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454266] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][0]: ch36 (freq = 5180) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454268] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][1]: ch40 (freq = 5200) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454269] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][2]: ch44 (freq = 5220) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454271] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][3]: ch48 (freq = 5240) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454272] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][4]: ch52 (freq = 5260) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454273] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][5]: ch56 (freq = 5280) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454275] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][6]: ch60 (freq = 5300) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454276] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][7]: ch64 (freq = 5320) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454278] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][8]: ch100 (freq = 5500) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454279] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][9]: ch104 (freq = 5520) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454280] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][10]: ch108 (freq = 5540) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454282] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][11]: ch112 (freq = 5560) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454283] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][12]: ch116 (freq = 5580) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454285] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][13]: ch120 (freq = 5600) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454286] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][14]: ch124 (freq = 5620) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454288] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][15]: ch128 (freq = 5640) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454289] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][16]: ch132 (freq = 5660) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454290] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][17]: ch136 (freq = 5680) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454292] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][18]: ch140 (freq = 5700) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454293] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][19]: ch144 (freq = 5720) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454294] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][20]: ch149 (freq = 5745) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454296] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][21]: ch153 (freq = 5765) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454297] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][22]: ch157 (freq = 5785) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454299] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][23]: ch161 (freq = 5805) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454300] [wlan][4531]rlmDomainParsingChannel:(RLM INFO) channels[1][24]: ch165 (freq = 5825) flgs=0x80000 [NO_HT40PLUS NO_HT40MINUS NO_80MHZ NO_160MHZ ]
+[   34.454302] ------------[ cut here ]------------
+[   34.454303] UBSAN: array-index-out-of-bounds in /home/dan/builds/gen4-mt7902/mgmt/rlm_domain.c:6735:29
+[   34.454307] index 1 is out of range for type 'CMD_DOMAIN_CHANNEL [*]'
+[   34.454309] CPU: 6 PID: 4531 Comm: insmod Tainted: G           OE      6.8.0-40-generic #40-Ubuntu
+[   34.454312] Hardware name: ASUSTeK COMPUTER INC. Vivobook_ASUSLaptop X1505VA_F1505VA/X1505VA, BIOS X1505VA.204 12/15/2022
+[   34.454314] Call Trace:
+[   34.454316]  <TASK>
+[   34.454320]  dump_stack_lvl+0x76/0xa0
+[   34.454330]  dump_stack+0x10/0x20
+[   34.454332]  __ubsan_handle_out_of_bounds+0xc6/0x110
+[   34.454338]  rlmExtractChannelInfo+0xb9/0xc0 [mt7902]
+[   34.454495]  rlmDomainSendDomainInfoCmd_V2+0xba/0x200 [mt7902]
+[   34.454621]  rlmDomainSendDomainInfoCmd+0x19f/0x290 [mt7902]
+[   34.454733]  rlmDomainCountryCodeUpdate+0x90/0xf0 [mt7902]
+[   34.454840]  rlmDomainSetCountry+0x88/0xc0 [mt7902]
+[   34.454944]  rlmDomainSendInfoToFirmware+0x2e/0x40 [mt7902]
+[   34.455046]  wlanOnPreNetRegister+0x1b6/0x460 [mt7902]
+[   34.455175]  ? nicpmSetFWOwn+0x12/0x20 [mt7902]
+[   34.455289]  ? wlanAdapterStart+0x49e/0x6a0 [mt7902]
+[   34.455377]  wlanProbe+0xda6/0x1490 [mt7902]
+[   34.455502]  mtk_pci_probe+0x4e/0x170 [mt7902]
+[   34.455658]  local_pci_probe+0x44/0xb0
+[   34.455662]  pci_call_probe+0x55/0x1a0
+[   34.455666]  pci_device_probe+0x84/0x120
+[   34.455669]  really_probe+0x1c4/0x410
+[   34.455674]  __driver_probe_device+0x8c/0x180
+[   34.455678]  driver_probe_device+0x24/0xd0
+[   34.455681]  __driver_attach+0x10b/0x210
+[   34.455685]  ? __pfx___driver_attach+0x10/0x10
+[   34.455688]  bus_for_each_dev+0x8a/0xf0
+[   34.455691]  driver_attach+0x1e/0x30
+[   34.455694]  bus_add_driver+0x156/0x260
+[   34.455697]  driver_register+0x5e/0x130
+[   34.455699]  __pci_register_driver+0x5e/0x70
+[   34.455702]  glRegisterBus+0x73/0x90 [mt7902]
+[   34.455840]  initWlan+0x284/0x420 [mt7902]
+[   34.455963]  ? __pfx_initWlan+0x10/0x10 [mt7902]
+[   34.456077]  do_one_initcall+0x5b/0x340
+[   34.456083]  do_init_module+0x97/0x290
+[   34.456087]  load_module+0xba1/0xcf0
+[   34.456091]  init_module_from_file+0x96/0x100
+[   34.456093]  ? init_module_from_file+0x96/0x100
+[   34.456096]  idempotent_init_module+0x11c/0x2b0
+[   34.456099]  __x64_sys_finit_module+0x64/0xd0
+[   34.456102]  x64_sys_call+0x1d6e/0x25c0
+[   34.456105]  do_syscall_64+0x7f/0x180
+[   34.456108]  ? irqentry_exit+0x43/0x50
+[   34.456112]  ? exc_page_fault+0x94/0x1b0
+[   34.456115]  entry_SYSCALL_64_after_hwframe+0x78/0x80
+[   34.456120] RIP: 0033:0x745c3432728d
+[   34.456144] Code: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 5b bb 0d 00 f7 d8 64 89 01 48
+[   34.456146] RSP: 002b:00007ffff950a1d8 EFLAGS: 00000246 ORIG_RAX: 0000000000000139
+[   34.456150] RAX: ffffffffffffffda RBX: 00005ff698a7c850 RCX: 0000745c3432728d
+[   34.456151] RDX: 0000000000000000 RSI: 00005ff696e6be52 RDI: 0000000000000003
+[   34.456153] RBP: 00007ffff950a290 R08: 0000000000000040 R09: 00005ff696e6c0b0
+[   34.456154] R10: 0000745c34403b20 R11: 0000000000000246 R12: 00005ff696e6be52
+[   34.456156] R13: 0000000000000000 R14: 00005ff698a7c820 R15: 0000000000000000
+[   34.456158]  </TASK>
+[   34.456178] ---[ end trace ]---
+[   34.456180] [wlan][4531]rlmDomainSendDomainInfoCmd_V2:(RLM INFO) rlmDomainSendDomainInfoCmd_V2(), buff_valid_size = 0x144
+[   34.456183] [wlan][4531]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x0F] SEQ[14] SET[1] LEN[388]
+[   34.456186] [wlan][4531]kalEnqueueCommand:(INIT INFO) EN-Q CMD TYPE[1] ID[0x0F] SEQ[14] to CMD Q
+[   34.456189] [wlan][4531]rlmDomainSendPwrLimitCmd_V2:(RLM INFO) rlmDomainSendPwrLimitCmd()
+[   34.456669] wlan 0000:02:00.0: Direct firmware load for TxPwrLimit_MT79x1.dat failed with error -2
+[   34.456676] [wlan][4531]kalRequestFirmware:(INIT INFO) kalRequestFirmware TxPwrLimit_MT79x1.dat Fail, errno[-2]!!
+[   34.456680] [wlan][4531]kalReadToFile:(INIT INFO) kalReadToFile() path /data/misc/TxPwrLimit_MT79x1.dat
+[   34.456682] [wlan][4531]kalReadToFile:(INIT INFO) kalReadToFile() path /data/misc/wifi/TxPwrLimit_MT79x1.dat
+[   34.456683] [wlan][4531]kalReadToFile:(INIT INFO) kalReadToFile() path /storage/sdcard0/TxPwrLimit_MT79x1.dat
+[   34.456694] [wlan][4531]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified table in TxPwrLimit_MT79x1.dat
+[   34.456709] [wlan][4531]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find default table (WW) in TxPwrLimit_MT79x1.dat
+[   34.456751] [wlan][4531]rlmDomainSendPwrLimitCmd_V2:(RLM ERROR) Load TxPwrLimitData failed
+[   34.456968] [wlan][4531]wlanOnPreNetRegister:(INIT INFO) MAC address: 50:5a:**:**:**:96
+[   34.457036] [wlan][4534]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[15] SET[1] LEN[76]
+[   34.457043] [wlan][4534]kalEnqueueCommand:(INIT INFO) EN-Q CMD TYPE[1] ID[0x02] SEQ[15] to CMD Q
+[   34.457058] [wlan][4534]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5A] SEQ[16] SET[1] LEN[108]
+[   34.457061] [wlan][4534]kalEnqueueCommand:(INIT INFO) EN-Q CMD TYPE[1] ID[0x5A] SEQ[16] to CMD Q
+[   34.457114] [wlan][4531]kalNapiInit:(INIT INFO) GRO interface added successfully:wlan0
+[   34.457364] [wlan][4531]mtk_cfg_get_txpower:(REQ WARN) driver is not ready
+[   34.457385] [wlan][4531]procCreateFsEntry:(INIT INFO) [procCreateFsEntry]
+[   34.457394] [wlan][4531]wlanFeatureToFw:(INIT WARN) Send key word (AdapScan) WITH (0x0) to firmware
+[   34.457396] [wlan][4531]wlanFeatureToFw:(INIT WARN) Send key word (StaVHT) WITH (0x1) to firmware
+[   34.457397] [wlan][4531]wlanFeatureToFw:(INIT WARN) Send key word (ApVHT) WITH (0x1) to firmware
+[   34.457398] [wlan][4531]wlanFeatureToFw:(INIT WARN) Send key word (P2pGoVHT) WITH (0x1) to firmware
+[   34.457400] [wlan][4531]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[17] SET[1] LEN[348]
+[   34.457403] [wlan][4531]kalEnqueueCommand:(INIT INFO) EN-Q CMD TYPE[1] ID[0x70] SEQ[17] to CMD Q
+[   34.457408] [wlan][4531]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:4
+[   34.457411] [wlan][4531]wlanFeatureToFw:(INIT WARN) Send key word (P2pGcVHT) WITH (0x1) to firmware
+[   34.457412] [wlan][4531]wlanFeatureToFw:(INIT WARN) Send key word (Nss) WITH (0x1) to firmware
+[   34.457413] [wlan][4531]wlanFeatureToFw:(INIT WARN) Send key word (LdpcTx) WITH (0x1) to firmware
+[   34.457414] [wlan][4531]wlanFeatureToFw:(INIT WARN) Send key word (LdpcRx) WITH (0x1) to firmware
+[   34.457415] [wlan][4531]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[18] SET[1] LEN[348]
+[   34.457417] [wlan][4531]kalEnqueueCommand:(INIT INFO) EN-Q CMD TYPE[1] ID[0x70] SEQ[18] to CMD Q
+[   34.457418] [wlan][4531]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:4
+[   34.457419] [wlan][4531]wlanFeatureToFw:(INIT WARN) Send key word (StbcTx) WITH (0x0) to firmware
+[   34.457420] [wlan][4531]wlanFeatureToFw:(INIT WARN) Send key word (StbcRx) WITH (0x1) to firmware
+[   34.457421] [wlan][4531]wlanFeatureToFw:(INIT INFO) cmdV1Header.itemNum:2
+[   34.457422] [wlan][4531]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[19] SET[1] LEN[348]
+[   34.457424] [wlan][4531]kalEnqueueCommand:(INIT INFO) EN-Q CMD TYPE[1] ID[0x70] SEQ[19] to CMD Q
+[   34.457426] [wlan][4531]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:2
+[   34.457457] [wlan][4531]wlanProbe:(INIT INFO) wlanProbe: probe success, feature set: 0x80881418, persistNetdev: 0
+[   34.457459] [wlan][4531]mtk_pci_probe:(INIT INFO) mtk_pci_probe() done(0)
+[   34.457516] [wlan][4531]initWlan:(INIT INFO) initWlan::End
+[   34.458186] [wlan][1238]mtk_cfg_get_txpower:(REQ WARN) STA doesn't support this function
+[   34.467731] [wlan][1238]kalNapiEnable:(RX INFO) RX NAPI enabled wlan0
+[   34.467747] [wlan][187]wlanSetMulticastListWorkQueue:(INIT INFO) ucBssIndex = 0
+[   34.467749] [wlan][187]wlanSetMulticastListWorkQueue:(INIT INFO) wlanSetMulticastListWorkQueue prDev->flags:0x1203
+[   34.467803] [wlan][4534]wlanoidSetCurrentPacketFilter:(REQ INFO) wlanoidSetCurrentPacketFilter
+[   34.467808] [wlan][4534]wlanoidSetPacketFilter:(OID INFO) [MC debug] u4PacketFilter=c, IsSuspend=0
+[   34.467813] [wlan][4534]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x0A] SEQ[20] SET[1] LEN[132]
+[   34.467816] [wlan][4534]kalEnqueueCommand:(INIT INFO) EN-Q CMD TYPE[1] ID[0x0A] SEQ[20] to CMD Q
+[   34.467872] [wlan][1238]mtk_cfg80211_set_power_mgmt:(REQ INFO) 0: enabled=0, timeout=-1, fgTIMPresend=0
+[   34.467880] [wlan][187]wlanSetMulticastListWorkQueue:(INIT INFO) ucBssIndex = 0
+[   34.467900] [wlan][4534]nicPowerSaveInfoMap:(NIC INFO) Flag=0x80000001, Caller=0, PM=0, PSFlag[0]=0x0000
+[   34.467910] [wlan][4534]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x05] SEQ[21] SET[1] LEN[68]
+[   34.467913] [wlan][4534]kalEnqueueCommand:(INIT INFO) EN-Q CMD TYPE[1] ID[0x05] SEQ[21] to CMD Q
+[   34.468023] [wlan][187]wlanSetMulticastListWorkQueue:(INIT INFO) wlanSetMulticastListWorkQueue prDev->flags:0x1203
+[   34.468081] [wlan][4534]wlanoidSetCurrentPacketFilter:(REQ INFO) wlanoidSetCurrentPacketFilter
+[   34.468083] [wlan][4534]wlanoidSetPacketFilter:(OID INFO) [MC debug] u4PacketFilter=c, IsSuspend=0
+[   34.468087] [wlan][4534]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x0A] SEQ[22] SET[1] LEN[132]
+[   34.468090] [wlan][4534]kalEnqueueCommand:(INIT INFO) EN-Q CMD TYPE[1] ID[0x0A] SEQ[22] to CMD Q
+[   34.468123] [wlan][1238]mtk_cfg_get_txpower:(REQ WARN) STA doesn't support this function
+[   34.470879] [wlan][1240]mtk_cfg_get_txpower:(REQ WARN) STA doesn't support this function
+[   34.470904] [wlan][1240]mtk_cfg_get_txpower:(REQ WARN) STA doesn't support this function
+[   34.471220] [wlan][1240]mtk_cfg80211_vendor_get_features:(REQ INFO) Dump feature flags[0]=0x2.
+[   34.471257] [wlan][1240]mtk_cfg_get_txpower:(REQ WARN) STA doesn't support this function
+[   34.471279] [wlan][1240]mtk_cfg_get_txpower:(REQ WARN) STA doesn't support this function
+[   34.471935] [wlan][1240]mtk_cfg_get_txpower:(REQ WARN) STA doesn't support this function
