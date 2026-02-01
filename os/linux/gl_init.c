@@ -5939,8 +5939,9 @@ static int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter)
 
     /* If it is already alive, skip everything */
     if (prChipInfo->asicPollWfsysSwInitDone(prAdapter)) {
-        DBGLOG(INIT, INFO, "WFSYS already initialized before reset\n");
-        return 0;
+      //DBGLOG(INIT, INFO, "WFSYS already initialized before reset\n");
+	DBGLOG(INIT, WARN, "WFSYS already initialized! Forcing cold boot anyway.\n");
+        //return 0;
     }
 
     while (attempts-- > 0) {
