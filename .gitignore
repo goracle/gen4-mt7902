@@ -1,4 +1,6 @@
 *.o
+*undo-tree*
+*\#*\#
 *.o.cmd
 *.o.d
 *.ko
