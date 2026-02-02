@@ -2780,20 +2780,7 @@ u_int8_t rlmDomainTxPwrLimitLoad(
 	uint8_t *prFileName = prAdapter->chip_info->prTxPwrLimitFile;
 
 
-	if (!rlmDomainTxPwrLimitGetCountryRange(u4CountryCode, pucBuf,
-		u4BufLen, &u4CountryStart, &u4CountryEnd)) {
-		DBGLOG(RLM, ERROR, "Can't find specified table in %s\n",
-			prFileName);
-
-		/* Use WW as default country */
-		if (!rlmDomainTxPwrLimitGetCountryRange(COUNTRY_CODE_WW, pucBuf,
-			u4BufLen, &u4CountryStart, &u4CountryEnd)) {
-			DBGLOG(RLM, ERROR,
-				"Can't find default table (WW) in %s\n",
-				prFileName);
-			return FALSE;
-		}
-	}
+	u4CountryStart = 0; u4CountryEnd = u4BufLen;
 
 	u4Pos = u4CountryStart;
 
