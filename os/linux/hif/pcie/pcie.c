@@ -305,7 +305,7 @@ static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	ASSERT(pdev);
 	ASSERT(id);
 
-	ret = pci_enable_device(pdev);
+	ret = pci_enable_device(pdev); if (ret) DBGLOG(HAL, ERROR, "Tier-6: Failed to re-enable PCIe device\n");
 
 	if (ret) {
 		DBGLOG(INIT, INFO, "pci_enable_device failed!\n");
@@ -905,8 +905,17 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 
 	/* Step 5: Re-enable PCIe function */
 	/* This restores config space and makes the device accessible again */
+    /* Tier-6: ACPI D3Cold Power Cycle */ 
+    DBGLOG(HAL, WARN, "Tier-6: Triggering ACPI D3cold power-cycle\n"); 
+    pci_save_state(pdev); 
+    pci_prepare_to_sleep(pdev); /* Force transition to deepest sleep */ 
+    pci_set_power_state(pdev, PCI_D3cold); 
+    msleep(200); 
+    pci_set_power_state(pdev, PCI_D0); 
+    pci_restore_state(pdev); 
+    if (pci_enable_device(pdev)) DBGLOG(HAL, ERROR, "Tier-6: Failed to re-enable PCIe device\n");
 	DBGLOG(HAL, WARN, "Tier-3: Re-enabling PCIe function\n");
-	u4Status = pci_enable_device(pdev);
+	u4Status = pci_enable_device(pdev); if (u4Status) DBGLOG(HAL, ERROR, "Tier-6: Failed to re-enable PCIe device\n");
 	if (u4Status != 0) {
 		DBGLOG(HAL, ERROR, "Tier-3: pci_enable_device failed: %d\n",
 		       u4Status);
