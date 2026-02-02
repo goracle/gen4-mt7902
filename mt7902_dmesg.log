@@ -1,822 +1,256 @@
-[   61.040548] mt7902: loading out-of-tree module taints kernel.
-[   61.040554] mt7902: module verification failed: signature and/or required key missing - tainting kernel
-[   61.130487] [wlan]Set ALL DBG module log level to [0x2f]
-[   61.130493] [wlan]Reset ALL DBG module log level to DEFAULT!
-[   61.130621] [wlan][5079]rlmDomainCountryCodeUpdateSanity:(RLM ERROR) prGlueInfo is NULL!
-[   61.130622] [wlan][5079]mtk_reg_notify:(RLM INFO) prGlueInfo not ready, ignoring world regdom (00)
-[   61.130658] [wlan][5079]wlanCreateWirelessDevice:(INIT INFO) Create wireless device success
-[   61.130659] [wlan][5079]glP2pCreateWirelessDevice:(INIT INFO) glP2pCreateWirelessDevice (00000000aeb9874d)
-[   61.130860] [wlan][5079]mtk_pci_probe:(INIT INFO) pci_enable_device done!
-[   61.130862] [wlan][5079]wlanProbe:(INIT INFO) enter wlanProbe
-[   61.130888] [wlan][5079]glBusInit:(INIT INFO) ioremap for device 0000:02:00.0, region 0x100000 @ 0x6000000000
-[   61.131336] [wlan][5079]wlanNetCreate:(INIT INFO) net_device prDev(0x00000000b5422294) allocated
-[   61.131352] [wlan][5079]glBusConfigASPM:(INIT INFO) ASPM STATUS 0
-[   61.131374] [wlan][5079]wlanCfgInit:(INIT INFO) Init wifi config len 0 max entry 256
-[   61.131477] [wlan][5079]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
-[   61.132278] [wlan][5079]kalRequestFirmware:(INIT INFO) kalRequestFirmware(): mediatek/mt7902/wifi.cfg OK
-[   61.132283] [wlan][5079]wlanCfgInit:(INIT INFO) Init wifi config len 185 max entry 256
-[   61.132366] [wlan][5079]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
-[   61.132458] [wlan][5079]wlanCfgParse:(INIT INFO) wlanCfgParse()
-[   61.132459] [wlan][5079]wlanCfgParse:(INIT INFO)  nargs= 0 STATE_TEXT = WIFI_RAM_CODE=WIFI_RAM_CODE_MT7902_1.bin, SIZE = 40
-[   61.132460] [wlan][5079]wlanCfgParse:(INIT INFO)  nargs= 1 STATE_TEXT = WIFI_PATCH_MCU=WIFI_MT7902_patch_mcu_1_1_hdr.bin, SIZE = 48
-[   61.132461] [wlan][5079]wlanCfgParse:(INIT INFO) STATE_NEWLINE
-[   61.132462] [wlan][5079]wlanCfgParse:(INIT WARN) Save to driver temp buffer as [WIFI_PATCH_MCU=WIFI_MT7902_patch_mcu_1_1_hdr.bin]
-[   61.132465] [wlan][5079]glLoadNvram:(INIT INFO) g_NvramFsm = 0
-[   61.132465] [wlan][5079]glLoadNvram:(INIT INFO) FORCING LOAD
-[   61.132466] [wlan][5079]glLoadNvram:(INIT INFO) u2Part1OwnVersion = 00000000, u2Part1PeerVersion = 00000000
-[   61.132470] [wlan][5079]mt79xx_wfsys_cold_boot_and_wait:(INIT WARN) WFSYS already initialized! Forcing cold boot anyway.
-[   61.132471] [wlan][5079]mt79xx_wfsys_cold_boot_and_wait:(INIT INFO) WFSYS cold-boot attempt 1
-[   61.132481] [wlan][5079]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x5030B870
-[   61.132482] [wlan][5079]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0x001C2000
-[   61.132483] [wlan][5079]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
-[   61.241727] [wlan][5079]mt79xx_wfsys_cold_boot_and_wait:(INIT INFO) WFSYS MCU signaled init-done
-[   61.241743] [wlan][5079]wlanProbe:(INIT INFO) WFSYS MCU is alive, continuing adapter start
-[   61.241967] [wlan][5079]wlanAdapterStart:(INIT INFO) wlanAdapterStart(): Acquiring LP-OWN
-[   61.243006] [wlan][5079]glBusConfigASPM:(INIT INFO) ASPM STATUS 0
-[   61.243013] [wlan][5079]halSetDriverOwn:(INIT INFO) DRIVER OWN Done[1040 us]
-[   61.243018] [wlan][5079]wlanAdapterStart:(INIT INFO) wlanAdapterStart(): Acquiring LP-OWN-end
-[   61.243473] [wlan][5079]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
-[   61.247823] [wlan][5079]mt7902SetRxRingHwAddr:(HAL ERROR) not supported ring idx 4
-[   61.248253] [wlan][5079]halInitMsduTokenInfo:(HAL INFO) Msdu Token Init: Tot[1024] Used[0]
-[   61.248266] [wlan][5079]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x03] SEQ[1] LEN[76]
-[   61.248419] [wlan][5079]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x03] SEQ[2] LEN[76]
-[   61.248575] [wlan][5079]wlanSetChipEcoInfo:(INIT INFO) Chip ID[7902] Version[E1] HW[0x00008a00] SW[0x00008a00]
-[   61.248587] [wlan][5079]wlanDownloadPatch:(INIT INFO) Patch download start
-[   61.249805] [wlan][5079]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x10] SEQ[3] LEN[68]
-[   61.249937] [wlan][5079]wlanGetPatchInfoAndDownloadV2:(INIT INFO) PATCH INFO: platform[ALPS] HW/SW ver[0x108A108A] ver[0xFFFFFFFF]
-[   61.249938] [wlan][5079]wlanGetPatchInfoAndDownloadV2:(INIT INFO) date[20220729160652a
+[   30.737576] mt7902: loading out-of-tree module taints kernel.
+[   30.737582] mt7902: module verification failed: signature and/or required key missing - tainting kernel
+[   30.835802] [wlan]Set ALL DBG module log level to [0x2f]
+[   30.835804] [wlan]Reset ALL DBG module log level to DEFAULT!
+[   30.835929] [wlan][4980]rlmDomainCountryCodeUpdateSanity:(RLM ERROR) prGlueInfo is NULL!
+[   30.835930] [wlan][4980]mtk_reg_notify:(RLM INFO) prGlueInfo not ready, ignoring world regdom (00)
+[   30.835975] [wlan][4980]wlanCreateWirelessDevice:(INIT INFO) Create wireless device success
+[   30.835979] [wlan][4980]glP2pCreateWirelessDevice:(INIT INFO) glP2pCreateWirelessDevice (000000005cf59f91)
+[   30.836194] [wlan][4980]mtk_pci_probe:(INIT INFO) pci_enable_device done!
+[   30.836195] [wlan][4980]wlanProbe:(INIT INFO) enter wlanProbe
+[   30.836221] [wlan][4980]glBusInit:(INIT INFO) ioremap for device 0000:02:00.0, region 0x100000 @ 0x6000000000
+[   30.836591] [wlan][4980]wlanNetCreate:(INIT INFO) net_device prDev(0x000000000f243d90) allocated
+[   30.836607] [wlan][4980]glBusConfigASPM:(INIT INFO) ASPM STATUS 0
+[   30.836637] [wlan][4980]wlanCfgInit:(INIT INFO) Init wifi config len 0 max entry 256
+[   30.836738] [wlan][4980]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
+[   30.837545] [wlan][4980]kalRequestFirmware:(INIT INFO) kalRequestFirmware(): mediatek/mt7902/wifi.cfg OK
+[   30.837566] [wlan][4980]wlanCfgInit:(INIT INFO) Init wifi config len 185 max entry 256
+[   30.837705] [wlan][4980]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
+[   30.837877] [wlan][4980]wlanCfgParse:(INIT INFO) wlanCfgParse()
+[   30.837878] [wlan][4980]wlanCfgParse:(INIT INFO)  nargs= 0 STATE_TEXT = WIFI_RAM_CODE=WIFI_RAM_CODE_MT7902_1.bin, SIZE = 40
+[   30.837881] [wlan][4980]wlanCfgParse:(INIT INFO)  nargs= 1 STATE_TEXT = WIFI_PATCH_MCU=WIFI_MT7902_patch_mcu_1_1_hdr.bin, SIZE = 48
+[   30.837882] [wlan][4980]wlanCfgParse:(INIT INFO) STATE_NEWLINE
+[   30.837883] [wlan][4980]wlanCfgParse:(INIT WARN) Save to driver temp buffer as [WIFI_PATCH_MCU=WIFI_MT7902_patch_mcu_1_1_hdr.bin]
+[   30.837901] [wlan][4980]glLoadNvram:(INIT INFO) g_NvramFsm = 0
+[   30.837904] [wlan][4980]glLoadNvram:(INIT INFO) FORCING LOAD
+[   30.837904] [wlan][4980]glLoadNvram:(INIT INFO) u2Part1OwnVersion = 00000000, u2Part1PeerVersion = 00000000
+[   30.837913] [wlan][4980]mt79xx_wfsys_cold_boot_and_wait:(INIT WARN) WFSYS already initialized! Forcing cold boot anyway.
+[   30.837913] [wlan][4980]mt79xx_wfsys_cold_boot_and_wait:(INIT INFO) WFSYS cold-boot attempt 1
+[   30.837923] [wlan][4980]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x5030B870
+[   30.837924] [wlan][4980]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0x001C2000
+[   30.837925] [wlan][4980]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
+[   30.946736] [wlan][4980]mt79xx_wfsys_cold_boot_and_wait:(INIT INFO) WFSYS MCU signaled init-done
+[   30.946751] [wlan][4980]wlanProbe:(INIT INFO) WFSYS MCU is alive, continuing adapter start
+[   30.946964] [wlan][4980]wlanAdapterStart:(INIT INFO) wlanAdapterStart(): Acquiring LP-OWN
+[   30.948001] [wlan][4980]glBusConfigASPM:(INIT INFO) ASPM STATUS 0
+[   30.948007] [wlan][4980]halSetDriverOwn:(INIT INFO) DRIVER OWN Done[1038 us]
+[   30.948012] [wlan][4980]wlanAdapterStart:(INIT INFO) wlanAdapterStart(): Acquiring LP-OWN-end
+[   30.948450] [wlan][4980]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
+[   30.953017] [wlan][4980]mt7902SetRxRingHwAddr:(HAL ERROR) not supported ring idx 4
+[   30.953512] [wlan][4980]halInitMsduTokenInfo:(HAL INFO) Msdu Token Init: Tot[1024] Used[0]
+[   30.953540] [wlan][4980]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x03] SEQ[1] LEN[76]
+[   30.953692] [wlan][4980]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x03] SEQ[2] LEN[76]
+[   30.953830] [wlan][4980]wlanSetChipEcoInfo:(INIT INFO) Chip ID[7902] Version[E1] HW[0x00008a00] SW[0x00008a00]
+[   30.953842] [wlan][4980]wlanDownloadPatch:(INIT INFO) Patch download start
+[   30.954759] [wlan][4980]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x10] SEQ[3] LEN[68]
+[   30.954901] [wlan][4980]wlanGetPatchInfoAndDownloadV2:(INIT INFO) PATCH INFO: platform[ALPS] HW/SW ver[0x108A108A] ver[0xFFFFFFFF]
+[   30.954904] [wlan][4980]wlanGetPatchInfoAndDownloadV2:(INIT INFO) date[20220729160652a
                ]
-[   61.249939] [wlan][5079]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Patch ver: 0x11223344, Section num: 0x1, subsys: 0x4
-[   61.249940] [wlan][5079]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Section 0: type = 0x40002, offset = 0xa0, size = 0x1ce00
-[   61.249941] [wlan][5079]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Target address: 0x900000, length: 0x1ce00
-[   61.249942] [wlan][5079]wlanGetPatchInfoAndDownloadV2:(INIT INFO) FormatV2 num_of_regoin[1] datamode[0x80000009]
-[   61.249943] [wlan][5079]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x05] SEQ[4] LEN[76]
-[   61.251377] [wlan][5079]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x07] SEQ[5] LEN[68]
-[   61.251383] [wlan][5079]wlanPatchSendComplete:(INIT INFO) PATCH FINISH CMD send, waiting for RSP
-[   61.266383] [wlan][5079]wlanPatchSendComplete:(INIT INFO) PATCH FINISH EVT success!!
-[   61.266389] [wlan][5079]wlanDownloadPatch:(INIT INFO) Patch download end[0].
-[   61.266390] [wlan][5079]wlanDownloadFW:(INIT INFO) FW download Start
-[   61.268986] [wlan][5079]wlanGetConnacTailerInfo:(INIT INFO) N9 INFO: chip_info[19:E1] region_num[3]
-[   61.268989] [wlan][5079]wlanGetConnacTailerInfo:(INIT INFO) date[20250521121249] version[____00000020250521121249]
-[   61.268990] [wlan][5079]fwDlGetReleaseInfoSection:(INIT INFO) Release info tag[0] len[68]
-[   61.268991] [wlan][5079]fwDlGetReleaseInfoSection:(INIT INFO) Release info tag[1] len[62] padding[2]
-[   61.268992] [wlan][5079]fwDlGetReleaseManifest:(INIT INFO) Release manifest: t-neptune-main-mt7902-2046-MT7902_E1_ASIC_CCN10-20250521120616
-[   61.268993] [wlan][5079]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[0] addr[0x00918400] len[414608] datamode[0x80000009]
-[   61.268995] [wlan][5079]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[6] LEN[76]
-[   61.270845] [wlan][5079]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[414608] addr[0x02015c00] len[287696] datamode[0x80000009]
-[   61.270847] [wlan][5079]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[7] LEN[76]
-[   61.275542] [wlan][5079]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[702304] addr[0x00404400] len[10768] datamode[0x80000009]
-[   61.275543] [wlan][5079]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[8] LEN[76]
-[   61.283514] [wlan][5079]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[9] LEN[72]
-[   61.283519] [wlan][5079]wlanConfigWifiFunc:(INIT INFO) FW_START CMD send, waiting for RSP
-[   61.334990] [wlan][5079]wlanConfigWifiFunc:(INIT INFO) FW_START EVT success!!
-[   61.335006] [wlan][5079]wlanDownloadFW:(INIT INFO) FW download End
-[   61.335007] [wlan][5079]wlanAdapterStart:(INIT INFO) Waiting for Ready bit..
-[   61.335008] [wlan][5079]wlanCheckWifiFunc:(INIT INFO) Check ready_bits(=0x3)
-[   61.335012] [wlan][5079]wlanCheckWifiFunc:(INIT INFO) Ready bit asserted
-[   61.335013] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x00] SEQ[10] SET[1] LEN[64]
-[   61.335018] [wlan][5079]wlanQueryNicCapabilityV2:(INIT INFO) Support NIC_CAPABILITY_V2 feature
-[   61.335018] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x8A] SEQ[11] SET[0] LEN[64]
-[   61.339315] [wlan][5079]nicCmdEventQueryNicCsumOffload:(INIT INFO) nicCmdEventQueryNicCsumOffload: ucIsSupportCsumOffload = 1
-[   61.339323] [wlan][5079]nicCfgChipCapMacCap:(INIT INFO) ucHwBssIdNum: 4.
-[   61.339324] [wlan][5079]nicCfgChipCapMacCap:(INIT INFO) ucWtblEntryNum: 20.
-[   61.339324] [wlan][5079]nicCfgChipCapMacCap:(INIT INFO) ucWmmSetNum: 4.
-[   61.339325] [wlan][5079]nicCfgChipAdieHwVersion:(INIT INFO) A DieID = 0x0
-[   61.339332] [wlan][5079]wlanPrintVersion:(SW4 INFO) 
+[   30.954906] [wlan][4980]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Patch ver: 0x11223344, Section num: 0x1, subsys: 0x4
+[   30.954910] [wlan][4980]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Section 0: type = 0x40002, offset = 0xa0, size = 0x1ce00
+[   30.954913] [wlan][4980]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Target address: 0x900000, length: 0x1ce00
+[   30.954916] [wlan][4980]wlanGetPatchInfoAndDownloadV2:(INIT INFO) FormatV2 num_of_regoin[1] datamode[0x80000009]
+[   30.954919] [wlan][4980]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x05] SEQ[4] LEN[76]
+[   30.956320] [wlan][4980]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x07] SEQ[5] LEN[68]
+[   30.956326] [wlan][4980]wlanPatchSendComplete:(INIT INFO) PATCH FINISH CMD send, waiting for RSP
+[   30.971302] [wlan][4980]wlanPatchSendComplete:(INIT INFO) PATCH FINISH EVT success!!
+[   30.971310] [wlan][4980]wlanDownloadPatch:(INIT INFO) Patch download end[0].
+[   30.971311] [wlan][4980]wlanDownloadFW:(INIT INFO) FW download Start
+[   30.973639] [wlan][4980]wlanGetConnacTailerInfo:(INIT INFO) N9 INFO: chip_info[19:E1] region_num[3]
+[   30.973642] [wlan][4980]wlanGetConnacTailerInfo:(INIT INFO) date[20250521121249] version[____00000020250521121249]
+[   30.973643] [wlan][4980]fwDlGetReleaseInfoSection:(INIT INFO) Release info tag[0] len[68]
+[   30.973644] [wlan][4980]fwDlGetReleaseInfoSection:(INIT INFO) Release info tag[1] len[62] padding[2]
+[   30.973645] [wlan][4980]fwDlGetReleaseManifest:(INIT INFO) Release manifest: t-neptune-main-mt7902-2046-MT7902_E1_ASIC_CCN10-20250521120616
+[   30.973645] [wlan][4980]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[0] addr[0x00918400] len[414608] datamode[0x80000009]
+[   30.973648] [wlan][4980]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[6] LEN[76]
+[   30.975803] [wlan][4980]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[414608] addr[0x02015c00] len[287696] datamode[0x80000009]
+[   30.975805] [wlan][4980]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[7] LEN[76]
+[   30.980498] [wlan][4980]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[702304] addr[0x00404400] len[10768] datamode[0x80000009]
+[   30.980500] [wlan][4980]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[8] LEN[76]
+[   30.988480] [wlan][4980]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[9] LEN[72]
+[   30.988485] [wlan][4980]wlanConfigWifiFunc:(INIT INFO) FW_START CMD send, waiting for RSP
+[   31.039820] [wlan][4980]wlanConfigWifiFunc:(INIT INFO) FW_START EVT success!!
+[   31.039974] [wlan][4980]wlanDownloadFW:(INIT INFO) FW download End
+[   31.039978] [wlan][4980]wlanAdapterStart:(INIT INFO) Waiting for Ready bit..
+[   31.039980] [wlan][4980]wlanCheckWifiFunc:(INIT INFO) Check ready_bits(=0x3)
+[   31.039985] [wlan][4980]wlanCheckWifiFunc:(INIT INFO) Ready bit asserted
+[   31.039988] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x00] SEQ[10] SET[1] LEN[64]
+[   31.039995] [wlan][4980]wlanQueryNicCapabilityV2:(INIT INFO) Support NIC_CAPABILITY_V2 feature
+[   31.039996] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x8A] SEQ[11] SET[0] LEN[64]
+[   31.044104] [wlan][4980]nicCmdEventQueryNicCsumOffload:(INIT INFO) nicCmdEventQueryNicCsumOffload: ucIsSupportCsumOffload = 1
+[   31.044120] [wlan][4980]nicCfgChipCapMacCap:(INIT INFO) ucHwBssIdNum: 4.
+[   31.044122] [wlan][4980]nicCfgChipCapMacCap:(INIT INFO) ucWtblEntryNum: 20.
+[   31.044123] [wlan][4980]nicCfgChipCapMacCap:(INIT INFO) ucWmmSetNum: 4.
+[   31.044125] [wlan][4980]nicCfgChipAdieHwVersion:(INIT INFO) A DieID = 0x0
+[   31.044130] [wlan][4980]wlanPrintVersion:(SW4 INFO) 
                N9 FW version -0.0.0[DEC] ()
                Tailer Ver[2:1] ____000000 (20250521121249) info 19:E1
                Release manifest: t-neptune-main-mt7902-2046-MT7902_E1_ASIC_CCN10-20250521120616
                Patch platform ALPS version 0xFFFFFFFF 20220729160652a
                
                Drv version 0.0[DEC]
-[   61.339334] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[12] SET[1] LEN[76]
-[   61.339340] [wlan][5079]wlanUpdateNetworkAddress:(INIT INFO) Using embedded MAC address
-[   61.339341] [wlan][5079]kalUpdateMACAddress:(INIT INFO) 858c5028:50:**:**:**:5a, 96:4e201000:**:**:**:4e201000.
-[   61.339348] [wlan][5079]kalIndicateStatusAndComplete:(INIT INFO) [wifi] wlan%d netif_carrier_off
-[   61.339349] [wlan][5079]kalIndicateStatusAndComplete:(INIT INFO) Skip report DISCONNECTED when using supplicant SME
-[   61.339374] [wlan][5079]p2pFuncSwitchSapChannel:(P2P WARN) Not support concurrent STA + SAP
-[   61.339434] [wlan][5079]aisFsmInit:(SW1 INFO) ->aisFsmInit(0)
-[   61.339437] [wlan][5079]nicFreq2ChannelNum:(BSS INFO) Return Invalid Channelnum = 0.
-[   61.339441] [wlan][5079]rlmDomainSendDomainInfoCmd_V2:(RLM INFO) rlmDomainSendDomainInfoCmd_V2(), buff_valid_size = 0xc
-[   61.339442] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x0F] SEQ[13] SET[1] LEN[76]
-[   61.339444] [wlan][5079]rlmDomainSendPwrLimitCmd_V2:(RLM INFO) rlmDomainSendPwrLimitCmd()
-[   61.340388] [wlan][5079]kalRequestFirmware:(INIT INFO) kalRequestFirmware(): TxPwrLimit_MT79x1.dat OK
-[   61.340478] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section cck in TxPwrLimit_MT79x1.dat
-[   61.340480] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section ofdm in TxPwrLimit_MT79x1.dat
-[   61.340486] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section ht20 in TxPwrLimit_MT79x1.dat
-[   61.340499] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section ht40 in TxPwrLimit_MT79x1.dat
-[   61.340502] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section vht20 in TxPwrLimit_MT79x1.dat
-[   61.340508] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section vht40 in TxPwrLimit_MT79x1.dat
-[   61.340511] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section vht80 in TxPwrLimit_MT79x1.dat
-[   61.340583] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section vht160 in TxPwrLimit_MT79x1.dat
-[   61.340654] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section txbf_backoff in TxPwrLimit_MT79x1.dat
-[   61.340655] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM INFO) Load TxPwrLimit_MT79x1.dat finished
-[   61.340790] [wlan][5079]kalRequestFirmware:(INIT INFO) kalRequestFirmware(): TxPwrLimit_MT79x1.dat OK
-[   61.340935] [wlan][5079]rlmDomainTxPwrLegacyLimitLoad:(RLM ERROR) Can't find specified table in TxPwrLimit_MT79x1.dat
-[   61.340994] [wlan][5079]rlmDomainTxPwrLimitGetCountryRange:(RLM INFO) Found TxPwrLimit table for CountryCode "00,F"
-[   61.341030] [wlan][5079]rlmDomainTxPwrLegacyLimitLoad:(RLM INFO) Load TxPwrLimit_MT79x1.dat finished
-[   61.341035] [wlan][5079]rlmDomainInitTxLegacyPwrLimitPerRateCmd:(RLM INFO) rlmDomainInitTxLegacyPwrLimitPerRateCmd, active n_channels=14, band=1
-[   61.341036] ------------[ cut here ]------------
-[   61.341037] UBSAN: array-index-out-of-bounds in /home/dan/builds/gen4-mt7902/mgmt/rlm_domain.c:4509:31
-[   61.341040] index 1 is out of range for type 'CMD_TXPOWER_CHANNEL_LEGACY_POWER_LIMIT_PER_RATE [*]'
-[   61.341042] CPU: 5 PID: 5079 Comm: insmod Tainted: G           OE      6.8.0-40-generic #40-Ubuntu
-[   61.341043] Hardware name: ASUSTeK COMPUTER INC. Vivobook_ASUSLaptop X1505VA_F1505VA/X1505VA, BIOS X1505VA.204 12/15/2022
-[   61.341045] Call Trace:
-[   61.341046]  <TASK>
-[   61.341049]  dump_stack_lvl+0x76/0xa0
-[   61.341058]  dump_stack+0x10/0x20
-[   61.341059]  __ubsan_handle_out_of_bounds+0xc6/0x110
-[   61.341063]  rlmDomainInitTxLegacyPwrLimitPerRateCmd+0x1f2/0x2d0 [mt7902]
-[   61.341149]  rlmDomainSendTxLegacyPwrLimitPerRateCmd+0x79/0x140 [mt7902]
-[   61.341214]  rlmDomainSendPwrLimitCmd_V2+0x355/0x550 [mt7902]
-[   61.341282]  rlmDomainSendPwrLimitCmd+0x176/0x400 [mt7902]
-[   61.341340]  ? rlmDomainSendDomainInfoCmd+0x19f/0x290 [mt7902]
-[   61.341399]  rlmDomainSendCmd+0x26/0x40 [mt7902]
-[   61.341457]  wlanLoadManufactureData+0xd3/0x5d0 [mt7902]
-[   61.341499]  ? secInit+0x196/0x210 [mt7902]
-[   61.341578]  wlanOnPostFirmwareReady+0x24c/0x260 [mt7902]
-[   61.341625]  wlanAdapterStart+0x576/0x6a0 [mt7902]
-[   61.341675]  wlanProbe+0xcec/0x14a0 [mt7902]
-[   61.341747]  mtk_pci_probe+0x4e/0x170 [mt7902]
-[   61.341829]  local_pci_probe+0x44/0xb0
-[   61.341831]  pci_call_probe+0x55/0x1a0
-[   61.341833]  pci_device_probe+0x84/0x120
-[   61.341835]  really_probe+0x1c4/0x410
-[   61.341838]  __driver_probe_device+0x8c/0x180
-[   61.341840]  driver_probe_device+0x24/0xd0
-[   61.341842]  __driver_attach+0x10b/0x210
-[   61.341844]  ? __pfx___driver_attach+0x10/0x10
-[   61.341847]  bus_for_each_dev+0x8a/0xf0
-[   61.341848]  driver_attach+0x1e/0x30
-[   61.341850]  bus_add_driver+0x156/0x260
-[   61.341852]  driver_register+0x5e/0x130
-[   61.341853]  __pci_register_driver+0x5e/0x70
-[   61.341854]  glRegisterBus+0x73/0x90 [mt7902]
-[   61.341927]  initWlan+0x284/0x420 [mt7902]
-[   61.341996]  ? __pfx_initWlan+0x10/0x10 [mt7902]
-[   61.342059]  do_one_initcall+0x5b/0x340
-[   61.342064]  do_init_module+0x97/0x290
-[   61.342066]  load_module+0xba1/0xcf0
-[   61.342068]  init_module_from_file+0x96/0x100
-[   61.342069]  ? init_module_from_file+0x96/0x100
-[   61.342071]  idempotent_init_module+0x11c/0x2b0
-[   61.342073]  __x64_sys_finit_module+0x64/0xd0
-[   61.342075]  x64_sys_call+0x1d6e/0x25c0
-[   61.342076]  do_syscall_64+0x7f/0x180
-[   61.342079]  ? syscall_exit_to_user_mode+0x89/0x260
-[   61.342081]  ? do_syscall_64+0x8c/0x180
-[   61.342082]  ? irqentry_exit_to_user_mode+0x7e/0x260
-[   61.342084]  ? irqentry_exit+0x43/0x50
-[   61.342086]  ? exc_page_fault+0x94/0x1b0
-[   61.342088]  entry_SYSCALL_64_after_hwframe+0x78/0x80
-[   61.342090] RIP: 0033:0x74d28892728d
-[   61.342108] Code: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 5b bb 0d 00 f7 d8 64 89 01 48
-[   61.342109] RSP: 002b:00007fff0249ca58 EFLAGS: 00000246 ORIG_RAX: 0000000000000139
-[   61.342111] RAX: ffffffffffffffda RBX: 0000629d9ec78860 RCX: 000074d28892728d
-[   61.342112] RDX: 0000000000000000 RSI: 0000629d9e273e52 RDI: 0000000000000003
-[   61.342113] RBP: 00007fff0249cb10 R08: 0000000000000040 R09: 0000629d9e2740b0
-[   61.342114] R10: 000074d288a03b20 R11: 0000000000000246 R12: 0000629d9e273e52
-[   61.342114] R13: 0000000000000000 R14: 0000629d9ec78820 R15: 0000000000000000
-[   61.342116]  </TASK>
-[   61.342120] ---[ end trace ]---
-[   61.342122] [wlan][5079]rlmDomainInitTxLegacyPwrLimitPerRateCmd:(RLM INFO) rlmDomainInitTxLegacyPwrLimitPerRateCmd, active n_channels=45, band=2
-[   61.342124] ------------[ cut here ]------------
-[   61.342125] UBSAN: array-index-out-of-bounds in /home/dan/builds/gen4-mt7902/mgmt/rlm_domain.c:3129:55
-[   61.342126] index 1 is out of range for type 'CMD_TXPOWER_CHANNEL_LEGACY_POWER_LIMIT_PER_RATE [*]'
-[   61.342127] CPU: 5 PID: 5079 Comm: insmod Tainted: G           OE      6.8.0-40-generic #40-Ubuntu
-[   61.342129] Hardware name: ASUSTeK COMPUTER INC. Vivobook_ASUSLaptop X1505VA_F1505VA/X1505VA, BIOS X1505VA.204 12/15/2022
-[   61.342129] Call Trace:
-[   61.342130]  <TASK>
-[   61.342130]  dump_stack_lvl+0x76/0xa0
-[   61.342132]  dump_stack+0x10/0x20
-[   61.342133]  __ubsan_handle_out_of_bounds+0xc6/0x110
-[   61.342135]  rlmDomainTxLegacyPwrLimitPerRateSetValues+0x12f/0x140 [mt7902]
-[   61.342208]  rlmDomainSendTxLegacyPwrLimitPerRateCmd+0xf1/0x140 [mt7902]
-[   61.342275]  rlmDomainSendPwrLimitCmd_V2+0x355/0x550 [mt7902]
-[   61.342339]  rlmDomainSendPwrLimitCmd+0x176/0x400 [mt7902]
-[   61.342400]  ? rlmDomainSendDomainInfoCmd+0x19f/0x290 [mt7902]
-[   61.342463]  rlmDomainSendCmd+0x26/0x40 [mt7902]
-[   61.342529]  wlanLoadManufactureData+0xd3/0x5d0 [mt7902]
-[   61.342577]  ? secInit+0x196/0x210 [mt7902]
-[   61.342648]  wlanOnPostFirmwareReady+0x24c/0x260 [mt7902]
-[   61.342695]  wlanAdapterStart+0x576/0x6a0 [mt7902]
-[   61.342745]  wlanProbe+0xcec/0x14a0 [mt7902]
-[   61.342817]  mtk_pci_probe+0x4e/0x170 [mt7902]
-[   61.342897]  local_pci_probe+0x44/0xb0
-[   61.342898]  pci_call_probe+0x55/0x1a0
-[   61.342900]  pci_device_probe+0x84/0x120
-[   61.342902]  really_probe+0x1c4/0x410
-[   61.342904]  __driver_probe_device+0x8c/0x180
-[   61.342906]  driver_probe_device+0x24/0xd0
-[   61.342908]  __driver_attach+0x10b/0x210
-[   61.342910]  ? __pfx___driver_attach+0x10/0x10
-[   61.342912]  bus_for_each_dev+0x8a/0xf0
-[   61.342914]  driver_attach+0x1e/0x30
-[   61.342916]  bus_add_driver+0x156/0x260
-[   61.342918]  driver_register+0x5e/0x130
-[   61.342919]  __pci_register_driver+0x5e/0x70
-[   61.342920]  glRegisterBus+0x73/0x90 [mt7902]
-[   61.343001]  initWlan+0x284/0x420 [mt7902]
-[   61.343070]  ? __pfx_initWlan+0x10/0x10 [mt7902]
-[   61.343134]  do_one_initcall+0x5b/0x340
-[   61.343137]  do_init_module+0x97/0x290
-[   61.343138]  load_module+0xba1/0xcf0
-[   61.343140]  init_module_from_file+0x96/0x100
-[   61.343141]  ? init_module_from_file+0x96/0x100
-[   61.343143]  idempotent_init_module+0x11c/0x2b0
-[   61.343145]  __x64_sys_finit_module+0x64/0xd0
-[   61.343147]  x64_sys_call+0x1d6e/0x25c0
-[   61.343148]  do_syscall_64+0x7f/0x180
-[   61.343149]  ? syscall_exit_to_user_mode+0x89/0x260
-[   61.343151]  ? do_syscall_64+0x8c/0x180
-[   61.343153]  ? irqentry_exit_to_user_mode+0x7e/0x260
-[   61.343154]  ? irqentry_exit+0x43/0x50
-[   61.343156]  ? exc_page_fault+0x94/0x1b0
-[   61.343158]  entry_SYSCALL_64_after_hwframe+0x78/0x80
-[   61.343160] RIP: 0033:0x74d28892728d
-[   61.343163] Code: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 5b bb 0d 00 f7 d8 64 89 01 48
-[   61.343164] RSP: 002b:00007fff0249ca58 EFLAGS: 00000246 ORIG_RAX: 0000000000000139
-[   61.343166] RAX: ffffffffffffffda RBX: 0000629d9ec78860 RCX: 000074d28892728d
-[   61.343166] RDX: 0000000000000000 RSI: 0000629d9e273e52 RDI: 0000000000000003
-[   61.343167] RBP: 00007fff0249cb10 R08: 0000000000000040 R09: 0000629d9e2740b0
-[   61.343168] R10: 000074d288a03b20 R11: 0000000000000246 R12: 0000629d9e273e52
-[   61.343169] R13: 0000000000000000 R14: 0000629d9ec78820 R15: 0000000000000000
-[   61.343170]  </TASK>
-[   61.343173] ---[ end trace ]---
-[   61.343179] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[14] SET[1] LEN[372]
-[   61.343181] ------------[ cut here ]------------
-[   61.343181] UBSAN: array-index-out-of-bounds in /home/dan/builds/gen4-mt7902/mgmt/rlm_domain.c:4672:4
-[   61.343182] index 8 is out of range for type 'CMD_TXPOWER_CHANNEL_LEGACY_POWER_LIMIT_PER_RATE [*]'
-[   61.343183] CPU: 5 PID: 5079 Comm: insmod Tainted: G           OE      6.8.0-40-generic #40-Ubuntu
-[   61.343184] Hardware name: ASUSTeK COMPUTER INC. Vivobook_ASUSLaptop X1505VA_F1505VA/X1505VA, BIOS X1505VA.204 12/15/2022
-[   61.343185] Call Trace:
-[   61.343185]  <TASK>
-[   61.343186]  dump_stack_lvl+0x76/0xa0
-[   61.343188]  dump_stack+0x10/0x20
-[   61.343189]  __ubsan_handle_out_of_bounds+0xc6/0x110
-[   61.343191]  rlmDomainTxLegacyPwrLimitSendPerRateCmd+0x287/0x2e0 [mt7902]
-[   61.343262]  rlmDomainSendTxLegacyPwrLimitPerRateCmd+0x10b/0x140 [mt7902]
-[   61.343326]  rlmDomainSendPwrLimitCmd_V2+0x355/0x550 [mt7902]
-[   61.343386]  rlmDomainSendPwrLimitCmd+0x176/0x400 [mt7902]
-[   61.343443]  ? rlmDomainSendDomainInfoCmd+0x19f/0x290 [mt7902]
-[   61.343502]  rlmDomainSendCmd+0x26/0x40 [mt7902]
-[   61.343561]  wlanLoadManufactureData+0xd3/0x5d0 [mt7902]
-[   61.343608]  ? secInit+0x196/0x210 [mt7902]
-[   61.343680]  wlanOnPostFirmwareReady+0x24c/0x260 [mt7902]
-[   61.343727]  wlanAdapterStart+0x576/0x6a0 [mt7902]
-[   61.343776]  wlanProbe+0xcec/0x14a0 [mt7902]
-[   61.343847]  mtk_pci_probe+0x4e/0x170 [mt7902]
-[   61.343927]  local_pci_probe+0x44/0xb0
-[   61.343928]  pci_call_probe+0x55/0x1a0
-[   61.343930]  pci_device_probe+0x84/0x120
-[   61.343932]  really_probe+0x1c4/0x410
-[   61.343934]  __driver_probe_device+0x8c/0x180
-[   61.343936]  driver_probe_device+0x24/0xd0
-[   61.343938]  __driver_attach+0x10b/0x210
-[   61.343940]  ? __pfx___driver_attach+0x10/0x10
-[   61.343942]  bus_for_each_dev+0x8a/0xf0
-[   61.343944]  driver_attach+0x1e/0x30
-[   61.343946]  bus_add_driver+0x156/0x260
-[   61.343947]  driver_register+0x5e/0x130
-[   61.343949]  __pci_register_driver+0x5e/0x70
-[   61.343950]  glRegisterBus+0x73/0x90 [mt7902]
-[   61.344024]  initWlan+0x284/0x420 [mt7902]
-[   61.344097]  ? __pfx_initWlan+0x10/0x10 [mt7902]
-[   61.344160]  do_one_initcall+0x5b/0x340
-[   61.344163]  do_init_module+0x97/0x290
-[   61.344164]  load_module+0xba1/0xcf0
-[   61.344166]  init_module_from_file+0x96/0x100
-[   61.344168]  ? init_module_from_file+0x96/0x100
-[   61.344170]  idempotent_init_module+0x11c/0x2b0
-[   61.344172]  __x64_sys_finit_module+0x64/0xd0
-[   61.344173]  x64_sys_call+0x1d6e/0x25c0
-[   61.344174]  do_syscall_64+0x7f/0x180
-[   61.344176]  ? syscall_exit_to_user_mode+0x89/0x260
-[   61.344178]  ? do_syscall_64+0x8c/0x180
-[   61.344179]  ? irqentry_exit_to_user_mode+0x7e/0x260
-[   61.344181]  ? irqentry_exit+0x43/0x50
-[   61.344183]  ? exc_page_fault+0x94/0x1b0
-[   61.344184]  entry_SYSCALL_64_after_hwframe+0x78/0x80
-[   61.344186] RIP: 0033:0x74d28892728d
-[   61.344189] Code: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 5b bb 0d 00 f7 d8 64 89 01 48
-[   61.344190] RSP: 002b:00007fff0249ca58 EFLAGS: 00000246 ORIG_RAX: 0000000000000139
-[   61.344192] RAX: ffffffffffffffda RBX: 0000629d9ec78860 RCX: 000074d28892728d
-[   61.344192] RDX: 0000000000000000 RSI: 0000629d9e273e52 RDI: 0000000000000003
-[   61.344193] RBP: 00007fff0249cb10 R08: 0000000000000040 R09: 0000629d9e2740b0
-[   61.344194] R10: 000074d288a03b20 R11: 0000000000000246 R12: 0000629d9e273e52
-[   61.344195] R13: 0000000000000000 R14: 0000629d9ec78820 R15: 0000000000000000
-[   61.344196]  </TASK>
-[   61.344200] ---[ end trace ]---
-[   61.344200] ------------[ cut here ]------------
-[   61.344201] UBSAN: array-index-out-of-bounds in /home/dan/builds/gen4-mt7902/mgmt/rlm_domain.c:4672:4
-[   61.344202] index 8 is out of range for type 'CMD_TXPOWER_CHANNEL_LEGACY_POWER_LIMIT_PER_RATE [*]'
-[   61.344203] CPU: 5 PID: 5079 Comm: insmod Tainted: G           OE      6.8.0-40-generic #40-Ubuntu
-[   61.344204] Hardware name: ASUSTeK COMPUTER INC. Vivobook_ASUSLaptop X1505VA_F1505VA/X1505VA, BIOS X1505VA.204 12/15/2022
-[   61.344205] Call Trace:
-[   61.344205]  <TASK>
-[   61.344206]  dump_stack_lvl+0x76/0xa0
-[   61.344207]  dump_stack+0x10/0x20
-[   61.344208]  __ubsan_handle_out_of_bounds+0xc6/0x110
-[   61.344210]  rlmDomainTxLegacyPwrLimitSendPerRateCmd+0x297/0x2e0 [mt7902]
-[   61.344281]  rlmDomainSendTxLegacyPwrLimitPerRateCmd+0x10b/0x140 [mt7902]
-[   61.344346]  rlmDomainSendPwrLimitCmd_V2+0x355/0x550 [mt7902]
-[   61.344407]  rlmDomainSendPwrLimitCmd+0x176/0x400 [mt7902]
-[   61.344467]  ? rlmDomainSendDomainInfoCmd+0x19f/0x290 [mt7902]
-[   61.344529]  rlmDomainSendCmd+0x26/0x40 [mt7902]
-[   61.344593]  wlanLoadManufactureData+0xd3/0x5d0 [mt7902]
-[   61.344640]  ? secInit+0x196/0x210 [mt7902]
-[   61.344712]  wlanOnPostFirmwareReady+0x24c/0x260 [mt7902]
-[   61.344759]  wlanAdapterStart+0x576/0x6a0 [mt7902]
-[   61.344810]  wlanProbe+0xcec/0x14a0 [mt7902]
-[   61.344878]  mtk_pci_probe+0x4e/0x170 [mt7902]
-[   61.344957]  local_pci_probe+0x44/0xb0
-[   61.344959]  pci_call_probe+0x55/0x1a0
-[   61.344961]  pci_device_probe+0x84/0x120
-[   61.344963]  really_probe+0x1c4/0x410
-[   61.344965]  __driver_probe_device+0x8c/0x180
-[   61.344967]  driver_probe_device+0x24/0xd0
-[   61.344969]  __driver_attach+0x10b/0x210
-[   61.344971]  ? __pfx___driver_attach+0x10/0x10
-[   61.344973]  bus_for_each_dev+0x8a/0xf0
-[   61.344974]  driver_attach+0x1e/0x30
-[   61.344976]  bus_add_driver+0x156/0x260
-[   61.344978]  driver_register+0x5e/0x130
-[   61.344979]  __pci_register_driver+0x5e/0x70
-[   61.344981]  glRegisterBus+0x73/0x90 [mt7902]
-[   61.345056]  initWlan+0x284/0x420 [mt7902]
-[   61.345122]  ? __pfx_initWlan+0x10/0x10 [mt7902]
-[   61.345184]  do_one_initcall+0x5b/0x340
-[   61.345186]  do_init_module+0x97/0x290
-[   61.345188]  load_module+0xba1/0xcf0
-[   61.345190]  init_module_from_file+0x96/0x100
-[   61.345191]  ? init_module_from_file+0x96/0x100
-[   61.345193]  idempotent_init_module+0x11c/0x2b0
-[   61.345195]  __x64_sys_finit_module+0x64/0xd0
-[   61.345196]  x64_sys_call+0x1d6e/0x25c0
-[   61.345197]  do_syscall_64+0x7f/0x180
-[   61.345199]  ? syscall_exit_to_user_mode+0x89/0x260
-[   61.345201]  ? do_syscall_64+0x8c/0x180
-[   61.345202]  ? irqentry_exit_to_user_mode+0x7e/0x260
-[   61.345204]  ? irqentry_exit+0x43/0x50
-[   61.345206]  ? exc_page_fault+0x94/0x1b0
-[   61.345208]  entry_SYSCALL_64_after_hwframe+0x78/0x80
-[   61.345210] RIP: 0033:0x74d28892728d
-[   61.345213] Code: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 5b bb 0d 00 f7 d8 64 89 01 48
-[   61.345213] RSP: 002b:00007fff0249ca58 EFLAGS: 00000246 ORIG_RAX: 0000000000000139
-[   61.345215] RAX: ffffffffffffffda RBX: 0000629d9ec78860 RCX: 000074d28892728d
-[   61.345215] RDX: 0000000000000000 RSI: 0000629d9e273e52 RDI: 0000000000000003
-[   61.345216] RBP: 00007fff0249cb10 R08: 0000000000000040 R09: 0000629d9e2740b0
-[   61.345217] R10: 000074d288a03b20 R11: 0000000000000246 R12: 0000629d9e273e52
-[   61.345218] R13: 0000000000000000 R14: 0000629d9ec78820 R15: 0000000000000000
-[   61.345219]  </TASK>
-[   61.345222] ---[ end trace ]---
-[   61.345222] ------------[ cut here ]------------
-[   61.345223] UBSAN: array-index-out-of-bounds in /home/dan/builds/gen4-mt7902/mgmt/rlm_domain.c:4672:4
-[   61.345224] index 8 is out of range for type 'CMD_TXPOWER_CHANNEL_LEGACY_POWER_LIMIT_PER_RATE [*]'
-[   61.345225] CPU: 5 PID: 5079 Comm: insmod Tainted: G           OE      6.8.0-40-generic #40-Ubuntu
-[   61.345226] Hardware name: ASUSTeK COMPUTER INC. Vivobook_ASUSLaptop X1505VA_F1505VA/X1505VA, BIOS X1505VA.204 12/15/2022
-[   61.345226] Call Trace:
-[   61.345227]  <TASK>
-[   61.345227]  dump_stack_lvl+0x76/0xa0
-[   61.345229]  dump_stack+0x10/0x20
-[   61.345230]  __ubsan_handle_out_of_bounds+0xc6/0x110
-[   61.345232]  rlmDomainTxLegacyPwrLimitSendPerRateCmd+0x2c0/0x2e0 [mt7902]
-[   61.345302]  rlmDomainSendTxLegacyPwrLimitPerRateCmd+0x10b/0x140 [mt7902]
-[   61.345365]  rlmDomainSendPwrLimitCmd_V2+0x355/0x550 [mt7902]
-[   61.345425]  rlmDomainSendPwrLimitCmd+0x176/0x400 [mt7902]
-[   61.345482]  ? rlmDomainSendDomainInfoCmd+0x19f/0x290 [mt7902]
-[   61.345542]  rlmDomainSendCmd+0x26/0x40 [mt7902]
-[   61.345601]  wlanLoadManufactureData+0xd3/0x5d0 [mt7902]
-[   61.345648]  ? secInit+0x196/0x210 [mt7902]
-[   61.345721]  wlanOnPostFirmwareReady+0x24c/0x260 [mt7902]
-[   61.345768]  wlanAdapterStart+0x576/0x6a0 [mt7902]
-[   61.345816]  wlanProbe+0xcec/0x14a0 [mt7902]
-[   61.345893]  mtk_pci_probe+0x4e/0x170 [mt7902]
-[   61.345973]  local_pci_probe+0x44/0xb0
-[   61.345974]  pci_call_probe+0x55/0x1a0
-[   61.345976]  pci_device_probe+0x84/0x120
-[   61.345978]  really_probe+0x1c4/0x410
-[   61.345980]  __driver_probe_device+0x8c/0x180
-[   61.345982]  driver_probe_device+0x24/0xd0
-[   61.345984]  __driver_attach+0x10b/0x210
-[   61.345986]  ? __pfx___driver_attach+0x10/0x10
-[   61.345988]  bus_for_each_dev+0x8a/0xf0
-[   61.345989]  driver_attach+0x1e/0x30
-[   61.345991]  bus_add_driver+0x156/0x260
-[   61.345993]  driver_register+0x5e/0x130
-[   61.345994]  __pci_register_driver+0x5e/0x70
-[   61.345996]  glRegisterBus+0x73/0x90 [mt7902]
-[   61.346070]  initWlan+0x284/0x420 [mt7902]
-[   61.346139]  ? __pfx_initWlan+0x10/0x10 [mt7902]
-[   61.346203]  do_one_initcall+0x5b/0x340
-[   61.346205]  do_init_module+0x97/0x290
-[   61.346207]  load_module+0xba1/0xcf0
-[   61.346209]  init_module_from_file+0x96/0x100
-[   61.346210]  ? init_module_from_file+0x96/0x100
-[   61.346212]  idempotent_init_module+0x11c/0x2b0
-[   61.346214]  __x64_sys_finit_module+0x64/0xd0
-[   61.346216]  x64_sys_call+0x1d6e/0x25c0
-[   61.346217]  do_syscall_64+0x7f/0x180
-[   61.346218]  ? syscall_exit_to_user_mode+0x89/0x260
-[   61.346220]  ? do_syscall_64+0x8c/0x180
-[   61.346222]  ? irqentry_exit_to_user_mode+0x7e/0x260
-[   61.346224]  ? irqentry_exit+0x43/0x50
-[   61.346225]  ? exc_page_fault+0x94/0x1b0
-[   61.346227]  entry_SYSCALL_64_after_hwframe+0x78/0x80
-[   61.346229] RIP: 0033:0x74d28892728d
-[   61.346232] Code: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 5b bb 0d 00 f7 d8 64 89 01 48
-[   61.346233] RSP: 002b:00007fff0249ca58 EFLAGS: 00000246 ORIG_RAX: 0000000000000139
-[   61.346234] RAX: ffffffffffffffda RBX: 0000629d9ec78860 RCX: 000074d28892728d
-[   61.346235] RDX: 0000000000000000 RSI: 0000629d9e273e52 RDI: 0000000000000003
-[   61.346236] RBP: 00007fff0249cb10 R08: 0000000000000040 R09: 0000629d9e2740b0
-[   61.346237] R10: 000074d288a03b20 R11: 0000000000000246 R12: 0000629d9e273e52
-[   61.346238] R13: 0000000000000000 R14: 0000629d9ec78820 R15: 0000000000000000
-[   61.346239]  </TASK>
-[   61.346241] ---[ end trace ]---
-[   61.346242] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[15] SET[1] LEN[306]
-[   61.346244] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[16] SET[1] LEN[372]
-[   61.346245] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[17] SET[1] LEN[372]
-[   61.346246] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[18] SET[1] LEN[372]
-[   61.346247] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[19] SET[1] LEN[372]
-[   61.346248] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[20] SET[1] LEN[372]
-[   61.346249] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[21] SET[1] LEN[273]
-[   61.346251] [wlan][5079]rlmDomainInitTxPwrLimitPerRateCmd:(RLM INFO) rlmDomainInitTxPwrLimitPerRateCmd, active n_channels=14, band=1
-[   61.346253] ------------[ cut here ]------------
-[   61.346253] UBSAN: array-index-out-of-bounds in /home/dan/builds/gen4-mt7902/mgmt/rlm_domain.c:4439:25
-[   61.346254] index 1 is out of range for type 'CMD_TXPOWER_CHANNEL_POWER_LIMIT_PER_RATE [*]'
-[   61.346255] CPU: 5 PID: 5079 Comm: insmod Tainted: G           OE      6.8.0-40-generic #40-Ubuntu
-[   61.346256] Hardware name: ASUSTeK COMPUTER INC. Vivobook_ASUSLaptop X1505VA_F1505VA/X1505VA, BIOS X1505VA.204 12/15/2022
-[   61.346257] Call Trace:
-[   61.346257]  <TASK>
-[   61.346257]  dump_stack_lvl+0x76/0xa0
-[   61.346259]  dump_stack+0x10/0x20
-[   61.346260]  __ubsan_handle_out_of_bounds+0xc6/0x110
-[   61.346262]  rlmDomainInitTxPwrLimitPerRateCmd+0x1f0/0x2d0 [mt7902]
-[   61.346329]  rlmDomainSendTxPwrLimitPerRateCmd+0x79/0x140 [mt7902]
-[   61.346390]  rlmDomainSendPwrLimitCmd_V2+0x363/0x550 [mt7902]
-[   61.346448]  rlmDomainSendPwrLimitCmd+0x176/0x400 [mt7902]
-[   61.346505]  ? rlmDomainSendDomainInfoCmd+0x19f/0x290 [mt7902]
-[   61.346564]  rlmDomainSendCmd+0x26/0x40 [mt7902]
-[   61.346624]  wlanLoadManufactureData+0xd3/0x5d0 [mt7902]
-[   61.346671]  ? secInit+0x196/0x210 [mt7902]
-[   61.346740]  wlanOnPostFirmwareReady+0x24c/0x260 [mt7902]
-[   61.346787]  wlanAdapterStart+0x576/0x6a0 [mt7902]
-[   61.346836]  wlanProbe+0xcec/0x14a0 [mt7902]
-[   61.346908]  mtk_pci_probe+0x4e/0x170 [mt7902]
-[   61.346986]  local_pci_probe+0x44/0xb0
-[   61.346987]  pci_call_probe+0x55/0x1a0
-[   61.346989]  pci_device_probe+0x84/0x120
-[   61.346991]  really_probe+0x1c4/0x410
-[   61.346993]  __driver_probe_device+0x8c/0x180
-[   61.346995]  driver_probe_device+0x24/0xd0
-[   61.346997]  __driver_attach+0x10b/0x210
-[   61.346999]  ? __pfx___driver_attach+0x10/0x10
-[   61.347001]  bus_for_each_dev+0x8a/0xf0
-[   61.347003]  driver_attach+0x1e/0x30
-[   61.347004]  bus_add_driver+0x156/0x260
-[   61.347006]  driver_register+0x5e/0x130
-[   61.347007]  __pci_register_driver+0x5e/0x70
-[   61.347008]  glRegisterBus+0x73/0x90 [mt7902]
-[   61.347084]  initWlan+0x284/0x420 [mt7902]
-[   61.347154]  ? __pfx_initWlan+0x10/0x10 [mt7902]
-[   61.347218]  do_one_initcall+0x5b/0x340
-[   61.347220]  do_init_module+0x97/0x290
-[   61.347222]  load_module+0xba1/0xcf0
-[   61.347224]  init_module_from_file+0x96/0x100
-[   61.347225]  ? init_module_from_file+0x96/0x100
-[   61.347227]  idempotent_init_module+0x11c/0x2b0
-[   61.347229]  __x64_sys_finit_module+0x64/0xd0
-[   61.347230]  x64_sys_call+0x1d6e/0x25c0
-[   61.347232]  do_syscall_64+0x7f/0x180
-[   61.347233]  ? syscall_exit_to_user_mode+0x89/0x260
-[   61.347235]  ? do_syscall_64+0x8c/0x180
-[   61.347236]  ? irqentry_exit_to_user_mode+0x7e/0x260
-[   61.347238]  ? irqentry_exit+0x43/0x50
-[   61.347240]  ? exc_page_fault+0x94/0x1b0
-[   61.347242]  entry_SYSCALL_64_after_hwframe+0x78/0x80
-[   61.347244] RIP: 0033:0x74d28892728d
-[   61.347247] Code: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 5b bb 0d 00 f7 d8 64 89 01 48
-[   61.347248] RSP: 002b:00007fff0249ca58 EFLAGS: 00000246 ORIG_RAX: 0000000000000139
-[   61.347249] RAX: ffffffffffffffda RBX: 0000629d9ec78860 RCX: 000074d28892728d
-[   61.347250] RDX: 0000000000000000 RSI: 0000629d9e273e52 RDI: 0000000000000003
-[   61.347250] RBP: 00007fff0249cb10 R08: 0000000000000040 R09: 0000629d9e2740b0
-[   61.347251] R10: 000074d288a03b20 R11: 0000000000000246 R12: 0000629d9e273e52
-[   61.347252] R13: 0000000000000000 R14: 0000629d9ec78820 R15: 0000000000000000
-[   61.347253]  </TASK>
-[   61.347255] ---[ end trace ]---
-[   61.347257] [wlan][5079]rlmDomainInitTxPwrLimitPerRateCmd:(RLM INFO) rlmDomainInitTxPwrLimitPerRateCmd, active n_channels=45, band=2
-[   61.347259] ------------[ cut here ]------------
-[   61.347259] UBSAN: array-index-out-of-bounds in /home/dan/builds/gen4-mt7902/mgmt/rlm_domain.c:3095:46
-[   61.347260] index 1 is out of range for type 'CMD_TXPOWER_CHANNEL_POWER_LIMIT_PER_RATE [*]'
-[   61.347261] CPU: 5 PID: 5079 Comm: insmod Tainted: G           OE      6.8.0-40-generic #40-Ubuntu
-[   61.347262] Hardware name: ASUSTeK COMPUTER INC. Vivobook_ASUSLaptop X1505VA_F1505VA/X1505VA, BIOS X1505VA.204 12/15/2022
-[   61.347263] Call Trace:
-[   61.347263]  <TASK>
-[   61.347264]  dump_stack_lvl+0x76/0xa0
-[   61.347265]  dump_stack+0x10/0x20
-[   61.347267]  __ubsan_handle_out_of_bounds+0xc6/0x110
-[   61.347269]  rlmDomainTxPwrLimitPerRateSetValues+0x11e/0x130 [mt7902]
-[   61.347340]  rlmDomainSendTxPwrLimitPerRateCmd+0xf1/0x140 [mt7902]
-[   61.347406]  rlmDomainSendPwrLimitCmd_V2+0x363/0x550 [mt7902]
-[   61.347469]  rlmDomainSendPwrLimitCmd+0x176/0x400 [mt7902]
-[   61.347530]  ? rlmDomainSendDomainInfoCmd+0x19f/0x290 [mt7902]
-[   61.347595]  rlmDomainSendCmd+0x26/0x40 [mt7902]
-[   61.347655]  wlanLoadManufactureData+0xd3/0x5d0 [mt7902]
-[   61.347702]  ? secInit+0x196/0x210 [mt7902]
-[   61.347773]  wlanOnPostFirmwareReady+0x24c/0x260 [mt7902]
-[   61.347820]  wlanAdapterStart+0x576/0x6a0 [mt7902]
-[   61.347868]  wlanProbe+0xcec/0x14a0 [mt7902]
-[   61.347938]  mtk_pci_probe+0x4e/0x170 [mt7902]
-[   61.348024]  local_pci_probe+0x44/0xb0
-[   61.348025]  pci_call_probe+0x55/0x1a0
-[   61.348027]  pci_device_probe+0x84/0x120
-[   61.348029]  really_probe+0x1c4/0x410
-[   61.348031]  __driver_probe_device+0x8c/0x180
-[   61.348033]  driver_probe_device+0x24/0xd0
-[   61.348035]  __driver_attach+0x10b/0x210
-[   61.348037]  ? __pfx___driver_attach+0x10/0x10
-[   61.348039]  bus_for_each_dev+0x8a/0xf0
-[   61.348041]  driver_attach+0x1e/0x30
-[   61.348042]  bus_add_driver+0x156/0x260
-[   61.348044]  driver_register+0x5e/0x130
-[   61.348045]  __pci_register_driver+0x5e/0x70
-[   61.348047]  glRegisterBus+0x73/0x90 [mt7902]
-[   61.348120]  initWlan+0x284/0x420 [mt7902]
-[   61.348189]  ? __pfx_initWlan+0x10/0x10 [mt7902]
-[   61.348251]  do_one_initcall+0x5b/0x340
-[   61.348253]  do_init_module+0x97/0x290
-[   61.348255]  load_module+0xba1/0xcf0
-[   61.348257]  init_module_from_file+0x96/0x100
-[   61.348258]  ? init_module_from_file+0x96/0x100
-[   61.348260]  idempotent_init_module+0x11c/0x2b0
-[   61.348262]  __x64_sys_finit_module+0x64/0xd0
-[   61.348263]  x64_sys_call+0x1d6e/0x25c0
-[   61.348265]  do_syscall_64+0x7f/0x180
-[   61.348266]  ? syscall_exit_to_user_mode+0x89/0x260
-[   61.348268]  ? do_syscall_64+0x8c/0x180
-[   61.348269]  ? irqentry_exit_to_user_mode+0x7e/0x260
-[   61.348271]  ? irqentry_exit+0x43/0x50
-[   61.348273]  ? exc_page_fault+0x94/0x1b0
-[   61.348275]  entry_SYSCALL_64_after_hwframe+0x78/0x80
-[   61.348277] RIP: 0033:0x74d28892728d
-[   61.348280] Code: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 5b bb 0d 00 f7 d8 64 89 01 48
-[   61.348281] RSP: 002b:00007fff0249ca58 EFLAGS: 00000246 ORIG_RAX: 0000000000000139
-[   61.348282] RAX: ffffffffffffffda RBX: 0000629d9ec78860 RCX: 000074d28892728d
-[   61.348283] RDX: 0000000000000000 RSI: 0000629d9e273e52 RDI: 0000000000000003
-[   61.348283] RBP: 00007fff0249cb10 R08: 0000000000000040 R09: 0000629d9e2740b0
-[   61.348284] R10: 000074d288a03b20 R11: 0000000000000246 R12: 0000629d9e273e52
-[   61.348285] R13: 0000000000000000 R14: 0000629d9ec78820 R15: 0000000000000000
-[   61.348286]  </TASK>
-[   61.348288] ---[ end trace ]---
-[   61.348298] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[22] SET[1] LEN[1404]
-[   61.348299] ------------[ cut here ]------------
-[   61.348300] UBSAN: array-index-out-of-bounds in /home/dan/builds/gen4-mt7902/mgmt/rlm_domain.c:4581:4
-[   61.348301] index 8 is out of range for type 'CMD_TXPOWER_CHANNEL_POWER_LIMIT_PER_RATE [*]'
-[   61.348302] CPU: 5 PID: 5079 Comm: insmod Tainted: G           OE      6.8.0-40-generic #40-Ubuntu
-[   61.348303] Hardware name: ASUSTeK COMPUTER INC. Vivobook_ASUSLaptop X1505VA_F1505VA/X1505VA, BIOS X1505VA.204 12/15/2022
-[   61.348303] Call Trace:
-[   61.348304]  <TASK>
-[   61.348304]  dump_stack_lvl+0x76/0xa0
-[   61.348306]  dump_stack+0x10/0x20
-[   61.348307]  __ubsan_handle_out_of_bounds+0xc6/0x110
-[   61.348309]  rlmDomainTxPwrLimitSendPerRateCmd+0x28b/0x2e0 [mt7902]
-[   61.348380]  rlmDomainSendTxPwrLimitPerRateCmd+0x10b/0x140 [mt7902]
-[   61.348444]  rlmDomainSendPwrLimitCmd_V2+0x363/0x550 [mt7902]
-[   61.348506]  rlmDomainSendPwrLimitCmd+0x176/0x400 [mt7902]
-[   61.348569]  ? rlmDomainSendDomainInfoCmd+0x19f/0x290 [mt7902]
-[   61.348631]  rlmDomainSendCmd+0x26/0x40 [mt7902]
-[   61.348693]  wlanLoadManufactureData+0xd3/0x5d0 [mt7902]
-[   61.348740]  ? secInit+0x196/0x210 [mt7902]
-[   61.348812]  wlanOnPostFirmwareReady+0x24c/0x260 [mt7902]
-[   61.348859]  wlanAdapterStart+0x576/0x6a0 [mt7902]
-[   61.348908]  wlanProbe+0xcec/0x14a0 [mt7902]
-[   61.348980]  mtk_pci_probe+0x4e/0x170 [mt7902]
-[   61.349060]  local_pci_probe+0x44/0xb0
-[   61.349061]  pci_call_probe+0x55/0x1a0
-[   61.349063]  pci_device_probe+0x84/0x120
-[   61.349065]  really_probe+0x1c4/0x410
-[   61.349067]  __driver_probe_device+0x8c/0x180
-[   61.349069]  driver_probe_device+0x24/0xd0
-[   61.349071]  __driver_attach+0x10b/0x210
-[   61.349073]  ? __pfx___driver_attach+0x10/0x10
-[   61.349075]  bus_for_each_dev+0x8a/0xf0
-[   61.349077]  driver_attach+0x1e/0x30
-[   61.349078]  bus_add_driver+0x156/0x260
-[   61.349080]  driver_register+0x5e/0x130
-[   61.349082]  __pci_register_driver+0x5e/0x70
-[   61.349083]  glRegisterBus+0x73/0x90 [mt7902]
-[   61.349157]  initWlan+0x284/0x420 [mt7902]
-[   61.349227]  ? __pfx_initWlan+0x10/0x10 [mt7902]
-[   61.349291]  do_one_initcall+0x5b/0x340
-[   61.349294]  do_init_module+0x97/0x290
-[   61.349295]  load_module+0xba1/0xcf0
-[   61.349297]  init_module_from_file+0x96/0x100
-[   61.349298]  ? init_module_from_file+0x96/0x100
-[   61.349300]  idempotent_init_module+0x11c/0x2b0
-[   61.349302]  __x64_sys_finit_module+0x64/0xd0
-[   61.349304]  x64_sys_call+0x1d6e/0x25c0
-[   61.349305]  do_syscall_64+0x7f/0x180
-[   61.349306]  ? syscall_exit_to_user_mode+0x89/0x260
-[   61.349308]  ? do_syscall_64+0x8c/0x180
-[   61.349310]  ? irqentry_exit_to_user_mode+0x7e/0x260
-[   61.349312]  ? irqentry_exit+0x43/0x50
-[   61.349313]  ? exc_page_fault+0x94/0x1b0
-[   61.349315]  entry_SYSCALL_64_after_hwframe+0x78/0x80
-[   61.349317] RIP: 0033:0x74d28892728d
-[   61.349320] Code: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 5b bb 0d 00 f7 d8 64 89 01 48
-[   61.349321] RSP: 002b:00007fff0249ca58 EFLAGS: 00000246 ORIG_RAX: 0000000000000139
-[   61.349322] RAX: ffffffffffffffda RBX: 0000629d9ec78860 RCX: 000074d28892728d
-[   61.349323] RDX: 0000000000000000 RSI: 0000629d9e273e52 RDI: 0000000000000003
-[   61.349324] RBP: 00007fff0249cb10 R08: 0000000000000040 R09: 0000629d9e2740b0
-[   61.349324] R10: 000074d288a03b20 R11: 0000000000000246 R12: 0000629d9e273e52
-[   61.349325] R13: 0000000000000000 R14: 0000629d9ec78820 R15: 0000000000000000
-[   61.349327]  </TASK>
-[   61.349329] ---[ end trace ]---
-[   61.349329] ------------[ cut here ]------------
-[   61.349330] UBSAN: array-index-out-of-bounds in /home/dan/builds/gen4-mt7902/mgmt/rlm_domain.c:4581:4
-[   61.349331] index 8 is out of range for type 'CMD_TXPOWER_CHANNEL_POWER_LIMIT_PER_RATE [*]'
-[   61.349332] CPU: 5 PID: 5079 Comm: insmod Tainted: G           OE      6.8.0-40-generic #40-Ubuntu
-[   61.349333] Hardware name: ASUSTeK COMPUTER INC. Vivobook_ASUSLaptop X1505VA_F1505VA/X1505VA, BIOS X1505VA.204 12/15/2022
-[   61.349333] Call Trace:
-[   61.349334]  <TASK>
-[   61.349334]  dump_stack_lvl+0x76/0xa0
-[   61.349336]  dump_stack+0x10/0x20
-[   61.349337]  __ubsan_handle_out_of_bounds+0xc6/0x110
-[   61.349339]  rlmDomainTxPwrLimitSendPerRateCmd+0x29b/0x2e0 [mt7902]
-[   61.349410]  rlmDomainSendTxPwrLimitPerRateCmd+0x10b/0x140 [mt7902]
-[   61.349475]  rlmDomainSendPwrLimitCmd_V2+0x363/0x550 [mt7902]
-[   61.349535]  rlmDomainSendPwrLimitCmd+0x176/0x400 [mt7902]
-[   61.349595]  ? rlmDomainSendDomainInfoCmd+0x19f/0x290 [mt7902]
-[   61.349656]  rlmDomainSendCmd+0x26/0x40 [mt7902]
-[   61.349715]  wlanLoadManufactureData+0xd3/0x5d0 [mt7902]
-[   61.349762]  ? secInit+0x196/0x210 [mt7902]
-[   61.349833]  wlanOnPostFirmwareReady+0x24c/0x260 [mt7902]
-[   61.349880]  wlanAdapterStart+0x576/0x6a0 [mt7902]
-[   61.349928]  wlanProbe+0xcec/0x14a0 [mt7902]
-[   61.350000]  mtk_pci_probe+0x4e/0x170 [mt7902]
-[   61.350078]  local_pci_probe+0x44/0xb0
-[   61.350079]  pci_call_probe+0x55/0x1a0
-[   61.350081]  pci_device_probe+0x84/0x120
-[   61.350083]  really_probe+0x1c4/0x410
-[   61.350085]  __driver_probe_device+0x8c/0x180
-[   61.350087]  driver_probe_device+0x24/0xd0
-[   61.350089]  __driver_attach+0x10b/0x210
-[   61.350091]  ? __pfx___driver_attach+0x10/0x10
-[   61.350093]  bus_for_each_dev+0x8a/0xf0
-[   61.350095]  driver_attach+0x1e/0x30
-[   61.350097]  bus_add_driver+0x156/0x260
-[   61.350099]  driver_register+0x5e/0x130
-[   61.350100]  __pci_register_driver+0x5e/0x70
-[   61.350101]  glRegisterBus+0x73/0x90 [mt7902]
-[   61.350175]  initWlan+0x284/0x420 [mt7902]
-[   61.350245]  ? __pfx_initWlan+0x10/0x10 [mt7902]
-[   61.350310]  do_one_initcall+0x5b/0x340
-[   61.350312]  do_init_module+0x97/0x290
-[   61.350313]  load_module+0xba1/0xcf0
-[   61.350316]  init_module_from_file+0x96/0x100
-[   61.350317]  ? init_module_from_file+0x96/0x100
-[   61.350319]  idempotent_init_module+0x11c/0x2b0
-[   61.350321]  __x64_sys_finit_module+0x64/0xd0
-[   61.350322]  x64_sys_call+0x1d6e/0x25c0
-[   61.350323]  do_syscall_64+0x7f/0x180
-[   61.350325]  ? syscall_exit_to_user_mode+0x89/0x260
-[   61.350327]  ? do_syscall_64+0x8c/0x180
-[   61.350328]  ? irqentry_exit_to_user_mode+0x7e/0x260
-[   61.350330]  ? irqentry_exit+0x43/0x50
-[   61.350332]  ? exc_page_fault+0x94/0x1b0
-[   61.350333]  entry_SYSCALL_64_after_hwframe+0x78/0x80
-[   61.350335] RIP: 0033:0x74d28892728d
-[   61.350338] Code: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 5b bb 0d 00 f7 d8 64 89 01 48
-[   61.350339] RSP: 002b:00007fff0249ca58 EFLAGS: 00000246 ORIG_RAX: 0000000000000139
-[   61.350340] RAX: ffffffffffffffda RBX: 0000629d9ec78860 RCX: 000074d28892728d
-[   61.350341] RDX: 0000000000000000 RSI: 0000629d9e273e52 RDI: 0000000000000003
-[   61.350342] RBP: 00007fff0249cb10 R08: 0000000000000040 R09: 0000629d9e2740b0
-[   61.350343] R10: 000074d288a03b20 R11: 0000000000000246 R12: 0000629d9e273e52
-[   61.350344] R13: 0000000000000000 R14: 0000629d9ec78820 R15: 0000000000000000
-[   61.350345]  </TASK>
-[   61.350347] ---[ end trace ]---
-[   61.350348] ------------[ cut here ]------------
-[   61.350348] UBSAN: array-index-out-of-bounds in /home/dan/builds/gen4-mt7902/mgmt/rlm_domain.c:4581:4
-[   61.350350] index 8 is out of range for type 'CMD_TXPOWER_CHANNEL_POWER_LIMIT_PER_RATE [*]'
-[   61.350350] CPU: 5 PID: 5079 Comm: insmod Tainted: G           OE      6.8.0-40-generic #40-Ubuntu
-[   61.350351] Hardware name: ASUSTeK COMPUTER INC. Vivobook_ASUSLaptop X1505VA_F1505VA/X1505VA, BIOS X1505VA.204 12/15/2022
-[   61.350352] Call Trace:
-[   61.350352]  <TASK>
-[   61.350353]  dump_stack_lvl+0x76/0xa0
-[   61.350354]  dump_stack+0x10/0x20
-[   61.350356]  __ubsan_handle_out_of_bounds+0xc6/0x110
-[   61.350358]  rlmDomainTxPwrLimitSendPerRateCmd+0x2c4/0x2e0 [mt7902]
-[   61.350427]  rlmDomainSendTxPwrLimitPerRateCmd+0x10b/0x140 [mt7902]
-[   61.350496]  rlmDomainSendPwrLimitCmd_V2+0x363/0x550 [mt7902]
-[   61.350558]  rlmDomainSendPwrLimitCmd+0x176/0x400 [mt7902]
-[   61.350618]  ? rlmDomainSendDomainInfoCmd+0x19f/0x290 [mt7902]
-[   61.350679]  rlmDomainSendCmd+0x26/0x40 [mt7902]
-[   61.350738]  wlanLoadManufactureData+0xd3/0x5d0 [mt7902]
-[   61.350785]  ? secInit+0x196/0x210 [mt7902]
-[   61.350856]  wlanOnPostFirmwareReady+0x24c/0x260 [mt7902]
-[   61.350903]  wlanAdapterStart+0x576/0x6a0 [mt7902]
-[   61.350951]  wlanProbe+0xcec/0x14a0 [mt7902]
-[   61.351026]  mtk_pci_probe+0x4e/0x170 [mt7902]
-[   61.351106]  local_pci_probe+0x44/0xb0
-[   61.351107]  pci_call_probe+0x55/0x1a0
-[   61.351109]  pci_device_probe+0x84/0x120
-[   61.351111]  really_probe+0x1c4/0x410
-[   61.351113]  __driver_probe_device+0x8c/0x180
-[   61.351115]  driver_probe_device+0x24/0xd0
-[   61.351117]  __driver_attach+0x10b/0x210
-[   61.351119]  ? __pfx___driver_attach+0x10/0x10
-[   61.351121]  bus_for_each_dev+0x8a/0xf0
-[   61.351123]  driver_attach+0x1e/0x30
-[   61.351124]  bus_add_driver+0x156/0x260
-[   61.351126]  driver_register+0x5e/0x130
-[   61.351127]  __pci_register_driver+0x5e/0x70
-[   61.351129]  glRegisterBus+0x73/0x90 [mt7902]
-[   61.351202]  initWlan+0x284/0x420 [mt7902]
-[   61.351272]  ? __pfx_initWlan+0x10/0x10 [mt7902]
-[   61.351334]  do_one_initcall+0x5b/0x340
-[   61.351336]  do_init_module+0x97/0x290
-[   61.351337]  load_module+0xba1/0xcf0
-[   61.351339]  init_module_from_file+0x96/0x100
-[   61.351341]  ? init_module_from_file+0x96/0x100
-[   61.351343]  idempotent_init_module+0x11c/0x2b0
-[   61.351345]  __x64_sys_finit_module+0x64/0xd0
-[   61.351346]  x64_sys_call+0x1d6e/0x25c0
-[   61.351347]  do_syscall_64+0x7f/0x180
-[   61.351349]  ? syscall_exit_to_user_mode+0x89/0x260
-[   61.351351]  ? do_syscall_64+0x8c/0x180
-[   61.351352]  ? irqentry_exit_to_user_mode+0x7e/0x260
-[   61.351354]  ? irqentry_exit+0x43/0x50
-[   61.351356]  ? exc_page_fault+0x94/0x1b0
-[   61.351357]  entry_SYSCALL_64_after_hwframe+0x78/0x80
-[   61.351359] RIP: 0033:0x74d28892728d
-[   61.351362] Code: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 5b bb 0d 00 f7 d8 64 89 01 48
-[   61.351363] RSP: 002b:00007fff0249ca58 EFLAGS: 00000246 ORIG_RAX: 0000000000000139
-[   61.351364] RAX: ffffffffffffffda RBX: 0000629d9ec78860 RCX: 000074d28892728d
-[   61.351365] RDX: 0000000000000000 RSI: 0000629d9e273e52 RDI: 0000000000000003
-[   61.351366] RBP: 00007fff0249cb10 R08: 0000000000000040 R09: 0000629d9e2740b0
-[   61.351367] R10: 000074d288a03b20 R11: 0000000000000246 R12: 0000629d9e273e52
-[   61.351367] R13: 0000000000000000 R14: 0000629d9ec78820 R15: 0000000000000000
-[   61.351369]  </TASK>
-[   61.351371] ---[ end trace ]---
-[   61.351372] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[23] SET[1] LEN[1080]
-[   61.351373] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[24] SET[1] LEN[1404]
-[   61.351375] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[25] SET[1] LEN[1404]
-[   61.351376] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[26] SET[1] LEN[1404]
-[   61.351377] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[27] SET[1] LEN[1404]
-[   61.351378] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[28] SET[1] LEN[1404]
-[   61.351380] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[29] SET[1] LEN[918]
-[   61.351381] [wlan][5079]rlmDomainSendPwrLimitCmd_V2:(RLM INFO) TxPwrLimit loaded successfully
-[   61.351642] wlan 0000:02:00.0: Direct firmware load for TxPwrLimit6G_MT79x1.dat failed with error -2
-[   61.351646] [wlan][5079]kalRequestFirmware:(INIT INFO) kalRequestFirmware TxPwrLimit6G_MT79x1.dat Fail, errno[-2]!!
-[   61.351647] [wlan][5079]kalReadToFile:(INIT INFO) kalReadToFile() path /lib/firmware/mediatek/mt7902/TxPwrLimit6G_MT79x1.dat
-[   61.351648] [wlan][5079]kalReadToFile:(INIT INFO) kalReadToFile() path /lib/firmware/mediatek/mt7902/wifi/TxPwrLimit6G_MT79x1.dat
-[   61.351649] [wlan][5079]kalReadToFile:(INIT INFO) kalReadToFile() path /storage/sdcard0/TxPwrLimit6G_MT79x1.dat
-[   61.351650] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section cck in TxPwrLimit6G_MT79x1.dat
-[   61.351650] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section ofdm in TxPwrLimit6G_MT79x1.dat
-[   61.351651] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section ht40 in TxPwrLimit6G_MT79x1.dat
-[   61.351652] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section vht20 in TxPwrLimit6G_MT79x1.dat
-[   61.351653] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section offset in TxPwrLimit6G_MT79x1.dat
-[   61.351653] [wlan][5079]rlmDomainTxPwrLimitLoad:(RLM INFO) Load TxPwrLimit6G_MT79x1.dat finished
-[   61.351657] [wlan][5079]rlmDomainSendPwrLimitCmd_V2:(RLM ERROR) Load TxPwrLimitData failed
-[   61.351667] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x48] SEQ[30] SET[1] LEN[2112]
-[   61.351858] [wlan][5082]main_thread:(INIT INFO) main_thread:5082 starts running...
-[   61.352047] [wlan][5079]wlanConnac2XDownloadBufferBin:(INIT INFO) Start Efuse Buffer Mode ..
-[   61.352049] [wlan][5079]wlanConnac2XDownloadBufferBin:(INIT INFO) ucEfuseBUfferModeCal is 0
-[   61.352050] [wlan][5084]rx_thread:(INIT INFO) rx_thread:5084 starts running...
-[   61.352044] [wlan][5083]hif_thread:(INIT INFO) hif_thread:5083 starts running...
-[   61.352053] [wlan][5079]wlanConnac2XDownloadBufferBin:(INIT INFO) [0/0] load buffer size: 0x0
-[   61.352058] [wlan][5082]wlanoidConnacSetEfusBufferMode:(OID INFO) u4SetBufferLen = 4
-[   61.352062] [wlan][5082]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0xED] SEQ[31] SET[0] LEN[68]
-[   61.377053] [wlan][5079]kalApplyCustomRegulatory:(RLM INFO) kalApplyCustomRegulatory()
-[   61.377058] [wlan][5079]rlmDomainCountryCodeUpdate:(RLM INFO) g_mtk_regd_control.alpha2 = US
-[   61.377061] [wlan][5079]rlmDomainSendDomainInfoCmd_V2:(RLM INFO) rlmDomainSendDomainInfoCmd_V2(), buff_valid_size = 0x12c
-[   61.377062] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x0F] SEQ[32] SET[1] LEN[364]
-[   61.377064] [wlan][5079]rlmDomainSendPwrLimitCmd_V2:(RLM INFO) rlmDomainSendPwrLimitCmd()
-[   61.377065] [wlan][5079]rlmDomainSendPwrLimitCmd_V2:(RLM INFO) TxPwrLimit already loaded, skipping
-[   61.377071] [wlan][5079]wlanOnPreNetRegister:(INIT INFO) MAC address: 50:5a:**:**:**:96
-[   61.377074] [wlan][5082]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[33] SET[1] LEN[76]
-[   61.377080] [wlan][5082]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5A] SEQ[34] SET[1] LEN[108]
-[   61.377224] [wlan][5079]kalNapiInit:(INIT INFO) GRO interface added successfully:wlan0
-[   61.377389] [wlan][5079]mtk_cfg_get_txpower:(REQ WARN) driver is not ready
-[   61.377406] [wlan][5079]procCreateFsEntry:(INIT INFO) [procCreateFsEntry]
-[   61.377411] [wlan][5079]wlanFeatureToFw:(INIT WARN) Send key word (AdapScan) WITH (0x0) to firmware
-[   61.377412] [wlan][5079]wlanFeatureToFw:(INIT WARN) Send key word (StaVHT) WITH (0x1) to firmware
-[   61.377413] [wlan][5079]wlanFeatureToFw:(INIT WARN) Send key word (ApVHT) WITH (0x1) to firmware
-[   61.377414] [wlan][5079]wlanFeatureToFw:(INIT WARN) Send key word (P2pGoVHT) WITH (0x1) to firmware
-[   61.377415] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[35] SET[1] LEN[348]
-[   61.377416] [wlan][5079]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:4
-[   61.377417] [wlan][5079]wlanFeatureToFw:(INIT WARN) Send key word (P2pGcVHT) WITH (0x1) to firmware
-[   61.377418] [wlan][5079]wlanFeatureToFw:(INIT WARN) Send key word (Nss) WITH (0x1) to firmware
-[   61.377419] [wlan][5079]wlanFeatureToFw:(INIT WARN) Send key word (LdpcTx) WITH (0x1) to firmware
-[   61.377420] [wlan][5079]wlanFeatureToFw:(INIT WARN) Send key word (LdpcRx) WITH (0x1) to firmware
-[   61.377421] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[36] SET[1] LEN[348]
-[   61.377422] [wlan][5079]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:4
-[   61.377423] [wlan][5079]wlanFeatureToFw:(INIT WARN) Send key word (StbcTx) WITH (0x0) to firmware
-[   61.377424] [wlan][5079]wlanFeatureToFw:(INIT WARN) Send key word (StbcRx) WITH (0x1) to firmware
-[   61.377425] [wlan][5079]wlanFeatureToFw:(INIT INFO) cmdV1Header.itemNum:2
-[   61.377426] [wlan][5079]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[37] SET[1] LEN[348]
-[   61.377427] [wlan][5079]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:2
-[   61.377440] [wlan][5079]wlanProbe:(INIT INFO) wlanProbe: probe success, feature set: 0x80881418, persistNetdev: 0
-[   61.377442] [wlan][5079]mtk_pci_probe:(INIT INFO) mtk_pci_probe() done(0)
-[   61.377476] [wlan][5079]initWlan:(INIT INFO) initWlan::End
-[   61.377834] [wlan][1233]mtk_cfg_get_txpower:(REQ WARN) STA doesn't support this function
+[   31.044133] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[12] SET[1] LEN[76]
+[   31.044265] [wlan][4980]wlanUpdateNetworkAddress:(INIT INFO) Using embedded MAC address
+[   31.044284] [wlan][4980]kalUpdateMACAddress:(INIT INFO) bbbc17a8:50:**:**:**:5a, 96:8e101000:**:**:**:8e101000.
+[   31.044297] [wlan][4980]kalIndicateStatusAndComplete:(INIT INFO) [wifi] wlan%d netif_carrier_off
+[   31.044298] [wlan][4980]kalIndicateStatusAndComplete:(INIT INFO) Skip report DISCONNECTED when using supplicant SME
+[   31.044321] [wlan][4980]p2pFuncSwitchSapChannel:(P2P WARN) Not support concurrent STA + SAP
+[   31.044377] [wlan][4980]aisFsmInit:(SW1 INFO) ->aisFsmInit(0)
+[   31.044380] [wlan][4980]nicFreq2ChannelNum:(BSS INFO) Return Invalid Channelnum = 0.
+[   31.044382] [wlan][4980]rlmDomainSendDomainInfoCmd_V2:(RLM INFO) rlmDomainSendDomainInfoCmd_V2(), buff_valid_size = 0x14
+[   31.044384] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x0F] SEQ[13] SET[1] LEN[84]
+[   31.044386] [wlan][4980]rlmDomainSendPwrLimitCmd_V2:(RLM INFO) rlmDomainSendPwrLimitCmd()
+[   31.045083] [wlan][4980]kalRequestFirmware:(INIT INFO) kalRequestFirmware(): TxPwrLimit_MT79x1.dat OK
+[   31.045169] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section cck in TxPwrLimit_MT79x1.dat
+[   31.045171] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section ofdm in TxPwrLimit_MT79x1.dat
+[   31.045177] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section ht20 in TxPwrLimit_MT79x1.dat
+[   31.045183] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section ht40 in TxPwrLimit_MT79x1.dat
+[   31.045185] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section vht20 in TxPwrLimit_MT79x1.dat
+[   31.045191] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section vht40 in TxPwrLimit_MT79x1.dat
+[   31.045194] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM INFO) Find specified section vht80 in TxPwrLimit_MT79x1.dat
+[   31.045265] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section vht160 in TxPwrLimit_MT79x1.dat
+[   31.045340] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section txbf_backoff in TxPwrLimit_MT79x1.dat
+[   31.045341] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM INFO) Load TxPwrLimit_MT79x1.dat finished
+[   31.045472] [wlan][4980]kalRequestFirmware:(INIT INFO) kalRequestFirmware(): TxPwrLimit_MT79x1.dat OK
+[   31.045626] [wlan][4980]rlmDomainTxPwrLegacyLimitLoad:(RLM ERROR) Can't find specified table in TxPwrLimit_MT79x1.dat
+[   31.045684] [wlan][4980]rlmDomainTxPwrLimitGetCountryRange:(RLM INFO) Found TxPwrLimit table for CountryCode "00,F"
+[   31.045721] [wlan][4980]rlmDomainTxPwrLegacyLimitLoad:(RLM INFO) Load TxPwrLimit_MT79x1.dat finished
+[   31.045727] [wlan][4980]rlmDomainInitTxLegacyPwrLimitPerRateCmd:(RLM INFO) rlmDomainInitTxLegacyPwrLimitPerRateCmd, active n_channels=14, band=1
+[   31.045728] [wlan][4980]rlmDomainInitTxLegacyPwrLimitPerRateCmd:(RLM INFO) rlmDomainInitTxLegacyPwrLimitPerRateCmd, active n_channels=45, band=2
+[   31.045735] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[14] SET[1] LEN[372]
+[   31.045736] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[15] SET[1] LEN[306]
+[   31.045737] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[16] SET[1] LEN[372]
+[   31.045738] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[17] SET[1] LEN[372]
+[   31.045739] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[18] SET[1] LEN[372]
+[   31.045740] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[19] SET[1] LEN[372]
+[   31.045741] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[20] SET[1] LEN[372]
+[   31.045742] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x95] SEQ[21] SET[1] LEN[273]
+[   31.045745] [wlan][4980]rlmDomainInitTxPwrLimitPerRateCmd:(RLM INFO) rlmDomainInitTxPwrLimitPerRateCmd, active n_channels=14, band=1
+[   31.045747] [wlan][4980]rlmDomainInitTxPwrLimitPerRateCmd:(RLM INFO) rlmDomainInitTxPwrLimitPerRateCmd, active n_channels=45, band=2
+[   31.045759] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[22] SET[1] LEN[1404]
+[   31.045760] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[23] SET[1] LEN[1080]
+[   31.045761] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[24] SET[1] LEN[1404]
+[   31.045763] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[25] SET[1] LEN[1404]
+[   31.045764] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[26] SET[1] LEN[1404]
+[   31.045765] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[27] SET[1] LEN[1404]
+[   31.045767] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[28] SET[1] LEN[1404]
+[   31.045768] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5D] SEQ[29] SET[1] LEN[918]
+[   31.045770] [wlan][4980]rlmDomainSendPwrLimitCmd_V2:(RLM INFO) TxPwrLimit loaded successfully
+[   31.046012] wlan 0000:02:00.0: Direct firmware load for TxPwrLimit6G_MT79x1.dat failed with error -2
+[   31.046014] [wlan][4980]kalRequestFirmware:(INIT INFO) kalRequestFirmware TxPwrLimit6G_MT79x1.dat Fail, errno[-2]!!
+[   31.046015] [wlan][4980]kalReadToFile:(INIT INFO) kalReadToFile() path /lib/firmware/mediatek/mt7902/TxPwrLimit6G_MT79x1.dat
+[   31.046016] [wlan][4980]kalReadToFile:(INIT INFO) kalReadToFile() path /lib/firmware/mediatek/mt7902/wifi/TxPwrLimit6G_MT79x1.dat
+[   31.046016] [wlan][4980]kalReadToFile:(INIT INFO) kalReadToFile() path /storage/sdcard0/TxPwrLimit6G_MT79x1.dat
+[   31.046017] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section cck in TxPwrLimit6G_MT79x1.dat
+[   31.046018] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section ofdm in TxPwrLimit6G_MT79x1.dat
+[   31.046019] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section ht40 in TxPwrLimit6G_MT79x1.dat
+[   31.046019] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section vht20 in TxPwrLimit6G_MT79x1.dat
+[   31.046020] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified section offset in TxPwrLimit6G_MT79x1.dat
+[   31.046021] [wlan][4980]rlmDomainTxPwrLimitLoad:(RLM INFO) Load TxPwrLimit6G_MT79x1.dat finished
+[   31.046023] [wlan][4980]rlmDomainSendPwrLimitCmd_V2:(RLM ERROR) Load TxPwrLimitData failed
+[   31.046027] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x48] SEQ[30] SET[1] LEN[2112]
+[   31.046468] [wlan][4983]main_thread:(INIT INFO) main_thread:4983 starts running...
+[   31.046535] [wlan][4984]hif_thread:(INIT INFO) hif_thread:4984 starts running...
+[   31.046678] [wlan][4980]wlanConnac2XDownloadBufferBin:(INIT INFO) Start Efuse Buffer Mode ..
+[   31.046680] [wlan][4980]wlanConnac2XDownloadBufferBin:(INIT INFO) ucEfuseBUfferModeCal is 0
+[   31.046684] [wlan][4980]wlanConnac2XDownloadBufferBin:(INIT INFO) [0/0] load buffer size: 0x0
+[   31.046731] [wlan][4985]rx_thread:(INIT INFO) rx_thread:4985 starts running...
+[   31.046734] [wlan][4983]wlanoidConnacSetEfusBufferMode:(OID INFO) u4SetBufferLen = 4
+[   31.046745] [wlan][4983]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0xED] SEQ[31] SET[0] LEN[68]
+[   31.071927] [wlan][4980]kalApplyCustomRegulatory:(RLM INFO) kalApplyCustomRegulatory()
+[   31.071937] [wlan][4980]rlmDomainCountryCodeUpdate:(RLM INFO) g_mtk_regd_control.alpha2 = US
+[   31.071941] ------------[ cut here ]------------
+[   31.071942] UBSAN: array-index-out-of-bounds in /home/dan/builds/gen4-mt7902/mgmt/rlm_domain.c:6748:29
+[   31.071947] index 2 is out of range for type 'CMD_DOMAIN_CHANNEL [1]'
+[   31.071949] CPU: 10 PID: 4980 Comm: insmod Tainted: G           OE      6.8.0-40-generic #40-Ubuntu
+[   31.071952] Hardware name: ASUSTeK COMPUTER INC. Vivobook_ASUSLaptop X1505VA_F1505VA/X1505VA, BIOS X1505VA.204 12/15/2022
+[   31.071953] Call Trace:
+[   31.071956]  <TASK>
+[   31.071959]  dump_stack_lvl+0x76/0xa0
+[   31.071969]  dump_stack+0x10/0x20
+[   31.071971]  __ubsan_handle_out_of_bounds+0xc6/0x110
+[   31.071976]  rlmExtractChannelInfo+0xb8/0xc0 [mt7902]
+[   31.072126]  rlmDomainSendDomainInfoCmd_V2+0xba/0x200 [mt7902]
+[   31.072249]  rlmDomainSendDomainInfoCmd+0x19f/0x290 [mt7902]
+[   31.072368]  rlmDomainCountryCodeUpdate+0x90/0xf0 [mt7902]
+[   31.072485]  rlmDomainSetCountry+0x88/0xc0 [mt7902]
+[   31.072597]  rlmDomainSendInfoToFirmware+0x2e/0x40 [mt7902]
+[   31.072711]  wlanOnPreNetRegister+0x1b6/0x5b0 [mt7902]
+[   31.072856]  ? nicpmSetFWOwn+0x12/0x20 [mt7902]
+[   31.072982]  ? wlanAdapterStart+0x49e/0x6a0 [mt7902]
+[   31.073078]  wlanProbe+0xda4/0x14a0 [mt7902]
+[   31.073226]  mtk_pci_probe+0x4e/0x170 [mt7902]
+[   31.073389]  local_pci_probe+0x44/0xb0
+[   31.073393]  pci_call_probe+0x55/0x1a0
+[   31.073397]  pci_device_probe+0x84/0x120
+[   31.073400]  really_probe+0x1c4/0x410
+[   31.073405]  __driver_probe_device+0x8c/0x180
+[   31.073409]  driver_probe_device+0x24/0xd0
+[   31.073413]  __driver_attach+0x10b/0x210
+[   31.073417]  ? __pfx___driver_attach+0x10/0x10
+[   31.073421]  bus_for_each_dev+0x8a/0xf0
+[   31.073424]  driver_attach+0x1e/0x30
+[   31.073428]  bus_add_driver+0x156/0x260
+[   31.073431]  driver_register+0x5e/0x130
+[   31.073434]  __pci_register_driver+0x5e/0x70
+[   31.073436]  glRegisterBus+0x73/0x90 [mt7902]
+[   31.073583]  initWlan+0x284/0x420 [mt7902]
+[   31.073722]  ? __pfx_initWlan+0x10/0x10 [mt7902]
+[   31.073845]  do_one_initcall+0x5b/0x340
+[   31.073851]  do_init_module+0x97/0x290
+[   31.073854]  load_module+0xba1/0xcf0
+[   31.073858]  init_module_from_file+0x96/0x100
+[   31.073861]  ? init_module_from_file+0x96/0x100
+[   31.073865]  idempotent_init_module+0x11c/0x2b0
+[   31.073869]  __x64_sys_finit_module+0x64/0xd0
+[   31.073871]  x64_sys_call+0x1d6e/0x25c0
+[   31.073874]  do_syscall_64+0x7f/0x180
+[   31.073878]  ? do_syscall_64+0x8c/0x180
+[   31.073881]  ? from_kgid_munged+0x12/0x30
+[   31.073886]  ? cp_new_stat+0x143/0x180
+[   31.073891]  ? __do_sys_newfstatat+0x53/0x90
+[   31.073895]  ? syscall_exit_to_user_mode+0x89/0x260
+[   31.073899]  ? do_syscall_64+0x8c/0x180
+[   31.073902]  ? exc_page_fault+0x94/0x1b0
+[   31.073905]  entry_SYSCALL_64_after_hwframe+0x78/0x80
+[   31.073910] RIP: 0033:0x7f1c8872728d
+[   31.073936] Code: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d 5b bb 0d 00 f7 d8 64 89 01 48
+[   31.073938] RSP: 002b:00007ffd370ce108 EFLAGS: 00000246 ORIG_RAX: 0000000000000139
+[   31.073941] RAX: ffffffffffffffda RBX: 00005a8af3715860 RCX: 00007f1c8872728d
+[   31.073943] RDX: 0000000000000000 RSI: 00005a8af273de52 RDI: 0000000000000003
+[   31.073945] RBP: 00007ffd370ce1c0 R08: 0000000000000040 R09: 00005a8af273e0b0
+[   31.073947] R10: 00007f1c88803b20 R11: 0000000000000246 R12: 00005a8af273de52
+[   31.073948] R13: 0000000000000000 R14: 00005a8af3715820 R15: 0000000000000000
+[   31.073951]  </TASK>
+[   31.073968] ---[ end trace ]---
+[   31.073970] [wlan][4980]rlmDomainSendDomainInfoCmd_V2:(RLM INFO) rlmDomainSendDomainInfoCmd_V2(), buff_valid_size = 0x134
+[   31.073973] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x0F] SEQ[32] SET[1] LEN[372]
+[   31.073977] [wlan][4980]rlmDomainSendPwrLimitCmd_V2:(RLM INFO) rlmDomainSendPwrLimitCmd()
+[   31.073978] [wlan][4980]rlmDomainSendPwrLimitCmd_V2:(RLM INFO) TxPwrLimit already loaded, skipping
+[   31.074129] [wlan][4980]wlanOnPreNetRegister:(INIT INFO) MAC address: 50:5a:**:**:**:96
+[   31.074135] [wlan][4983]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[33] SET[1] LEN[76]
+[   31.074151] [wlan][4983]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5A] SEQ[34] SET[1] LEN[108]
+[   31.074305] [wlan][4980]kalNapiInit:(INIT INFO) GRO interface added successfully:wlan0
+[   31.074540] [wlan][4980]mtk_cfg_get_txpower:(REQ WARN) driver is not ready
+[   31.074570] [wlan][4980]procCreateFsEntry:(INIT INFO) [procCreateFsEntry]
+[   31.074578] [wlan][4980]wlanFeatureToFw:(INIT WARN) Send key word (AdapScan) WITH (0x0) to firmware
+[   31.074580] [wlan][4980]wlanFeatureToFw:(INIT WARN) Send key word (StaVHT) WITH (0x1) to firmware
+[   31.074582] [wlan][4980]wlanFeatureToFw:(INIT WARN) Send key word (ApVHT) WITH (0x1) to firmware
+[   31.074583] [wlan][4980]wlanFeatureToFw:(INIT WARN) Send key word (P2pGoVHT) WITH (0x1) to firmware
+[   31.074585] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[35] SET[1] LEN[348]
+[   31.074590] [wlan][4980]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:4
+[   31.074592] [wlan][4980]wlanFeatureToFw:(INIT WARN) Send key word (P2pGcVHT) WITH (0x1) to firmware
+[   31.074594] [wlan][4980]wlanFeatureToFw:(INIT WARN) Send key word (Nss) WITH (0x1) to firmware
+[   31.074596] [wlan][4980]wlanFeatureToFw:(INIT WARN) Send key word (LdpcTx) WITH (0x1) to firmware
+[   31.074597] [wlan][4980]wlanFeatureToFw:(INIT WARN) Send key word (LdpcRx) WITH (0x1) to firmware
+[   31.074599] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[36] SET[1] LEN[348]
+[   31.074601] [wlan][4980]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:4
+[   31.074603] [wlan][4980]wlanFeatureToFw:(INIT WARN) Send key word (StbcTx) WITH (0x0) to firmware
+[   31.074604] [wlan][4980]wlanFeatureToFw:(INIT WARN) Send key word (StbcRx) WITH (0x1) to firmware
+[   31.074606] [wlan][4980]wlanFeatureToFw:(INIT INFO) cmdV1Header.itemNum:2
+[   31.074607] [wlan][4980]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[37] SET[1] LEN[348]
+[   31.074610] [wlan][4980]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:2
+[   31.074630] [wlan][4980]wlanProbe:(INIT INFO) wlanProbe: probe success, feature set: 0x80881418, persistNetdev: 0
+[   31.074632] [wlan][4980]mtk_pci_probe:(INIT INFO) mtk_pci_probe() done(0)
+[   31.074676] [wlan][4980]initWlan:(INIT INFO) initWlan::End
+[   31.075115] [wlan][1215]mtk_cfg_get_txpower:(REQ WARN) STA doesn't support this function
