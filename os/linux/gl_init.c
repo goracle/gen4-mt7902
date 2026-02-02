@@ -4850,8 +4850,11 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 
 #if CFG_SHOW_MACADDR_SOURCE
 			DBGLOG(INIT, INFO, "MAC address: " MACSTR,
-	
+			MAC2STR(prAdapter->rWifiVar.aucMacAddress));
+#endif
+
 	/* Replay cached regdom update if one occurred before glue was ready */
+	extern struct mtk_regd_control g_mtk_regd_control;
 	if (g_mtk_regd_control.pending_regdom_update) {
 		char acAlpha2[3] = {0};
 		acAlpha2[0] = (g_mtk_regd_control.cached_alpha2 & 0xFF);
@@ -4862,8 +4865,6 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 			g_mtk_regd_control.cached_alpha2);
 		g_mtk_regd_control.pending_regdom_update = FALSE;
 	}
-			MAC2STR(prAdapter->rWifiVar.aucMacAddress));
-#endif
 		}
 
 		/* wlan1 */
