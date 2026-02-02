@@ -1,155 +1,164 @@
-[   25.987999] mt7902: loading out-of-tree module taints kernel.
-[   25.988005] mt7902: module verification failed: signature and/or required key missing - tainting kernel
-[   26.077512] [wlan]Set ALL DBG module log level to [0x2f]
-[   26.077515] [wlan]Reset ALL DBG module log level to DEFAULT!
-[   26.077651] [wlan][4443]rlmDomainCountryCodeUpdateSanity:(RLM ERROR) prGlueInfo is NULL!
-[   26.077652] [wlan][4443]mtk_reg_notify:(RLM ERROR) sanity check failed, skip!
-[   26.077689] [wlan][4443]wlanCreateWirelessDevice:(INIT INFO) Create wireless device success
-[   26.077690] [wlan][4443]glP2pCreateWirelessDevice:(INIT INFO) glP2pCreateWirelessDevice (00000000967bf9d6)
-[   26.077885] [wlan][4443]mtk_pci_probe:(INIT INFO) pci_enable_device done!
-[   26.077886] [wlan][4443]wlanProbe:(INIT INFO) enter wlanProbe
-[   26.077909] [wlan][4443]glBusInit:(INIT INFO) ioremap for device 0000:02:00.0, region 0x100000 @ 0x6000000000
-[   26.078233] [wlan][4443]wlanNetCreate:(INIT INFO) net_device prDev(0x000000008ad6fa31) allocated
-[   26.078249] [wlan][4443]glBusConfigASPM:(INIT INFO) ASPM STATUS 0
-[   26.078269] [wlan][4443]wlanCfgInit:(INIT INFO) Init wifi config len 0 max entry 256
-[   26.078371] [wlan][4443]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
-[   26.079263] [wlan][4443]kalRequestFirmware:(INIT INFO) kalRequestFirmware(): mediatek/mt7902/wifi.cfg OK
-[   26.079272] [wlan][4443]wlanCfgInit:(INIT INFO) Init wifi config len 185 max entry 256
-[   26.079408] [wlan][4443]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
-[   26.079583] [wlan][4443]wlanCfgParse:(INIT INFO) wlanCfgParse()
-[   26.079584] [wlan][4443]wlanCfgParse:(INIT INFO)  nargs= 0 STATE_TEXT = WIFI_RAM_CODE=WIFI_RAM_CODE_MT7902_1.bin, SIZE = 40
-[   26.079586] [wlan][4443]wlanCfgParse:(INIT INFO)  nargs= 1 STATE_TEXT = WIFI_PATCH_MCU=WIFI_MT7902_patch_mcu_1_1_hdr.bin, SIZE = 48
-[   26.079588] [wlan][4443]wlanCfgParse:(INIT INFO) STATE_NEWLINE
-[   26.079589] [wlan][4443]wlanCfgParse:(INIT WARN) Save to driver temp buffer as [WIFI_PATCH_MCU=WIFI_MT7902_patch_mcu_1_1_hdr.bin]
-[   26.079594] [wlan][4443]glLoadNvram:(INIT INFO) g_NvramFsm = 0
-[   26.079595] [wlan][4443]glLoadNvram:(INIT WARN) Nvram not available
-[   26.079604] [wlan][4443]mt79xx_wfsys_cold_boot_and_wait:(INIT WARN) WFSYS already initialized! Forcing cold boot anyway.
-[   26.079605] [wlan][4443]mt79xx_wfsys_cold_boot_and_wait:(INIT INFO) WFSYS cold-boot attempt 1
-[   26.079615] [wlan][4443]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x5030B870
-[   26.079617] [wlan][4443]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0x001C2000
-[   26.079619] [wlan][4443]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
-[   26.193934] [wlan][4443]mt79xx_wfsys_cold_boot_and_wait:(INIT INFO) WFSYS MCU signaled init-done
-[   26.193954] [wlan][4443]wlanProbe:(INIT INFO) WFSYS MCU is alive, continuing adapter start
-[   26.194257] [wlan][4443]wlanAdapterStart:(INIT INFO) wlanAdapterStart(): Acquiring LP-OWN
-[   26.195294] [wlan][4443]glBusConfigASPM:(INIT INFO) ASPM STATUS 0
-[   26.195302] [wlan][4443]halSetDriverOwn:(INIT INFO) DRIVER OWN Done[1039 us]
-[   26.195308] [wlan][4443]wlanAdapterStart:(INIT INFO) wlanAdapterStart(): Acquiring LP-OWN-end
-[   26.195820] [wlan][4443]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
-[   26.201997] [wlan][4443]mt7902SetRxRingHwAddr:(HAL ERROR) not supported ring idx 4
-[   26.202405] [wlan][4443]halInitMsduTokenInfo:(HAL INFO) Msdu Token Init: Tot[1024] Used[0]
-[   26.202416] [wlan][4443]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x03] SEQ[1] LEN[76]
-[   26.202551] [wlan][4443]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x03] SEQ[2] LEN[76]
-[   26.202681] [wlan][4443]wlanSetChipEcoInfo:(INIT INFO) Chip ID[7902] Version[E1] HW[0x00008a00] SW[0x00008a00]
-[   26.202689] [wlan][4443]wlanDownloadPatch:(INIT INFO) Patch download start
-[   26.203638] [wlan][4443]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x10] SEQ[3] LEN[68]
-[   26.203786] [wlan][4443]wlanGetPatchInfoAndDownloadV2:(INIT INFO) PATCH INFO: platform[ALPS] HW/SW ver[0x108A108A] ver[0xFFFFFFFF]
-[   26.203790] [wlan][4443]wlanGetPatchInfoAndDownloadV2:(INIT INFO) date[20220729160652a
+[   30.837319] mt7902: loading out-of-tree module taints kernel.
+[   30.837326] mt7902: module verification failed: signature and/or required key missing - tainting kernel
+[   30.927415] [wlan]Set ALL DBG module log level to [0x2f]
+[   30.927417] [wlan]Reset ALL DBG module log level to DEFAULT!
+[   30.927553] [wlan][4514]rlmDomainCountryCodeUpdateSanity:(RLM ERROR) prGlueInfo is NULL!
+[   30.927555] [wlan][4514]mtk_reg_notify:(RLM ERROR) sanity check failed, skip!
+[   30.927593] [wlan][4514]wlanCreateWirelessDevice:(INIT INFO) Create wireless device success
+[   30.927594] [wlan][4514]glP2pCreateWirelessDevice:(INIT INFO) glP2pCreateWirelessDevice (0000000000633ec6)
+[   30.927793] [wlan][4514]mtk_pci_probe:(INIT INFO) pci_enable_device done!
+[   30.927794] [wlan][4514]wlanProbe:(INIT INFO) enter wlanProbe
+[   30.927820] [wlan][4514]glBusInit:(INIT INFO) ioremap for device 0000:02:00.0, region 0x100000 @ 0x6000000000
+[   30.928212] [wlan][4514]wlanNetCreate:(INIT INFO) net_device prDev(0x000000001f1dd35a) allocated
+[   30.928230] [wlan][4514]glBusConfigASPM:(INIT INFO) ASPM STATUS 0
+[   30.928257] [wlan][4514]wlanCfgInit:(INIT INFO) Init wifi config len 0 max entry 256
+[   30.928360] [wlan][4514]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
+[   30.929244] [wlan][4514]kalRequestFirmware:(INIT INFO) kalRequestFirmware(): mediatek/mt7902/wifi.cfg OK
+[   30.929249] [wlan][4514]wlanCfgInit:(INIT INFO) Init wifi config len 185 max entry 256
+[   30.929324] [wlan][4514]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
+[   30.929412] [wlan][4514]wlanCfgParse:(INIT INFO) wlanCfgParse()
+[   30.929413] [wlan][4514]wlanCfgParse:(INIT INFO)  nargs= 0 STATE_TEXT = WIFI_RAM_CODE=WIFI_RAM_CODE_MT7902_1.bin, SIZE = 40
+[   30.929414] [wlan][4514]wlanCfgParse:(INIT INFO)  nargs= 1 STATE_TEXT = WIFI_PATCH_MCU=WIFI_MT7902_patch_mcu_1_1_hdr.bin, SIZE = 48
+[   30.929415] [wlan][4514]wlanCfgParse:(INIT INFO) STATE_NEWLINE
+[   30.929416] [wlan][4514]wlanCfgParse:(INIT WARN) Save to driver temp buffer as [WIFI_PATCH_MCU=WIFI_MT7902_patch_mcu_1_1_hdr.bin]
+[   30.929418] [wlan][4514]glLoadNvram:(INIT INFO) g_NvramFsm = 0
+[   30.929419] [wlan][4514]glLoadNvram:(INIT WARN) Nvram not available
+[   30.929426] [wlan][4514]mt79xx_wfsys_cold_boot_and_wait:(INIT WARN) WFSYS already initialized! Forcing cold boot anyway.
+[   30.929427] [wlan][4514]mt79xx_wfsys_cold_boot_and_wait:(INIT INFO) WFSYS cold-boot attempt 1
+[   30.929437] [wlan][4514]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] HOST_DMA0_WPDMA_GLO_CFG[0x7C024208] = 0x5030B870
+[   30.929438] [wlan][4514]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] INT_WRAP_CSR_WFDMA_HIF_MISC[0x57000044] = 0x001C2000
+[   30.929439] [wlan][4514]mt7961HalPollWfdmaIdle:(HAL INFO) [SER][L0.5] EXT_WRAP_CSR_WFDMA_HIF_MISC[0x7C027044] = 0x001C2000
+[   31.041782] [wlan][4514]mt79xx_wfsys_cold_boot_and_wait:(INIT INFO) WFSYS MCU signaled init-done
+[   31.041803] [wlan][4514]wlanProbe:(INIT INFO) WFSYS MCU is alive, continuing adapter start
+[   31.042098] [wlan][4514]wlanAdapterStart:(INIT INFO) wlanAdapterStart(): Acquiring LP-OWN
+[   31.043144] [wlan][4514]glBusConfigASPM:(INIT INFO) ASPM STATUS 0
+[   31.043153] [wlan][4514]halSetDriverOwn:(INIT INFO) DRIVER OWN Done[1048 us]
+[   31.043160] [wlan][4514]wlanAdapterStart:(INIT INFO) wlanAdapterStart(): Acquiring LP-OWN-end
+[   31.043767] [wlan][4514]wlanInitFeatureOption:(INIT ERROR) get MacAddr fail, use defaul
+[   31.049085] [wlan][4514]mt7902SetRxRingHwAddr:(HAL ERROR) not supported ring idx 4
+[   31.049632] [wlan][4514]halInitMsduTokenInfo:(HAL INFO) Msdu Token Init: Tot[1024] Used[0]
+[   31.049646] [wlan][4514]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x03] SEQ[1] LEN[76]
+[   31.049801] [wlan][4514]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x03] SEQ[2] LEN[76]
+[   31.049939] [wlan][4514]wlanSetChipEcoInfo:(INIT INFO) Chip ID[7902] Version[E1] HW[0x00008a00] SW[0x00008a00]
+[   31.049952] [wlan][4514]wlanDownloadPatch:(INIT INFO) Patch download start
+[   31.051453] [wlan][4514]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x10] SEQ[3] LEN[68]
+[   31.051574] [wlan][4514]wlanGetPatchInfoAndDownloadV2:(INIT INFO) PATCH INFO: platform[ALPS] HW/SW ver[0x108A108A] ver[0xFFFFFFFF]
+[   31.051578] [wlan][4514]wlanGetPatchInfoAndDownloadV2:(INIT INFO) date[20220729160652a
                ]
-[   26.203792] [wlan][4443]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Patch ver: 0x11223344, Section num: 0x1, subsys: 0x4
-[   26.203795] [wlan][4443]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Section 0: type = 0x40002, offset = 0xa0, size = 0x1ce00
-[   26.203799] [wlan][4443]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Target address: 0x900000, length: 0x1ce00
-[   26.203802] [wlan][4443]wlanGetPatchInfoAndDownloadV2:(INIT INFO) FormatV2 num_of_regoin[1] datamode[0x80000009]
-[   26.203804] [wlan][4443]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x05] SEQ[4] LEN[76]
-[   26.205232] [wlan][4443]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x07] SEQ[5] LEN[68]
-[   26.205237] [wlan][4443]wlanPatchSendComplete:(INIT INFO) PATCH FINISH CMD send, waiting for RSP
-[   26.220231] [wlan][4443]wlanPatchSendComplete:(INIT INFO) PATCH FINISH EVT success!!
-[   26.220237] [wlan][4443]wlanDownloadPatch:(INIT INFO) Patch download end[0].
-[   26.220238] [wlan][4443]wlanDownloadFW:(INIT INFO) FW download Start
-[   26.222321] [wlan][4443]wlanGetConnacTailerInfo:(INIT INFO) N9 INFO: chip_info[19:E1] region_num[3]
-[   26.222323] [wlan][4443]wlanGetConnacTailerInfo:(INIT INFO) date[20250521121249] version[____00000020250521121249]
-[   26.222324] [wlan][4443]fwDlGetReleaseInfoSection:(INIT INFO) Release info tag[0] len[68]
-[   26.222325] [wlan][4443]fwDlGetReleaseInfoSection:(INIT INFO) Release info tag[1] len[62] padding[2]
-[   26.222325] [wlan][4443]fwDlGetReleaseManifest:(INIT INFO) Release manifest: t-neptune-main-mt7902-2046-MT7902_E1_ASIC_CCN10-20250521120616
-[   26.222326] [wlan][4443]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[0] addr[0x00918400] len[414608] datamode[0x80000009]
-[   26.222328] [wlan][4443]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[6] LEN[76]
-[   26.224705] [wlan][4443]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[414608] addr[0x02015c00] len[287696] datamode[0x80000009]
-[   26.224707] [wlan][4443]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[7] LEN[76]
-[   26.229413] [wlan][4443]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[702304] addr[0x00404400] len[10768] datamode[0x80000009]
-[   26.229415] [wlan][4443]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[8] LEN[76]
-[   26.237393] [wlan][4443]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[9] LEN[72]
-[   26.237398] [wlan][4443]wlanConfigWifiFunc:(INIT INFO) FW_START CMD send, waiting for RSP
-[   26.288769] [wlan][4443]wlanConfigWifiFunc:(INIT INFO) FW_START EVT success!!
-[   26.288783] [wlan][4443]wlanDownloadFW:(INIT INFO) FW download End
-[   26.288784] [wlan][4443]wlanAdapterStart:(INIT INFO) Waiting for Ready bit..
-[   26.288785] [wlan][4443]wlanCheckWifiFunc:(INIT INFO) Check ready_bits(=0x3)
-[   26.288789] [wlan][4443]wlanCheckWifiFunc:(INIT INFO) Ready bit asserted
-[   26.288790] [wlan][4443]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x00] SEQ[10] SET[1] LEN[64]
-[   26.288795] [wlan][4443]wlanQueryNicCapabilityV2:(INIT INFO) Support NIC_CAPABILITY_V2 feature
-[   26.288796] [wlan][4443]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x8A] SEQ[11] SET[0] LEN[64]
-[   26.293102] [wlan][4443]nicCmdEventQueryNicCsumOffload:(INIT INFO) nicCmdEventQueryNicCsumOffload: ucIsSupportCsumOffload = 1
-[   26.293109] [wlan][4443]nicCfgChipCapMacCap:(INIT INFO) ucHwBssIdNum: 4.
-[   26.293110] [wlan][4443]nicCfgChipCapMacCap:(INIT INFO) ucWtblEntryNum: 20.
-[   26.293110] [wlan][4443]nicCfgChipCapMacCap:(INIT INFO) ucWmmSetNum: 4.
-[   26.293111] [wlan][4443]nicCfgChipAdieHwVersion:(INIT INFO) A DieID = 0x0
-[   26.293114] [wlan][4443]wlanPrintVersion:(SW4 INFO) 
+[   31.051580] [wlan][4514]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Patch ver: 0x11223344, Section num: 0x1, subsys: 0x4
+[   31.051583] [wlan][4514]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Section 0: type = 0x40002, offset = 0xa0, size = 0x1ce00
+[   31.051587] [wlan][4514]wlanGetPatchInfoAndDownloadV2:(INIT INFO) 	Target address: 0x900000, length: 0x1ce00
+[   31.051589] [wlan][4514]wlanGetPatchInfoAndDownloadV2:(INIT INFO) FormatV2 num_of_regoin[1] datamode[0x80000009]
+[   31.051592] [wlan][4514]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x05] SEQ[4] LEN[76]
+[   31.053036] [wlan][4514]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x07] SEQ[5] LEN[68]
+[   31.053042] [wlan][4514]wlanPatchSendComplete:(INIT INFO) PATCH FINISH CMD send, waiting for RSP
+[   31.068028] [wlan][4514]wlanPatchSendComplete:(INIT INFO) PATCH FINISH EVT success!!
+[   31.068036] [wlan][4514]wlanDownloadPatch:(INIT INFO) Patch download end[0].
+[   31.068037] [wlan][4514]wlanDownloadFW:(INIT INFO) FW download Start
+[   31.070438] [wlan][4514]wlanGetConnacTailerInfo:(INIT INFO) N9 INFO: chip_info[19:E1] region_num[3]
+[   31.070442] [wlan][4514]wlanGetConnacTailerInfo:(INIT INFO) date[20250521121249] version[____00000020250521121249]
+[   31.070444] [wlan][4514]fwDlGetReleaseInfoSection:(INIT INFO) Release info tag[0] len[68]
+[   31.070445] [wlan][4514]fwDlGetReleaseInfoSection:(INIT INFO) Release info tag[1] len[62] padding[2]
+[   31.070446] [wlan][4514]fwDlGetReleaseManifest:(INIT INFO) Release manifest: t-neptune-main-mt7902-2046-MT7902_E1_ASIC_CCN10-20250521120616
+[   31.070447] [wlan][4514]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[0] addr[0x00918400] len[414608] datamode[0x80000009]
+[   31.070450] [wlan][4514]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[6] LEN[76]
+[   31.072580] [wlan][4514]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[414608] addr[0x02015c00] len[287696] datamode[0x80000009]
+[   31.072582] [wlan][4514]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[7] LEN[76]
+[   31.077290] [wlan][4514]wlanImageSectionDownloadStage:(INIT INFO) DL Offset[702304] addr[0x00404400] len[10768] datamode[0x80000009]
+[   31.077291] [wlan][4514]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x01] SEQ[8] LEN[76]
+[   31.085258] [wlan][4514]asicConnac2xFillInitCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[9] LEN[72]
+[   31.085262] [wlan][4514]wlanConfigWifiFunc:(INIT INFO) FW_START CMD send, waiting for RSP
+[   31.136580] [wlan][4514]wlanConfigWifiFunc:(INIT INFO) FW_START EVT success!!
+[   31.136595] [wlan][4514]wlanDownloadFW:(INIT INFO) FW download End
+[   31.136596] [wlan][4514]wlanAdapterStart:(INIT INFO) Waiting for Ready bit..
+[   31.136597] [wlan][4514]wlanCheckWifiFunc:(INIT INFO) Check ready_bits(=0x3)
+[   31.136601] [wlan][4514]wlanCheckWifiFunc:(INIT INFO) Ready bit asserted
+[   31.136602] [wlan][4514]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x00] SEQ[10] SET[1] LEN[64]
+[   31.136607] [wlan][4514]wlanQueryNicCapabilityV2:(INIT INFO) Support NIC_CAPABILITY_V2 feature
+[   31.136608] [wlan][4514]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x8A] SEQ[11] SET[0] LEN[64]
+[   31.140907] [wlan][4514]nicCmdEventQueryNicCsumOffload:(INIT INFO) nicCmdEventQueryNicCsumOffload: ucIsSupportCsumOffload = 1
+[   31.140915] [wlan][4514]nicCfgChipCapMacCap:(INIT INFO) ucHwBssIdNum: 4.
+[   31.140916] [wlan][4514]nicCfgChipCapMacCap:(INIT INFO) ucWtblEntryNum: 20.
+[   31.140916] [wlan][4514]nicCfgChipCapMacCap:(INIT INFO) ucWmmSetNum: 4.
+[   31.140917] [wlan][4514]nicCfgChipAdieHwVersion:(INIT INFO) A DieID = 0x0
+[   31.140920] [wlan][4514]wlanPrintVersion:(SW4 INFO) 
                N9 FW version -0.0.0[DEC] ()
                Tailer Ver[2:1] ____000000 (20250521121249) info 19:E1
                Release manifest: t-neptune-main-mt7902-2046-MT7902_E1_ASIC_CCN10-20250521120616
                Patch platform ALPS version 0xFFFFFFFF 20220729160652a
                
                Drv version 0.0[DEC]
-[   26.293115] [wlan][4443]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[12] SET[1] LEN[76]
-[   26.293120] [wlan][4443]kalRetrieveNetworkAddress:(INIT INFO) glLoadNvram fail
-[   26.293121] [wlan][4443]wlanUpdateNetworkAddress:(INIT INFO) Using embedded MAC address
-[   26.293122] [wlan][4443]kalUpdateMACAddress:(INIT INFO) b2678a8:50:**:**:**:5a, 96:8d201000:**:**:**:8d201000.
-[   26.293134] [wlan][4443]kalIndicateStatusAndComplete:(INIT INFO) [wifi] wlan%d netif_carrier_off
-[   26.293135] [wlan][4443]kalIndicateStatusAndComplete:(INIT INFO) Skip report DISCONNECTED when using supplicant SME
-[   26.293154] [wlan][4443]p2pFuncSwitchSapChannel:(P2P WARN) Not support concurrent STA + SAP
-[   26.293218] [wlan][4443]aisFsmInit:(SW1 INFO) ->aisFsmInit(0)
-[   26.293221] [wlan][4443]nicFreq2ChannelNum:(BSS INFO) Return Invalid Channelnum = 0.
-[   26.293223] [wlan][4443]wlanOnPostFirmwareReady:(INIT WARN) wlanOnPostFirmwareReady: load manufacture data fail
-[   26.293388] [wlan][4445]main_thread:(INIT INFO) main_thread:4445 starts running...
-[   26.293412] [wlan][4446]hif_thread:(INIT INFO) hif_thread:4446 starts running...
-[   26.293430] [wlan][4443]wlanConnac2XDownloadBufferBin:(INIT INFO) Start Efuse Buffer Mode ..
-[   26.293431] [wlan][4443]wlanConnac2XDownloadBufferBin:(INIT INFO) ucEfuseBUfferModeCal is 0
-[   26.293432] [wlan][4447]rx_thread:(INIT INFO) rx_thread:4447 starts running...
-[   26.293434] [wlan][4443]wlanConnac2XDownloadBufferBin:(INIT INFO) [0/0] load buffer size: 0x0
-[   26.293438] [wlan][4445]wlanoidConnacSetEfusBufferMode:(OID INFO) u4SetBufferLen = 4
-[   26.293449] [wlan][4445]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0xED] SEQ[13] SET[0] LEN[68]
-[   26.296159] [wlan][4443]rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode:(RLM ERROR) Cannot find the 00 RegDomain. Set to default WW
-[   26.296161] [wlan][4443]kalApplyCustomRegulatory:(RLM INFO) kalApplyCustomRegulatory()
-[   26.296166] [wlan][4443]rlmDomainCountryCodeUpdate:(RLM INFO) g_mtk_regd_control.alpha2 = 00
-[   26.296168] [wlan][4443]rlmDomainSendDomainInfoCmd_V2:(RLM INFO) rlmDomainSendDomainInfoCmd_V2(), buff_valid_size = 0x144
-[   26.296169] [wlan][4443]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x0F] SEQ[14] SET[1] LEN[388]
-[   26.296172] [wlan][4443]rlmDomainSendPwrLimitCmd_V2:(RLM INFO) rlmDomainSendPwrLimitCmd()
-[   26.296672] wlan 0000:02:00.0: Direct firmware load for TxPwrLimit_MT79x1.dat failed with error -2
-[   26.296678] [wlan][4443]kalRequestFirmware:(INIT INFO) kalRequestFirmware TxPwrLimit_MT79x1.dat Fail, errno[-2]!!
-[   26.296681] [wlan][4443]kalReadToFile:(INIT INFO) kalReadToFile() path /data/misc/TxPwrLimit_MT79x1.dat
-[   26.296682] [wlan][4443]kalReadToFile:(INIT INFO) kalReadToFile() path /data/misc/wifi/TxPwrLimit_MT79x1.dat
-[   26.296684] [wlan][4443]kalReadToFile:(INIT INFO) kalReadToFile() path /storage/sdcard0/TxPwrLimit_MT79x1.dat
-[   26.296685] [wlan][4443]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified table in TxPwrLimit_MT79x1.dat
-[   26.296686] [wlan][4443]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find default table (WW) in TxPwrLimit_MT79x1.dat
-[   26.296694] [wlan][4443]rlmDomainSendPwrLimitCmd_V2:(RLM ERROR) Load TxPwrLimitData failed
-[   26.296710] [wlan][4443]wlanOnPreNetRegister:(INIT INFO) MAC address: 50:5a:**:**:**:96
-[   26.296716] [wlan][4445]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[15] SET[1] LEN[76]
-[   26.296729] [wlan][4445]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5A] SEQ[16] SET[1] LEN[108]
-[   26.296880] [wlan][4443]kalNapiInit:(INIT INFO) GRO interface added successfully:wlan0
-[   26.297083] [wlan][4443]mtk_cfg_get_txpower:(REQ WARN) driver is not ready
-[   26.297103] [wlan][4443]procCreateFsEntry:(INIT INFO) [procCreateFsEntry]
-[   26.297112] [wlan][4443]wlanFeatureToFw:(INIT WARN) Send key word (AdapScan) WITH (0x0) to firmware
-[   26.297113] [wlan][4443]wlanFeatureToFw:(INIT WARN) Send key word (StaVHT) WITH (0x1) to firmware
-[   26.297115] [wlan][4443]wlanFeatureToFw:(INIT WARN) Send key word (ApVHT) WITH (0x1) to firmware
-[   26.297116] [wlan][4443]wlanFeatureToFw:(INIT WARN) Send key word (P2pGoVHT) WITH (0x1) to firmware
-[   26.297118] [wlan][4443]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[17] SET[1] LEN[348]
-[   26.297122] [wlan][4443]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:4
-[   26.297123] [wlan][4443]wlanFeatureToFw:(INIT WARN) Send key word (P2pGcVHT) WITH (0x1) to firmware
-[   26.297125] [wlan][4443]wlanFeatureToFw:(INIT WARN) Send key word (Nss) WITH (0x1) to firmware
-[   26.297126] [wlan][4443]wlanFeatureToFw:(INIT WARN) Send key word (LdpcTx) WITH (0x1) to firmware
-[   26.297127] [wlan][4443]wlanFeatureToFw:(INIT WARN) Send key word (LdpcRx) WITH (0x1) to firmware
-[   26.297128] [wlan][4443]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[18] SET[1] LEN[348]
-[   26.297130] [wlan][4443]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:4
-[   26.297132] [wlan][4443]wlanFeatureToFw:(INIT WARN) Send key word (StbcTx) WITH (0x0) to firmware
-[   26.297133] [wlan][4443]wlanFeatureToFw:(INIT WARN) Send key word (StbcRx) WITH (0x1) to firmware
-[   26.297134] [wlan][4443]wlanFeatureToFw:(INIT INFO) cmdV1Header.itemNum:2
-[   26.297135] [wlan][4443]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[19] SET[1] LEN[348]
-[   26.297138] [wlan][4443]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:2
-[   26.297157] [wlan][4443]wlanProbe:(INIT INFO) wlanProbe: probe success, feature set: 0x80881418, persistNetdev: 0
-[   26.297160] [wlan][4443]mtk_pci_probe:(INIT INFO) mtk_pci_probe() done(0)
-[   26.297205] [wlan][4443]initWlan:(INIT INFO) initWlan::End
-[   26.297544] [wlan][1194]mtk_cfg_get_txpower:(REQ WARN) STA doesn't support this function
-[   26.304561] [wlan][1194]kalNapiEnable:(RX INFO) RX NAPI enabled wlan0
-[   26.304664] [wlan][1194]mtk_cfg80211_set_power_mgmt:(REQ INFO) 0: enabled=0, timeout=-1, fgTIMPresend=0
-[   26.304675] [wlan][186]wlanSetMulticastListWorkQueue:(INIT INFO) ucBssIndex = 0
-[   26.304676] [wlan][4445]nicPowerSaveInfoMap:(NIC INFO) Flag=0x80000001, Caller=0, PM=0, PSFlag[0]=0x0000
-[   26.304684] [wlan][4445]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x05] SEQ[20] SET[1] LEN[68]
-[   26.304827] [wlan][1194]mtk_cfg_get_txpower:(REQ WARN) STA doesn't support this function
+[   31.140921] [wlan][4514]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[12] SET[1] LEN[76]
+[   31.140927] [wlan][4514]kalRetrieveNetworkAddress:(INIT INFO) glLoadNvram fail
+[   31.140927] [wlan][4514]wlanUpdateNetworkAddress:(INIT INFO) Using embedded MAC address
+[   31.140928] [wlan][4514]kalUpdateMACAddress:(INIT INFO) 9447e2a8:50:**:**:**:5a, 96:4d201000:**:**:**:4d201000.
+[   31.140937] [wlan][4514]kalIndicateStatusAndComplete:(INIT INFO) [wifi] wlan%d netif_carrier_off
+[   31.140938] [wlan][4514]kalIndicateStatusAndComplete:(INIT INFO) Skip report DISCONNECTED when using supplicant SME
+[   31.140939] [wlan][4514]p2pFuncSwitchSapChannel:(P2P WARN) Not support concurrent STA + SAP
+[   31.141004] [wlan][4514]aisFsmInit:(SW1 INFO) ->aisFsmInit(0)
+[   31.141006] [wlan][4514]nicFreq2ChannelNum:(BSS INFO) Return Invalid Channelnum = 0.
+[   31.141008] [wlan][4514]wlanOnPostFirmwareReady:(INIT WARN) wlanOnPostFirmwareReady: load manufacture data fail
+[   31.141433] [wlan][4516]main_thread:(INIT INFO) main_thread:4516 starts running...
+[   31.141478] [wlan][4517]hif_thread:(INIT INFO) hif_thread:4517 starts running...
+[   31.141557] [wlan][4514]wlanConnac2XDownloadBufferBin:(INIT INFO) Start Efuse Buffer Mode ..
+[   31.141560] [wlan][4514]wlanConnac2XDownloadBufferBin:(INIT INFO) ucEfuseBUfferModeCal is 0
+[   31.141566] [wlan][4514]wlanConnac2XDownloadBufferBin:(INIT INFO) [0/0] load buffer size: 0x0
+[   31.141638] [wlan][4519]rx_thread:(INIT INFO) rx_thread:4519 starts running...
+[   31.141641] [wlan][4516]wlanoidConnacSetEfusBufferMode:(OID INFO) u4SetBufferLen = 4
+[   31.141656] [wlan][4516]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0xED] SEQ[13] SET[0] LEN[68]
+[   31.144080] [wlan][4514]rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode:(RLM ERROR) Cannot find the 00 RegDomain. Set to default WW
+[   31.144083] [wlan][4514]kalApplyCustomRegulatory:(RLM INFO) kalApplyCustomRegulatory()
+[   31.144087] [wlan][4514]rlmDomainCountryCodeUpdate:(RLM INFO) g_mtk_regd_control.alpha2 = 00
+[   31.144089] [wlan][4514]rlmDomainSendDomainInfoCmd_V2:(RLM INFO) rlmDomainSendDomainInfoCmd_V2(), buff_valid_size = 0x144
+[   31.144091] [wlan][4514]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x0F] SEQ[14] SET[1] LEN[388]
+[   31.144093] [wlan][4514]rlmDomainSendPwrLimitCmd_V2:(RLM INFO) rlmDomainSendPwrLimitCmd()
+[   31.144591] wlan 0000:02:00.0: Direct firmware load for TxPwrLimit_MT79x1.dat failed with error -2
+[   31.144593] [wlan][4514]kalRequestFirmware:(INIT INFO) kalRequestFirmware TxPwrLimit_MT79x1.dat Fail, errno[-2]!!
+[   31.144594] [wlan][4514]kalReadToFile:(INIT INFO) kalReadToFile() path /data/misc/TxPwrLimit_MT79x1.dat
+[   31.144595] [wlan][4514]kalReadToFile:(INIT INFO) kalReadToFile() path /data/misc/wifi/TxPwrLimit_MT79x1.dat
+[   31.144595] [wlan][4514]kalReadToFile:(INIT INFO) kalReadToFile() path /storage/sdcard0/TxPwrLimit_MT79x1.dat
+[   31.144596] [wlan][4514]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find specified table in TxPwrLimit_MT79x1.dat
+[   31.144597] [wlan][4514]rlmDomainTxPwrLimitLoad:(RLM ERROR) Can't find default table (WW) in TxPwrLimit_MT79x1.dat
+[   31.144600] [wlan][4514]rlmDomainSendPwrLimitCmd_V2:(RLM ERROR) Load TxPwrLimitData failed
+[   31.144823] [wlan][4514]wlanOnPreNetRegister:(INIT INFO) MAC address: 50:5a:**:**:**:96
+[   31.144875] [wlan][4516]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x02] SEQ[15] SET[1] LEN[76]
+[   31.144987] [wlan][4516]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x5A] SEQ[16] SET[1] LEN[108]
+[   31.145102] [wlan][4514]kalNapiInit:(INIT INFO) GRO interface added successfully:wlan0
+[   31.145240] [wlan][4514]mtk_cfg_get_txpower:(REQ WARN) driver is not ready
+[   31.145253] [wlan][4514]procCreateFsEntry:(INIT INFO) [procCreateFsEntry]
+[   31.145258] [wlan][4514]wlanFeatureToFw:(INIT WARN) Send key word (AdapScan) WITH (0x0) to firmware
+[   31.145260] [wlan][4514]wlanFeatureToFw:(INIT WARN) Send key word (StaVHT) WITH (0x1) to firmware
+[   31.145260] [wlan][4514]wlanFeatureToFw:(INIT WARN) Send key word (ApVHT) WITH (0x1) to firmware
+[   31.145261] [wlan][4514]wlanFeatureToFw:(INIT WARN) Send key word (P2pGoVHT) WITH (0x1) to firmware
+[   31.145262] [wlan][4514]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[17] SET[1] LEN[348]
+[   31.145264] [wlan][4514]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:4
+[   31.145265] [wlan][4514]wlanFeatureToFw:(INIT WARN) Send key word (P2pGcVHT) WITH (0x1) to firmware
+[   31.145265] [wlan][4514]wlanFeatureToFw:(INIT WARN) Send key word (Nss) WITH (0x1) to firmware
+[   31.145266] [wlan][4514]wlanFeatureToFw:(INIT WARN) Send key word (LdpcTx) WITH (0x1) to firmware
+[   31.145267] [wlan][4514]wlanFeatureToFw:(INIT WARN) Send key word (LdpcRx) WITH (0x1) to firmware
+[   31.145267] [wlan][4514]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[18] SET[1] LEN[348]
+[   31.145269] [wlan][4514]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:4
+[   31.145269] [wlan][4514]wlanFeatureToFw:(INIT WARN) Send key word (StbcTx) WITH (0x0) to firmware
+[   31.145270] [wlan][4514]wlanFeatureToFw:(INIT WARN) Send key word (StbcRx) WITH (0x1) to firmware
+[   31.145271] [wlan][4514]wlanFeatureToFw:(INIT INFO) cmdV1Header.itemNum:2
+[   31.145271] [wlan][4514]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x70] SEQ[19] SET[1] LEN[348]
+[   31.145273] [wlan][4514]wlanFeatureToFw:(INIT INFO) kalIoctl wifiSefCFG num:2
+[   31.145283] [wlan][4514]wlanProbe:(INIT INFO) wlanProbe: probe success, feature set: 0x80881418, persistNetdev: 0
+[   31.145284] [wlan][4514]mtk_pci_probe:(INIT INFO) mtk_pci_probe() done(0)
+[   31.145311] [wlan][4514]initWlan:(INIT INFO) initWlan::End
+[   31.145723] [wlan][1228]mtk_cfg_get_txpower:(REQ WARN) STA doesn't support this function
+[   31.152521] [wlan][1228]kalNapiEnable:(RX INFO) RX NAPI enabled wlan0
+[   31.152572] [wlan][171]wlanSetMulticastListWorkQueue:(INIT INFO) ucBssIndex = 0
+[   31.152576] [wlan][171]wlanSetMulticastListWorkQueue:(INIT INFO) wlanSetMulticastListWorkQueue prDev->flags:0x1203
+[   31.152586] [wlan][4516]wlanoidSetCurrentPacketFilter:(REQ INFO) wlanoidSetCurrentPacketFilter
+[   31.152590] [wlan][4516]wlanoidSetPacketFilter:(OID INFO) [MC debug] u4PacketFilter=c, IsSuspend=0
+[   31.152594] [wlan][4516]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x0A] SEQ[20] SET[1] LEN[132]
+[   31.152669] [wlan][43]wlanSetMulticastListWorkQueue:(INIT INFO) ucBssIndex = 0
+[   31.152672] [wlan][43]wlanSetMulticastListWorkQueue:(INIT INFO) wlanSetMulticastListWorkQueue prDev->flags:0x1203
+[   31.152677] [wlan][1228]mtk_cfg80211_set_power_mgmt:(REQ INFO) 0: enabled=0, timeout=-1, fgTIMPresend=0
+[   31.152677] [wlan][4516]wlanoidSetCurrentPacketFilter:(REQ INFO) wlanoidSetCurrentPacketFilter
+[   31.152678] [wlan][4516]wlanoidSetPacketFilter:(OID INFO) [MC debug] u4PacketFilter=c, IsSuspend=0
+[   31.152680] [wlan][4516]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x0A] SEQ[21] SET[1] LEN[132]
+[   31.152700] [wlan][4516]nicPowerSaveInfoMap:(NIC INFO) Flag=0x80000001, Caller=0, PM=0, PSFlag[0]=0x0000
+[   31.152702] [wlan][4516]asicConnac2xFillCmdTxdInfo:(INIT INFO) TX CMD: ID[0x05] SEQ[22] SET[1] LEN[68]
+[   31.152869] [wlan][1228]mtk_cfg_get_txpower:(REQ WARN) STA doesn't support this function
