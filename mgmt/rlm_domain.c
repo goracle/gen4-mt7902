@@ -6659,7 +6659,7 @@ void rlmDomainParsingChannel(IN struct wiphy *pWiphy)
 						   sizeof(chan_flag_string));
 
 			if (chan->flags & IEEE80211_CHAN_DISABLED) {
-				DBGLOG(RLM, INFO,
+				DBGLOG(RLM, TRACE,
 				       "channels[%d][%d]: ch%d (freq = %d) flags=0x%x [ %s]\n",
 				    band_idx, ch_idx, chan->hw_value,
 				    chan->center_freq, chan->flags,
@@ -6682,7 +6682,7 @@ void rlmDomainParsingChannel(IN struct wiphy *pWiphy)
                   
 			rlmDomainAddActiveChannel(band_idx);
 
-			DBGLOG(RLM, INFO,
+			DBGLOG(RLM, TRACE,
 			       "channels[%d][%d]: ch%d (freq = %d) flgs=0x%x [%s]\n",
 				band_idx, ch_idx, chan->hw_value,
 				chan->center_freq, chan->flags,
