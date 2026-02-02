@@ -259,7 +259,8 @@ static const uint16_t g_u2CountryGroup20[] = {
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
 struct mtk_regd_control g_mtk_regd_control = {
 	.en = FALSE,
-	.state = REGD_STATE_UNDEFINED
+	.state = REGD_STATE_UNDEFINED,
+	.txpwr_limit_loaded = FALSE
 };
 
 #if CFG_SUPPORT_BW160
@@ -5062,6 +5063,13 @@ void rlmDomainSendPwrLimitCmd_V2(struct ADAPTER *prAdapter)
 	
 	u4CountryCode = rlmDomainGetCountryCode();
 	
+	/* Skip if already loaded successfully */
+	if (g_mtk_regd_control.txpwr_limit_loaded) {
+		DBGLOG(RLM, INFO, 
+			"TxPwrLimit already loaded, skipping\n");
+		return;
+	}
+	
 	/* Skip if country code is still uninitialized (00) */
 	if (u4CountryCode == 0x00003030) {
 		DBGLOG(RLM, INFO, 
@@ -5125,6 +5133,10 @@ void rlmDomainSendPwrLimitCmd_V2(struct ADAPTER *prAdapter)
 		DBGLOG(RLM, WARN, "Unsupported TxPwrLimit dat version %u\n",
 			ucVersion);
 	}
+	
+	/* Mark as successfully loaded */
+	g_mtk_regd_control.txpwr_limit_loaded = TRUE;
+	DBGLOG(RLM, INFO, "TxPwrLimit loaded successfully\n");
 
 #if (CFG_SUPPORT_SINGLE_SKU_6G == 1)
 	if (pTxPwrLimitData && pTxPwrLimitData->rChannelTxPwrLimit)
