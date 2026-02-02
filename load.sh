@@ -1,4 +1,5 @@
 #!/bin/bash
+
 set -euo pipefail
 
 if [ "$EUID" -ne 0 ]; then
@@ -29,6 +30,6 @@ dmesg -C
 insmod "$MODULE"
 
 # Capture logs (NO pipes to sudo)
-dmesg | grep -i mt7902 > "$LOGFILE"
+dmesg > "$LOGFILE"
 
 echo "--- Done. Logs saved to $LOGFILE ---"
