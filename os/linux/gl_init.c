@@ -1451,11 +1451,9 @@ static void glLoadNvram(struct GLUE_INFO *prGlueInfo,
 	ASSERT(prGlueInfo);
 
 	DBGLOG(INIT, INFO, "g_NvramFsm = %d\n", g_NvramFsm);
-	if (g_NvramFsm != NVRAM_STATE_READY) {
-		DBGLOG(INIT, WARN, "Nvram not available\n");
-		return;
-	}
-
+	DBGLOG(INIT, INFO, "FORCING LOAD\n");
+	g_NvramFsm = NVRAM_STATE_READY;
+	(void)prNvramSettings;
 	if (sizeof(struct WIFI_CFG_PARAM_STRUCT) >
 					sizeof(g_aucNvram)) {
 		DBGLOG(INIT, ERROR,
