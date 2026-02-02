@@ -933,6 +933,20 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 		goto recovery_failed;
 	}
 	DBGLOG(HAL, INFO, "Tier-3: MMIO remapped to %p\n", CSRBaseAddress);
+    /* Tier-4: Manual Secondary Bus Reset (SBR) */ 
+    if (pdev->bus && pdev->bus->self) { 
+        uint16_t ctrl; 
+        struct pci_dev *bridge = pdev->bus->self; 
+        DBGLOG(HAL, WARN, "Tier-4: Forcing Manual SBR via Bridge %04x:%02x\n", pci_domain_nr(bridge->bus), bridge->devfn); 
+        pci_read_config_word(bridge, PCI_BRIDGE_CONTROL, &ctrl); 
+        ctrl |= PCI_BRIDGE_CTL_BUS_RESET; 
+        pci_write_config_word(bridge, PCI_BRIDGE_CONTROL, ctrl); 
+        msleep(100); /* Hold reset for 100ms */ 
+        ctrl &= ~PCI_BRIDGE_CTL_BUS_RESET; 
+        pci_write_config_word(bridge, PCI_BRIDGE_CONTROL, ctrl); 
+        msleep(200); /* Wait for link training and ConnInfra settle */ 
+        pci_restore_state(pdev); 
+    }
 
 	/* Tier-3.5: Platform Reset via PERST# (FLR/SBR) */ 
 	DBGLOG(HAL, WARN, "Tier-3: Requesting PCIe Fundamental Reset\n"); 
