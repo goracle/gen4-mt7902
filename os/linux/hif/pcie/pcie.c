@@ -897,6 +897,14 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 
 	/* Step 1: Stop upper layer activity */
 	DBGLOG(HAL, INFO, "Tier-3: Stopping network queues\n");
+    /* Tier-4.9: Kernel-level Quiesce */ 
+    DBGLOG(HAL, WARN, "Tier-4: Killing tasklets and disabling IRQ line\n"); 
+    disable_irq_nosync(pdev->irq); 
+    synchronize_irq(pdev->irq); 
+    pci_clear_master(pdev); 
+    mb(); /* Instruction barrier */
+    disable_irq(pdev->irq); 
+    pci_clear_master(pdev);
 	netif_tx_stop_all_queues(prGlueInfo->prDevHandler);
 
 	/* Step 2: Disable interrupts */
