@@ -843,6 +843,7 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 					    struct GLUE_INFO *prGlueInfo)
 {
 	struct ADAPTER *prAdapter;
+    uint32_t u4Val;
 	struct mt66xx_chip_info *prChipInfo;
 	struct REG_INFO *prRegInfo;
 	uint32_t u4Status;
@@ -923,6 +924,15 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 	/* Step 8: Cold boot WFSYS MCU */
 	/* This is the SAME sequence as wlanProbe() - we cannot skip this */
 	/* The MCU/WFSYS state is undefined after power loss */
+    /* Tier-3.5: Force WFSYS Power Domain Cycle */ 
+    DBGLOG(HAL, WARN, "Tier-3: Power-cycling WFSYS domain\n"); 
+    HAL_MCR_RD(prAdapter, 0x18000100, &u4Val); /* TOP_CKGEN_ALON_ADDR */ 
+    u4Val |= BIT(3); /* Force WFSYS power off */ 
+    HAL_MCR_WR(prAdapter, 0x18000100, u4Val); 
+    mdelay(50); 
+    u4Val &= ~BIT(3); /* Release WFSYS power */ 
+    HAL_MCR_WR(prAdapter, 0x18000100, u4Val); 
+    mdelay(100);
 	DBGLOG(HAL, WARN, "Tier-3: Performing WFSYS MCU cold boot\n");
 	prAdapter->fgIsFwOwn = TRUE; /* Reset ownership state */
 	
