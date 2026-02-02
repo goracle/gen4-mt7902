@@ -5053,10 +5053,22 @@ void rlmDomainSendPwrLimitCmd_V2(struct ADAPTER *prAdapter)
 {
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
 	uint8_t ucVersion = 0;
+
+	uint32_t u4CountryCode;
 	struct TX_PWR_LIMIT_DATA *pTxPwrLimitData = NULL;
 	struct TX_PWR_LEGACY_LIMIT_DATA *pTxPwrLegacyLimitData = NULL;
-
+	
 	DBGLOG(RLM, INFO, "rlmDomainSendPwrLimitCmd()\n");
+	
+	u4CountryCode = rlmDomainGetCountryCode();
+	
+	/* Skip if country code is still uninitialized (00) */
+	if (u4CountryCode == 0x00003030) {
+		DBGLOG(RLM, INFO, 
+			"Country code still '00', deferring TxPwrLimit load until regdom update\n");
+		return;
+	}
+
 	pTxPwrLimitData = rlmDomainInitTxPwrLimitData(prAdapter);
 	pTxPwrLegacyLimitData = rlmDomainInitTxPwrLegacyLimitData(prAdapter);
 
