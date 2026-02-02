@@ -990,6 +990,8 @@ struct mtk_regd_control {
 	u_int8_t en;
 	u_int8_t isEfuseCountryCodeUsed;
 	u_int8_t txpwr_limit_loaded;
+	u_int8_t pending_regdom_update;
+	u_int32_t cached_alpha2;
 	enum regd_state state;
 	u_int32_t alpha2;
 	u_int32_t tmp_alpha2; /*store country code set by iwpriv "country XX"*/

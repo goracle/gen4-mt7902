@@ -260,7 +260,9 @@ static const uint16_t g_u2CountryGroup20[] = {
 struct mtk_regd_control g_mtk_regd_control = {
 	.en = FALSE,
 	.state = REGD_STATE_UNDEFINED,
-	.txpwr_limit_loaded = FALSE
+	.txpwr_limit_loaded = FALSE,
+	.pending_regdom_update = FALSE,
+	.cached_alpha2 = 0x00003030  /* "00" */
 };
 
 #if CFG_SUPPORT_BW160
