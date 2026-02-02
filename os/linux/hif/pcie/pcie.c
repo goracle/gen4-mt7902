@@ -1,3 +1,4 @@
+#include <linux/pm_runtime.h>
 /******************************************************************************
  *
  * This file is provided under a dual license.  When you use or
@@ -843,6 +844,12 @@ void glResetHifInfo(struct GLUE_INFO *prGlueInfo)
 uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 					    struct GLUE_INFO *prGlueInfo)
 {
+    int pm_ret; 
+    /* Tier-4.5: Diplomatic Wake */ 
+    pm_ret = pm_runtime_get_sync(&pdev->dev); 
+    pci_set_power_state(pdev, PCI_D0); 
+    pci_disable_link_state(pdev, PCIE_LINK_STATE_L0S | PCIE_LINK_STATE_L1); 
+    DBGLOG(HAL, WARN, "Tier-4.5: PM Wake (ret %d). ASPM Disabled.\n", pm_ret);
     /* Tier-4: Force Rail Power and Kill ASPM */ 
     pci_set_power_state(pdev, PCI_D0); 
     pci_disable_link_state(pdev, PCIE_LINK_STATE_L0S | PCIE_LINK_STATE_L1 | PCIE_LINK_STATE_CLKPM); 
@@ -969,6 +976,22 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
         } 
         DBGLOG(HAL, WARN, "Tier-4: Link stable (LnkSta: 0x%04x)\n", lnksta); 
     }
+    /* Tier-4.5: MMIO Heartbeat Check */ 
+    { 
+        uint32_t check_val = 0; 
+        int check_retry = 200; 
+        while (check_retry--) { 
+            HAL_MCR_RD(prAdapter, 0, &check_val); 
+            if (check_val != 0xffffffff && check_val != 0) break; 
+            mdelay(10); 
+        } 
+        if (check_val == 0xffffffff || check_val == 0) { 
+            DBGLOG(HAL, ERROR, "Tier-4.5: MMIO DEAD (0x%08x). Aborting.\n", check_val); 
+            pm_runtime_put_sync(&pdev->dev); 
+            return 1; 
+        } 
+        DBGLOG(HAL, WARN, "Tier-4.5: MMIO ALIVE (0x%08x). Hammering MCU now.\n", check_val); 
+    }
 	DBGLOG(HAL, WARN, "Tier-3: Performing WFSYS MCU cold boot\n");
 	prAdapter->fgIsFwOwn = TRUE; /* Reset ownership state */
 	
@@ -977,6 +1000,7 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 		goto recovery_failed;
 	}
 	DBGLOG(HAL, INFO, "Tier-3: MCU is alive and initialized\n");
+    pm_runtime_put_sync(&pdev->dev);
 
 	/* Step 9: Re-initialize adapter */
 	/* Run the same init path as wlanAdapterStart() */
