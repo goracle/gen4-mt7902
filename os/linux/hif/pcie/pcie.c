@@ -972,6 +972,14 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
     mdelay(100);
     /* Tier-3.5: Forced Hardware Reset of WFSYS Bus */ 
     DBGLOG(HAL, WARN, "Tier-3: Clearing WFSYS RGU reset latch\n"); 
+    /* Tier-5: Force-Enable WFSYS Clocks to allow Reset to propagate */ 
+    DBGLOG(HAL, WARN, "Tier-5: Forcing WFSYS clocks and performing hard reset\n"); 
+    HAL_MCR_WR(prAdapter, 0x18000100, 0x00010001); /* Force Clock Enable + Reset Assert */ 
+    udelay(500); 
+    HAL_MCR_WR(prAdapter, 0x18000100, 0x00010000); /* Keep Clock, Release Reset */ 
+    msleep(100); 
+    HAL_MCR_WR(prAdapter, 0x18000100, 0x00000000); /* Restore auto clock gating */ 
+    msleep(50);
     HAL_MCR_RD(prAdapter, 0x18000100, &u4Val); 
     u4Val |= BIT(0); /* Assert WFSYS SW Reset */ 
     HAL_MCR_WR(prAdapter, 0x18000100, u4Val); 
