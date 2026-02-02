@@ -1993,7 +1993,7 @@ struct CMD_DOMAIN_ACTIVE_CHANNEL_LIST {
 	uint8_t u1ActiveChNum5g;
 	uint8_t u1ActiveChNum6g;
 	uint8_t aucPadding[1];
-  struct CMD_DOMAIN_CHANNEL arChannels[1]; //fix [0]->[], UBSAN false positive
+  struct CMD_DOMAIN_CHANNEL arChannels[]; //fix [0]->[], UBSAN false positive
 };
 
 struct CMD_SET_DOMAIN_INFO_V2 {
