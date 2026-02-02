@@ -712,7 +712,7 @@ struct TX_PWR_CTRL_ELEMENT {
 	uint8_t index; /* scenario index */
 	enum ENUM_TX_POWER_CTRL_TYPE eCtrlType;
 	uint8_t settingCount;
-	struct TX_PWR_CTRL_CHANNEL_SETTING rChlSettingList[1];
+	struct TX_PWR_CTRL_CHANNEL_SETTING rChlSettingList[];
 };
 
 enum ENUM_POWER_LIMIT {
@@ -909,7 +909,7 @@ struct CHANNEL_POWER_LIMIT {
 	int8_t cPwrLimit80;
 	int8_t cPwrLimit160;
 	uint8_t ucFlag;
-	uint8_t aucReserved[1];
+	uint8_t aucReserved[];
 };
 
 struct COUNTRY_CHANNEL_POWER_LIMIT {
