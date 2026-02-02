@@ -360,6 +360,7 @@ static void mtk_pci_remove(struct pci_dev *pdev)
 	pci_release_regions(pdev);
 
 	pci_disable_device(pdev);
+    pci_disable_msi(pdev);
 	DBGLOG(INIT, INFO, "mtk_pci_remove() done\n");
 }
 
@@ -880,6 +881,18 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 	prHifInfo->fgInPciRecovery = TRUE;
 	DBGLOG(HAL, WARN,
 	       "=== Tier-3 PCIe Recovery Start (MMIO power loss detected) ===\n");
+    prHifInfo->fgMmioGone = true; 
+    prHifInfo->fgInPciRecovery = true; 
+    pci_disable_msi(pdev); 
+    pci_clear_master(pdev);
+    /* Tier-3.1: Quiesce PCI Bus to prevent Northbridge hang */ 
+    DBGLOG(HAL, WARN, "Tier-3: Quiescing PCI bus and clearing master bits\n"); 
+    pci_clear_master(pdev); 
+    pci_disable_device(pdev); 
+    pci_disable_msi(pdev);
+    /* Force-clear the MMIO mapping to stop pending CPU transactions */ 
+    pci_iounmap(pdev, prHifInfo->CSRBaseAddress); 
+    prHifInfo->CSRBaseAddress = NULL;
 
 	/* Step 1: Stop upper layer activity */
 	DBGLOG(HAL, INFO, "Tier-3: Stopping network queues\n");
@@ -896,6 +909,7 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 	DBGLOG(HAL, WARN, "Tier-3: Tearing down PCIe function\n");
 	pci_clear_master(pdev);
 	pci_disable_device(pdev);
+    pci_disable_msi(pdev);
 
 	/* Step 4: Force device to D0 power state */
 	/* This is the critical step that pulls the device out of deep sleep */
@@ -1007,7 +1021,16 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
         } 
         DBGLOG(HAL, WARN, "Tier-4: Link stable (LnkSta: 0x%04x)\n", lnksta); 
     /* Tier-4.6: WFSYS Clock Defibrillator */ 
-    DBGLOG(HAL, WARN, "Tier-4: Defibrillating WFSYS clocks\n"); 
+    /* Tier-4.7: Quiesce and Phased Clock Wake */ 
+    DBGLOG(HAL, WARN, "Tier-4: Phased WFSYS wake-up sequence\n"); 
+    HAL_MCR_WR(prAdapter, 0x18000000 + 0x100, 0x00000000); 
+    udelay(50); 
+    /* Clear any pending interrupts/status that might cause a race */ 
+    HAL_MCR_WR(prAdapter, 0x18000000 + 0x158, 0xFFFFFFFF); 
+    mdelay(10); 
+    /* Now release the MCU from reset explicitly */ 
+    HAL_MCR_WR(prAdapter, 0x18000000 + 0x108, 0x00000000); 
+    msleep(20);
     /* Tier-6: Purging DMA engine to prevent boot-loop */ 
     DBGLOG(HAL, WARN, "Tier-6: Purging WFDMA engine state\n"); 
     HAL_MCR_WR(prAdapter, 0x1802b000 + 0x008, 0x00000001); /* Reset Host WFDMA */ 
@@ -1166,6 +1189,7 @@ err_out_free_res:
 	pci_release_regions(pdev);
 
 	pci_disable_device(pdev);
+    pci_disable_msi(pdev);
 
 	return FALSE;
 }
