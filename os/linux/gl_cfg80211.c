@@ -6092,12 +6092,16 @@ mtk_reg_notify(IN struct wiphy *pWiphy,
 	}
 	if (!rlmDomainCountryCodeUpdateSanity(
 		prGlueInfo, pBaseWiphy, &prAdapter)) {
-		/* Cache regdom for later replay when glue is ready */
+		/* Cache regdom for later replay, but only if it's not "00" */
 		extern struct mtk_regd_control g_mtk_regd_control;
-		g_mtk_regd_control.cached_alpha2 = rlmDomainAlpha2ToU32(pRequest->alpha2, 2);
-		g_mtk_regd_control.pending_regdom_update = TRUE;
-		DBGLOG(RLM, WARN, "prGlueInfo not ready, caching alpha2=%s for later\n",
-			pRequest->alpha2);
+		if (pRequest->alpha2[0] != '0' || pRequest->alpha2[1] != '0') {
+			g_mtk_regd_control.cached_alpha2 = rlmDomainAlpha2ToU32(pRequest->alpha2, 2);
+			g_mtk_regd_control.pending_regdom_update = TRUE;
+			DBGLOG(RLM, WARN, "prGlueInfo not ready, caching alpha2=%s for later\n",
+				pRequest->alpha2);
+		} else {
+			DBGLOG(RLM, INFO, "prGlueInfo not ready, ignoring world regdom (00)\n");
+		}
 		return;
 	}
 
