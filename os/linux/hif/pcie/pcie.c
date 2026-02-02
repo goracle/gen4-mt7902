@@ -76,6 +76,7 @@
 #include "hif_pdma.h"
 
 #include "precomp.h"
+#include "chips/hal_wfsys_reset_mt7961.h"
 
 #include <linux/mm.h>
 #include <linux/pm.h>
@@ -933,6 +934,15 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
     u4Val &= ~BIT(3); /* Release WFSYS power */ 
     HAL_MCR_WR(prAdapter, 0x18000100, u4Val); 
     mdelay(100);
+    /* Tier-3.5: Forced Hardware Reset of WFSYS Bus */ 
+    DBGLOG(HAL, WARN, "Tier-3: Clearing WFSYS RGU reset latch\n"); 
+    HAL_MCR_RD(prAdapter, 0x18000100, &u4Val); 
+    u4Val |= BIT(0); /* Assert WFSYS SW Reset */ 
+    HAL_MCR_WR(prAdapter, 0x18000100, u4Val); 
+    udelay(100); 
+    u4Val &= ~BIT(0); /* Release WFSYS SW Reset */ 
+    HAL_MCR_WR(prAdapter, 0x18000100, u4Val); 
+    msleep(50);
 	DBGLOG(HAL, WARN, "Tier-3: Performing WFSYS MCU cold boot\n");
 	prAdapter->fgIsFwOwn = TRUE; /* Reset ownership state */
 	
