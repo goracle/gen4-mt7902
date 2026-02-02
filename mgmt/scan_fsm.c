@@ -265,6 +265,7 @@ void scnSendScanReqV2(IN struct ADAPTER *prAdapter)
 	if (!CHECK_FOR_TIMEOUT(now, prScanInfo->rLastScanCompletedTime,
 			       MSEC_TO_SYSTIME(SCAN_COOLDOWN_MS))) {
 		log_dbg(SCN, INFO, "Scan suppressed (cooldown active)\n");
+		prScanInfo->rLastScanCompletedTime = now;  // ← ADD THIS LINE
 		return;
 	}
 	
