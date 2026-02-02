@@ -1,0 +1,86 @@
+═══════════════════════════════════════════════════════════════════════════
+                    COPY-PASTE COMMAND REFERENCE
+═══════════════════════════════════════════════════════════════════════════
+
+1. READ THE QUICK START
+───────────────────────────────────────────────────────────────────────────
+cat /tmp/QUICK_START.txt
+
+
+2. APPLY PATCHES (AUTOMATED - RECOMMENDED)
+───────────────────────────────────────────────────────────────────────────
+cd ~/builds/gen4-mt7902
+/tmp/apply_tier3_patches.sh
+
+
+3. OR APPLY PATCHES MANUALLY
+───────────────────────────────────────────────────────────────────────────
+cd ~/builds/gen4-mt7902
+patch -p1 < /tmp/tier3_part1_detection.patch
+patch -p1 < /tmp/tier3_part2_typedef.patch
+patch -p1 < /tmp/tier3_part3_recovery_function.patch
+patch -p1 < /tmp/tier3_part4_hook_in_drvown.patch
+
+
+4. BUILD
+───────────────────────────────────────────────────────────────────────────
+cd ~/builds/gen4-mt7902
+make clean
+make -j$(nproc)
+
+
+5. INSTALL
+───────────────────────────────────────────────────────────────────────────
+cd ~/builds/gen4-mt7902
+sudo make install
+
+
+6. RELOAD DRIVER
+───────────────────────────────────────────────────────────────────────────
+sudo rmmod mt7902e
+sudo modprobe mt7902e
+
+
+7. MONITOR FOR RECOVERY EVENTS (run in separate terminal)
+───────────────────────────────────────────────────────────────────────────
+sudo dmesg -w | grep -E "Tier-3|MMIO|recovery|0xffffffff"
+
+
+8. VERIFY PATCHES APPLIED
+───────────────────────────────────────────────────────────────────────────
+cd ~/builds/gen4-mt7902
+grep -n "fgMmioGone" os/linux/include/gl_typedef.h
+grep -n "mt79xx_pci_function_recover" os/linux/hif/pcie/pcie.c
+
+
+9. CHECK DRIVER IS LOADED
+───────────────────────────────────────────────────────────────────────────
+lsmod | grep mt7902
+dmesg | tail -20
+
+
+10. IF SOMETHING GOES WRONG - RESTORE BACKUP
+───────────────────────────────────────────────────────────────────────────
+# Find your backup (created by apply_tier3_patches.sh)
+ls -lhd ~/driver_backup_*
+
+# Restore it (replace timestamp with yours)
+cd ~
+rm -rf builds/gen4-mt7902
+cp -r driver_backup_YYYYMMDD_HHMMSS builds/gen4-mt7902
+
+
+═══════════════════════════════════════════════════════════════════════════
+                         FILES REFERENCE
+═══════════════════════════════════════════════════════════════════════════
+
+/tmp/QUICK_START.txt                    ← Start here
+/tmp/TIER3_RECOVERY_README.md           ← Full documentation
+/tmp/apply_tier3_patches.sh             ← Automated patcher
+/tmp/tier3_part1_detection.patch        ← Patch 1
+/tmp/tier3_part2_typedef.patch          ← Patch 2
+/tmp/tier3_part3_recovery_function.patch ← Patch 3
+/tmp/tier3_part4_hook_in_drvown.patch   ← Patch 4
+/tmp/COMMANDS.txt                       ← This file
+
+═══════════════════════════════════════════════════════════════════════════

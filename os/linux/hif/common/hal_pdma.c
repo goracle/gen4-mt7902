@@ -112,6 +112,8 @@
  *******************************************************************************
  */
 static void halResetMsduToken(IN struct ADAPTER *prAdapter);
+uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
+					    struct GLUE_INFO *prGlueInfo);
 
 /*******************************************************************************
  *                              F U N C T I O N S
@@ -579,6 +581,31 @@ u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 #endif
 			fgStatus = FALSE;
 			break;
+	} else if ((i > LP_OWN_BACK_FAILED_RETRY_CNT) &&
+		   prAdapter->prGlueInfo->rHifInfo.fgMmioGone) {
+		/* 
+		 * Tier-3 Recovery: MMIO reads return 0xffffffff
+		 * This means the device power domain is gone, not just FW crash.
+		 * Register-based resets cannot work. We must do PCIe function
+		 * resurrection instead.
+		 */
+		DBGLOG(INIT, ERROR,
+		       "Driver own timeout: MMIO reads = 0xffffffff (power loss)\n");
+		DBGLOG(INIT, WARN,
+		       "==> Escalating to Tier-3 PCIe function recovery\n");
+		
+		/* Unlock before calling recovery (may take 2-3 seconds) */
+		if (HAL_IS_TX_DIRECT(prAdapter) || 
+		    HAL_IS_RX_DIRECT(prAdapter))
+			spin_unlock_bh(&prAdapter->prGlueInfo->
+				       rSpinLock[SPIN_LOCK_SET_OWN]);
+		else
+			KAL_RELEASE_MUTEX(prAdapter, MUTEX_SET_OWN);
+		
+		/* Attempt Tier-3 PCIe recovery - returns TRUE if success */
+		return (mt79xx_pci_function_recover(prAdapter->prGlueInfo->rHifInfo.pdev,
+						    prAdapter->prGlueInfo)
+			== WLAN_STATUS_SUCCESS);
 		} else if ((i > LP_OWN_BACK_FAILED_RETRY_CNT) &&
 			   (kalIsCardRemoved(prAdapter->prGlueInfo) ||
 			    fgIsBusAccessFailed || fgTimeout)) {

@@ -1540,3 +1540,4 @@ int32_t sysCreateMonDbgFs(struct GLUE_INFO *prGlueInfo);
 void sysRemoveMonDbgFs(void);
 #endif
 #endif /* _GL_OS_H */
+int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter);
