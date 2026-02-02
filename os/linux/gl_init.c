@@ -4850,6 +4850,18 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 
 #if CFG_SHOW_MACADDR_SOURCE
 			DBGLOG(INIT, INFO, "MAC address: " MACSTR,
+	
+	/* Replay cached regdom update if one occurred before glue was ready */
+	if (g_mtk_regd_control.pending_regdom_update) {
+		char acAlpha2[3] = {0};
+		acAlpha2[0] = (g_mtk_regd_control.cached_alpha2 & 0xFF);
+		acAlpha2[1] = ((g_mtk_regd_control.cached_alpha2 >> 8) & 0xFF);
+		DBGLOG(INIT, INFO, "Replaying cached regdom update: %s\n", acAlpha2);
+		rlmDomainSetCountryCode(acAlpha2, 2);
+		rlmDomainCountryCodeUpdate(prAdapter, wlanGetWiphy(), 
+			g_mtk_regd_control.cached_alpha2);
+		g_mtk_regd_control.pending_regdom_update = FALSE;
+	}
 			MAC2STR(prAdapter->rWifiVar.aucMacAddress));
 #endif
 		}
