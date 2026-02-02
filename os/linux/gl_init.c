@@ -4866,7 +4866,17 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 			rlmDomainCountryCodeUpdate(prAdapter, wlanGetWiphy(), 
 				g_mtk_regd_control.cached_alpha2);
 		} else {
-			DBGLOG(INIT, INFO, "Skipping replay of world regdom (00)\n");
+			/* Query the current regulatory domain from cfg80211 */
+			const struct ieee80211_regdomain *regdom;
+			DBGLOG(INIT, INFO, "Cached regdom was (00), querying current regdom\n");
+			regdom = get_wiphy_regdom(wlanGetWiphy());
+			if (regdom && regdom->alpha2[0] != '0') {
+				DBGLOG(INIT, INFO, "Applying current regdom: %c%c\n", 
+					regdom->alpha2[0], regdom->alpha2[1]);
+				rlmDomainSetCountryCode((char *)regdom->alpha2, 2);
+				rlmDomainCountryCodeUpdate(prAdapter, wlanGetWiphy(),
+					rlmDomainAlpha2ToU32((char *)regdom->alpha2, 2));
+			}
 		}
 		g_mtk_regd_control.pending_regdom_update = FALSE;
 	}
