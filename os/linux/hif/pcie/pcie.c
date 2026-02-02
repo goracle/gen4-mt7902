@@ -843,6 +843,11 @@ void glResetHifInfo(struct GLUE_INFO *prGlueInfo)
 uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 					    struct GLUE_INFO *prGlueInfo)
 {
+    /* Tier-4: Force Rail Power and Kill ASPM */ 
+    pci_set_power_state(pdev, PCI_D0); 
+    pci_disable_link_state(pdev, PCIE_LINK_STATE_L0S | PCIE_LINK_STATE_L1 | PCIE_LINK_STATE_CLKPM); 
+    pci_save_state(pdev); 
+    DBGLOG(HAL, WARN, "Tier-4: ASPM disabled and D0 forced\n");
 	struct ADAPTER *prAdapter;
     uint32_t u4Val;
 	struct mt66xx_chip_info *prChipInfo;
@@ -953,6 +958,17 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
     u4Val &= ~BIT(0); /* Release WFSYS SW Reset */ 
     HAL_MCR_WR(prAdapter, 0x18000100, u4Val); 
     msleep(50);
+    /* Wait for PCIe Link Stability */ 
+    { 
+        uint16_t lnksta; 
+        int retry = 50; 
+        while (retry--) { 
+            pcie_capability_read_word(pdev, PCI_EXP_LNKSTA, &lnksta); 
+            if (!(lnksta & PCI_EXP_LNKSTA_LT)) break; 
+            mdelay(10); 
+        } 
+        DBGLOG(HAL, WARN, "Tier-4: Link stable (LnkSta: 0x%04x)\n", lnksta); 
+    }
 	DBGLOG(HAL, WARN, "Tier-3: Performing WFSYS MCU cold boot\n");
 	prAdapter->fgIsFwOwn = TRUE; /* Reset ownership state */
 	
