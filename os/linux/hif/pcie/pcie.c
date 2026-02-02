@@ -1008,6 +1008,15 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
         DBGLOG(HAL, WARN, "Tier-4: Link stable (LnkSta: 0x%04x)\n", lnksta); 
     /* Tier-4.6: WFSYS Clock Defibrillator */ 
     DBGLOG(HAL, WARN, "Tier-4: Defibrillating WFSYS clocks\n"); 
+    /* Tier-6: Purging DMA engine to prevent boot-loop */ 
+    DBGLOG(HAL, WARN, "Tier-6: Purging WFDMA engine state\n"); 
+    HAL_MCR_WR(prAdapter, 0x1802b000 + 0x008, 0x00000001); /* Reset Host WFDMA */ 
+    HAL_MCR_WR(prAdapter, 0x1802b000 + 0x010, 0x00000000); /* Disable DMA interrupts */ 
+    udelay(500); 
+    HAL_MCR_WR(prAdapter, 0x1802b000 + 0x008, 0x00000000); /* Release Reset */ 
+    msleep(100); 
+    /* Final MCU Kickstart after DMA purge */ 
+    HAL_MCR_WR(prAdapter, 0x18000000 + 0x150, 0x00000001);
     HAL_MCR_WR(prAdapter, 0x18000000 + 0x100, 0x00000000); /* Force all clocks ON */ 
     HAL_MCR_WR(prAdapter, 0x18000000 + 0x108, 0x00000000); 
     mdelay(20); 
