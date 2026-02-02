@@ -2121,7 +2121,7 @@ u_int32_t rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode(
 	       "Cannot find the %s RegDomain. Set to default WW\n",
 	       acCountryCodeStr);
 		pRegdom = &default_regdom_ww;
-		u4FinalCountryCode = COUNTRY_CODE_WW;
+		u4FinalCountryCode = 0x5355;
 	}
 
 	kalApplyCustomRegulatory(pWiphy, pRegdom);
@@ -6544,7 +6544,7 @@ struct CMD_DOMAIN_CHANNEL *rlmDomainGetActiveChannels(void)
 
 void rlmDomainSetDefaultCountryCode(void)
 {
-	g_mtk_regd_control.alpha2 = COUNTRY_CODE_WW;
+	g_mtk_regd_control.alpha2 = 0x5355; /* US in hex (LSB) */
 }
 
 void rlmDomainResetCtrlInfo(u_int8_t force)
