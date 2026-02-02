@@ -4859,10 +4859,15 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 		char acAlpha2[3] = {0};
 		acAlpha2[0] = (g_mtk_regd_control.cached_alpha2 & 0xFF);
 		acAlpha2[1] = ((g_mtk_regd_control.cached_alpha2 >> 8) & 0xFF);
-		DBGLOG(INIT, INFO, "Replaying cached regdom update: %s\n", acAlpha2);
-		rlmDomainSetCountryCode(acAlpha2, 2);
-		rlmDomainCountryCodeUpdate(prAdapter, wlanGetWiphy(), 
-			g_mtk_regd_control.cached_alpha2);
+		/* Only replay if it's not "00" */
+		if (acAlpha2[0] != '0' || acAlpha2[1] != '0') {
+			DBGLOG(INIT, INFO, "Replaying cached regdom update: %s\n", acAlpha2);
+			rlmDomainSetCountryCode(acAlpha2, 2);
+			rlmDomainCountryCodeUpdate(prAdapter, wlanGetWiphy(), 
+				g_mtk_regd_control.cached_alpha2);
+		} else {
+			DBGLOG(INIT, INFO, "Skipping replay of world regdom (00)\n");
+		}
 		g_mtk_regd_control.pending_regdom_update = FALSE;
 	}
 		}
