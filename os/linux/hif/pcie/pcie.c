@@ -922,6 +922,16 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 	}
 	DBGLOG(HAL, INFO, "Tier-3: MMIO remapped to %p\n", CSRBaseAddress);
 
+	/* Tier-3.5: Platform Reset via PERST# (FLR/SBR) */ 
+	DBGLOG(HAL, WARN, "Tier-3: Requesting PCIe Fundamental Reset\n"); 
+	if (pci_reset_function(pdev) != 0) { 
+		DBGLOG(HAL, WARN, "Tier-3: FLR/SBR failed, trying secondary bus reset\n"); 
+		if (pdev->bus->self) 
+			pci_bridge_secondary_bus_reset(pdev->bus->self); 
+	} 
+	msleep(100); /* Wait for ConnInfra to settle after PERST# */ 
+	pci_restore_state(pdev); /* Restore config space again after reset */
+
 	/* Step 8: Cold boot WFSYS MCU */
 	/* This is the SAME sequence as wlanProbe() - we cannot skip this */
 	/* The MCU/WFSYS state is undefined after power loss */
