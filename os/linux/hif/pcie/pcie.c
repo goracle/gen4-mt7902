@@ -1006,6 +1006,15 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
             mdelay(10); 
         } 
         DBGLOG(HAL, WARN, "Tier-4: Link stable (LnkSta: 0x%04x)\n", lnksta); 
+    /* Tier-4.6: WFSYS Clock Defibrillator */ 
+    DBGLOG(HAL, WARN, "Tier-4: Defibrillating WFSYS clocks\n"); 
+    HAL_MCR_WR(prAdapter, 0x18000000 + 0x100, 0x00000000); /* Force all clocks ON */ 
+    HAL_MCR_WR(prAdapter, 0x18000000 + 0x108, 0x00000000); 
+    mdelay(20); 
+    /* Re-triggering the MCU start bit */ 
+    HAL_MCR_RD(prAdapter, 0x18000000 + 0x150, &u4Val); 
+    u4Val |= BIT(0); 
+    HAL_MCR_WR(prAdapter, 0x18000000 + 0x150, u4Val);
     }
     /* Tier-4.5: MMIO Heartbeat Check */ 
     { 
