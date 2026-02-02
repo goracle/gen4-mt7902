@@ -5962,7 +5962,7 @@ int32_t wlanOnAtReset(void)
  */
 /*----------------------------------------------------------------------------*/
 /* helper: try to cold-boot WFSYS MCU and verify it comes up */
-static int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter)
+int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter)
 {
     struct mt66xx_chip_info *prChipInfo;
     int attempts = 2;

@@ -218,6 +218,8 @@ struct GL_HIF_INFO {
 
 	bool fgIsPowerOff;
 	bool fgIsDumpLog;
+	bool fgMmioGone;           /* True if MMIO reads return 0xffffffff */
+	bool fgInPciRecovery;      /* True while doing PCIe function recovery */
 
 	enum pcie_suspend_state eSuspendtate;
 
