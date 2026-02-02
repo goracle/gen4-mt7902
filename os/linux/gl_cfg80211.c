@@ -6090,10 +6090,14 @@ mtk_reg_notify(IN struct wiphy *pWiphy,
 		DBGLOG(RLM, ERROR, "wlan is halt, skip reg callback\n");
 		return;
 	}
-
 	if (!rlmDomainCountryCodeUpdateSanity(
 		prGlueInfo, pBaseWiphy, &prAdapter)) {
-		DBGLOG(RLM, ERROR, "sanity check failed, skip!\n");
+		/* Cache regdom for later replay when glue is ready */
+		extern struct mtk_regd_control g_mtk_regd_control;
+		g_mtk_regd_control.cached_alpha2 = rlmDomainAlpha2ToU32(pRequest->alpha2, 2);
+		g_mtk_regd_control.pending_regdom_update = TRUE;
+		DBGLOG(RLM, WARN, "prGlueInfo not ready, caching alpha2=%s for later\n",
+			pRequest->alpha2);
 		return;
 	}
 
