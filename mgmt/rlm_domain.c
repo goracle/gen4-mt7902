@@ -312,7 +312,7 @@ struct TX_PWR_LIMIT_SECTION {
 	const char *arSectionNames[TX_PWR_LIMIT_SECTION_NUM];
 } gTx_Pwr_Limit_Section[] = {
 	{5,
-	 {"legacy", "ht20", "ht40", "vht20", "offset"}
+	 {"cck", "ofdm", "ht40", "vht20", "offset"}
 	},
 	{9,
 	 {"cck", "ofdm", "ht20", "ht40", "vht20", "vht40",
