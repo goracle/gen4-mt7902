@@ -3744,7 +3744,7 @@ void wlanGetConfig(struct ADAPTER *prAdapter)
 			   WLAN_CFG_FILE_BUF_SIZE, &u4ConfigReadLen,
 			   prAdapter->prGlueInfo->prDev) == 0) {
 			/* ToDo:: Nothing */
-		} else if (kalReadToFile("/data/misc/wifi/wifi.cfg",
+		} else if (kalReadToFile("/lib/firmware/mediatek/mt7902/wifi.cfg",
 			   pucConfigBuf, WLAN_CFG_FILE_BUF_SIZE,
 			   &u4ConfigReadLen) == 0) {
 			/* ToDo:: Nothing */

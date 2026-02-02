@@ -3175,9 +3175,9 @@ u_int8_t rlmDomainTxPwrLimitLoadFromFile(
 	kalMemZero(aucPath, sizeof(aucPath));
 	kalSnprintf(aucPath[0], TXPWRLIMIT_FILE_LEN, "%s", prFileName);
 	kalSnprintf(aucPath[1], TXPWRLIMIT_FILE_LEN,
-		"/data/misc/%s", prFileName);
+		"/lib/firmware/mediatek/mt7902/%s", prFileName);
 	kalSnprintf(aucPath[2], TXPWRLIMIT_FILE_LEN,
-		"/data/misc/wifi/%s", prFileName);
+		"/lib/firmware/mediatek/mt7902/wifi/%s", prFileName);
 	kalSnprintf(aucPath[3], TXPWRLIMIT_FILE_LEN,
 		"/storage/sdcard0/%s", prFileName);
 
@@ -6271,7 +6271,7 @@ void txPwrCtrlCfgFileToList(struct ADAPTER *prAdapter)
 		    WLAN_CFG_FILE_BUF_SIZE, &u4ConfigReadLen,
 		    prAdapter->prGlueInfo->prDev) == 0) {
 			/* ToDo:: Nothing */
-		} else if (kalReadToFile("/data/misc/wifi/txpowerctrl.cfg",
+		} else if (kalReadToFile("/lib/firmware/mediatek/mt7902/wifi/txpowerctrl.cfg",
 			   pucConfigBuf, WLAN_CFG_FILE_BUF_SIZE,
 			   &u4ConfigReadLen) == 0) {
 			/* ToDo:: Nothing */
