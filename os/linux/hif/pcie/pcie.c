@@ -1,4 +1,3 @@
-#include <linux/pm_runtime.h>
 /******************************************************************************
  *
  * This file is provided under a dual license.  When you use or
@@ -75,6 +74,7 @@
 #include "gl_os.h"
 
 #include "hif_pdma.h"
+#include <linux/pm_runtime.h>
 
 #include "precomp.h"
 #include "chips/hal_wfsys_reset_mt7961.h"
@@ -205,7 +205,7 @@ static uint32_t g_u4DmaMask = 32;
  *                   F U N C T I O N   D E C L A R A T I O N S
  *******************************************************************************
  */
-
+uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev, struct GLUE_INFO *prGlueInfo);
 static void pcieAllocDesc(struct GL_HIF_INFO *prHifInfo,
 			  struct RTMP_DMABUF *prDescRing,
 			  uint32_t u4Num);
@@ -263,6 +263,42 @@ static void pcieDumpRx(struct GL_HIF_INFO *prHifInfo,
  * \return void
  */
 /*----------------------------------------------------------------------------*/
+void mt7902_schedule_recovery_from_atomic(struct GLUE_INFO *prGlueInfo)
+{
+    struct GL_HIF_INFO *prHifInfo = &prGlueInfo->rHifInfo;
+    
+    /* Only schedule once */
+    if (test_and_set_bit(MTK_FLAG_MMIO_GONE, &prHifInfo->state_flags))
+        return;
+    
+    /* Disable IRQ and stop queues safely from atomic context */
+    if (prHifInfo->saved_irq > 0)
+        disable_irq_nosync(prHifInfo->saved_irq);
+        
+    if (prGlueInfo->prDevHandler)
+        netif_tx_stop_all_queues(prGlueInfo->prDevHandler);
+
+    schedule_work(&prHifInfo->recovery_work);
+}
+
+static void mt7902_recovery_work(struct work_struct *work)
+{
+    struct GL_HIF_INFO *prHifInfo = container_of(work, struct GL_HIF_INFO, recovery_work);
+    struct GLUE_INFO *prGlueInfo = container_of(prHifInfo, struct GLUE_INFO, rHifInfo);
+    
+    mutex_lock(&prHifInfo->recovery_lock);
+    DBGLOG(HAL, INFO, "Running deferred recovery in process context\n");
+    mt79xx_pci_function_recover(prHifInfo->pdev, prGlueInfo);
+    
+    /* Clean up flags after recovery */
+    clear_bit(MTK_FLAG_MMIO_GONE, &prHifInfo->state_flags);
+    if (prHifInfo->saved_irq > 0)
+        enable_irq(prHifInfo->saved_irq);
+        
+    mutex_unlock(&prHifInfo->recovery_lock);
+}
+
+
 static void *CSRBaseAddress;
 
 static irqreturn_t mtk_pci_interrupt(int irq, void *dev_instance)
@@ -1441,6 +1477,14 @@ int32_t glBusSetIrq(void *pvData, void *pfnIsr, void *pvCookie)
 	pdev = prHifInfo->pdev;
 
 	prHifInfo->u4IrqId = pdev->irq;
+
+	/* Inside glBusSetIrq, after prHifInfo is assigned: */
+	INIT_WORK(&prHifInfo->recovery_work, mt7902_recovery_work);
+	mutex_init(&prHifInfo->recovery_lock);
+	prHifInfo->state_flags = 0;
+	prHifInfo->saved_irq = pdev->irq;
+	prHifInfo->pdev = pdev;
+
 	ret = request_irq(prHifInfo->u4IrqId, mtk_pci_interrupt,
 		IRQF_SHARED, prNetDevice->name, prGlueInfo);
 	if (ret != 0)

@@ -214,9 +214,6 @@ enum pcie_suspend_state {
 	PCIE_STATE_SUSPEND
 };
 
-/* State flags for atomic-safe recovery management */
-#define MTK_FLAG_MMIO_GONE     0  /* bit 0: MMIO dead, needs recovery */
-
 struct GL_HIF_INFO {
 	struct pci_dev *pdev;
 	struct pci_dev *prDmaDev;
@@ -267,13 +264,6 @@ struct GL_HIF_INFO {
 
 	uint32_t u4PcieLTR;
 	uint32_t u4PcieASPM;
-    /* 2. Add these recovery fields at the end of the struct */
-	unsigned long state_flags;          /* Atomic state flags */
-	struct work_struct recovery_work;   /* Workqueue for deferred recovery */
-	struct mutex recovery_lock;         /* Protects recovery sequence */
-	int saved_irq;                      /* Saved IRQ number */
-  //struct pci_dev *pdev;               /* PCI device pointer */
-
 };
 
 struct BUS_INFO {
