@@ -171,6 +171,40 @@ struct HIF_MEM_OPS {
  ** layer info structure.
  */
 
+enum pcie_recovery_stage {
+	RECOV_STAGE_IDLE            = 0,
+	RECOV_STAGE_QUIESCE         = 1,
+	RECOV_STAGE_D3COLD_CYCLE    = 2,
+	RECOV_STAGE_REENABLE        = 3,
+	RECOV_STAGE_BAR_REMAP       = 4,
+	RECOV_STAGE_SBR             = 5,
+	RECOV_STAGE_BAR_PREFLIGHT   = 6,
+	RECOV_STAGE_WFSYS_PWRCYCLE  = 7,
+	RECOV_STAGE_CLOCKS          = 8,
+	RECOV_STAGE_LINK_WAIT       = 9,
+	RECOV_STAGE_PHASED_WAKE     = 10,
+	RECOV_STAGE_DMA_PURGE       = 11,
+	RECOV_STAGE_MCU_KICKSTART   = 12,
+	RECOV_STAGE_BAR_TIER7       = 13,
+	RECOV_STAGE_MCU_COLDBOOT    = 14,
+	RECOV_STAGE_ADAPTER_START   = 15,
+	RECOV_STAGE_COMPLETE        = 16,
+	RECOV_STAGE_NUM
+};
+
+enum pcie_recovery_fail_reason {
+	RECOV_FAIL_NONE              = 0,
+	RECOV_FAIL_BAR_BLIND_PRE     = 1,
+	RECOV_FAIL_BAR_BLIND_TIER7   = 2,
+	RECOV_FAIL_COLDBOOT_BLIND    = 3,
+	RECOV_FAIL_COLDBOOT_TIMEOUT  = 4,
+	RECOV_FAIL_COLDBOOT_OTHER    = 5,
+	RECOV_FAIL_ADAPTER_START     = 6,
+	RECOV_FAIL_ENABLE_DEVICE     = 7,
+	RECOV_FAIL_IOREMAP           = 8,
+	RECOV_FAIL_NUM
+};
+
 enum pcie_suspend_state {
 	PCIE_STATE_PRE_SUSPEND_WAITING, /* Waiting for FW suspend flow status */
 	PCIE_STATE_PRE_SUSPEND_DONE,
@@ -220,6 +254,11 @@ struct GL_HIF_INFO {
 	bool fgIsDumpLog;
 	bool fgMmioGone;           /* True if MMIO reads return 0xffffffff */
 	bool fgInPciRecovery;      /* True while doing PCIe function recovery */
+	uint8_t  u8RecoveryStage;          /* enum pcie_recovery_stage        */
+	uint8_t  u8RecoveryFailReason;     /* enum pcie_recovery_fail_reason  */
+	uint32_t u4LastBarSample;          /* last raw BAR0 dword read        */
+	unsigned long u_recovery_fail_time;/* jiffies at last failure         */
+	struct dentry *debugfs_recovery_state; /* seq_file dentry or NULL     */
 
 	enum pcie_suspend_state eSuspendtate;
 
@@ -438,4 +477,8 @@ bool glBusConfigASPML1SS(struct pci_dev *dev, int enable);
  *                              F U N C T I O N S
  *******************************************************************************
  */
+extern void dump_pci_state(struct pci_dev *pdev);
+extern void dump_mailbox(struct ADAPTER *prAdapter);
+extern void dump_pdma_state(struct ADAPTER *prAdapter);
+
 #endif /* _HIF_H */
