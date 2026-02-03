@@ -1541,3 +1541,4 @@ void sysRemoveMonDbgFs(void);
 #endif
 #endif /* _GL_OS_H */
 int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter);
+extern void pcie_recovery_debugfs_set_hif(struct GL_HIF_INFO *prHif);

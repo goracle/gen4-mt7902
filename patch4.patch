@@ -1,0 +1,147 @@
+============================================================
+PATCH 4 of 4 — os/linux/gl_sys.c  +  one small addition to pcie.c
+
+This patch has TWO parts:
+  A) gl_sys.c — the seq_file and its registration
+  B) pcie.c   — the two lines in glSetHifInfo that set the pointer
+
+============================================================
+PART A — os/linux/gl_sys.c
+============================================================
+
+Two insertion points in gl_sys.c:
+
+---------------------------------------------------------------
+INSERTION A1 — right BEFORE the existing "static int debugfs_u8_get"
+  (which is near line 571 per your grep).  Add the extern pointer
+  and the seq_file show function.
+---------------------------------------------------------------
+
++/* Pointer set by pcie.c:glSetHifInfo so that this file can read
++ * the recovery-observability fields without pulling in the entire
++ * GL_HIF_INFO header chain.  Volatile because pcie.c writes it
++ * from a different compilation unit at probe time.
++ */
++static struct GL_HIF_INFO * volatile g_prRecovHifInfo = NULL;
++
++/* ------------------------------------------------------------
++ * seq_file show handler for /sys/kernel/debug/mtk_mon_dbgfs/pcie_recovery_state
++ *
++ * Snapshot is taken under a single read of each field.  The
++ * fields are all word-sized atomics written by the recovery
++ * path; no lock is needed — we just want a consistent-enough
++ * snapshot for a human reading dmesg.
++ * ------------------------------------------------------------
++ */
++static int pcie_recovery_state_show(struct seq_file *m, void *v)
++{
++    struct GL_HIF_INFO *prHif = g_prRecovHifInfo;
++
++    if (!prHif) {
++        seq_puts(m, "stage=UNAVAILABLE reason=UNAVAILABLE\n");
++        return 0;
++    }
++
++    seq_printf(m,
++        "stage=%u\n"
++        "fail_reason=%u\n"
++        "last_bar_sample=0x%08x\n"
++        "fail_time_jiffies=%lu\n",
++        (unsigned)prHif->u8RecoveryStage,
++        (unsigned)prHif->u8RecoveryFailReason,
++        prHif->u4LastBarSample,
++        prHif->u_recovery_fail_time);
++
++    return 0;
++}
++
++static int pcie_recovery_state_open(struct file *file, void *data)
++{
++    return single_open(file, pcie_recovery_state_show, NULL);
++}
++
++static const struct file_operations pcie_recovery_state_fops = {
++    .owner   = THIS_MODULE,
++    .open    = pcie_recovery_state_open,
++    .read    = seq_read,
++    .llseek  = seq_lseek,
++    .release = single_release,
++};
++
+ static int debugfs_u8_get(void *data, uint64_t *val)
+
+---------------------------------------------------------------
+INSERTION A2 — inside the existing debugfs init function, right
+  AFTER the last existing debugfs_create_file call (the one for
+  "drop_fcs_err" per your grep) and BEFORE the closing brace of
+  that function.  Add the recovery_state file creation.
+---------------------------------------------------------------
+
+ 	dbgFsFile = debugfs_create_file("drop_fcs_err",
+ 		...);
++
++	/* Tier-3 recovery observability — readable by any user */
++	if (dbgFsDir)
++		debugfs_create_file("pcie_recovery_state",
++			0444, dbgFsDir, NULL, &pcie_recovery_state_fops);
++
+ }   /* end of debugfs init function */
+
+---------------------------------------------------------------
+ACCESSOR — export the pointer-setter so pcie.c can call it.
+  Add this anywhere visible to pcie.c (e.g. just above or below
+  the seq_file block, or at file scope after the fops struct).
+---------------------------------------------------------------
+
++/* Called by pcie.c:glSetHifInfo once, at probe time. */
++void pcie_recovery_debugfs_set_hif(struct GL_HIF_INFO *prHif)
++{
++    g_prRecovHifInfo = prHif;
++}
+
+  Then add the declaration in gl_os.h (or wherever pcie.c pulls
+  its extern declarations from):
+
++extern void pcie_recovery_debugfs_set_hif(struct GL_HIF_INFO *prHif);
+
+============================================================
+PART B — os/linux/hif/pcie/pcie.c   (two lines added to glSetHifInfo)
+============================================================
+
+Find the existing line in glSetHifInfo:
+
+	prHif->fgIsPowerOff = true;
+
+and add the debugfs pointer-set call right after it:
+
+ 	prHif->fgIsPowerOff = true;
++	prHif->fgIsDumpLog  = false;
++
++	/* Wire the recovery-state debugfs seq_file to this HIF instance */
++	pcie_recovery_debugfs_set_hif(prHif);
++
+ 	prHif->rMemOps.allocTxDesc = pcieAllocDesc;
+
+  (Note: fgIsDumpLog = false is already there in the original;
+   just insert the two new lines between it and the rMemOps block.)
+
+============================================================
+USAGE after deployment
+============================================================
+
+  cat /sys/kernel/debug/mtk_mon_dbgfs/pcie_recovery_state
+
+  Example output after a failed Tier-3 recovery:
+
+    stage=14
+    fail_reason=4
+    last_bar_sample=0x00000000
+    fail_time_jiffies=4294967295
+
+  Decode:
+    stage 14        = RECOV_STAGE_MCU_COLDBOOT
+    fail_reason 4   = RECOV_FAIL_COLDBOOT_TIMEOUT
+    last_bar_sample = the actual value read from BAR0 offset 0
+    fail_time       = jiffies timestamp; convert with:
+                        python3 -c "import time; print(time.time())"
+                      and compare to kernel boot time + jiffies/HZ.
