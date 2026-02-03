@@ -609,13 +609,17 @@ u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 				/* Return FALSE to indicate DriverOwn failed, stopping current flow */
 				return FALSE; 
 			} else {
-				/* Process Context: Safe to call synchronous recovery directly */
+				/* Check context: Defer if atomic, otherwise run directly */
+				if (in_atomic() || in_interrupt()) {
+					DBGLOG(HAL, WARN, "MMIO failure in atomic context - scheduling recovery\n");
+					mt7902_schedule_recovery_from_atomic(prAdapter->prGlueInfo);
+					return FALSE;
+				}
+
 				DBGLOG(HAL, INFO, "Running recovery directly (process context)\n");
 				fgStatus = (mt79xx_pci_function_recover(
 						prAdapter->prGlueInfo->rHifInfo.pdev,
 						prAdapter->prGlueInfo) == WLAN_STATUS_SUCCESS);
-				
-				/* We already unlocked above, so we return immediately */
 				return fgStatus;
 			}
 

@@ -1,0 +1,15 @@
+--- os/linux/hif/pcie/pcie.c
++++ os/linux/hif/pcie/pcie.c
+@@ -280,6 +280,12 @@
+ 	mutex_unlock(&prHifInfo->recovery_lock);
+ }
+ 
++static int mt7902_mmio_dead(struct GL_HIF_INFO *prHifInfo) {
++	u32 val;
++	pci_read_config_dword(prHifInfo->pdev, 0, &val);
++	return (val == 0xffffffff);
++}
++
+ void mt7902_schedule_recovery_from_atomic(struct GLUE_INFO *prGlueInfo)
+ {
+ 	struct GL_HIF_INFO *prHifInfo = &prGlueInfo->rHifInfo;
