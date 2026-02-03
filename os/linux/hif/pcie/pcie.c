@@ -1040,6 +1040,27 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 	DBGLOG(HAL, WARN, "Tier-3: Performing WFSYS MCU cold boot\n");
 	prAdapter->fgIsFwOwn = TRUE;
 
+	/* Tier-7: BAR Re-Sync / Link Verification */
+	DBGLOG(HAL, WARN, "Tier-7: Verifying BAR visibility before MCU boot\n");
+	HAL_MCR_RD(prAdapter, 0x18000000, &u4Val);
+	if (u4Val == 0xffffffff) {
+	    uint16_t cmd;
+	    DBGLOG(HAL, ERROR, "Tier-7: BAR is blind (0xffffffff). Attempting Command Register Kick.\n");
+	    pci_read_config_word(pdev, PCI_COMMAND, &cmd);
+	    pci_write_config_word(pdev, PCI_COMMAND, cmd & ~PCI_COMMAND_MEMORY);
+	    udelay(100);
+	    pci_write_config_word(pdev, PCI_COMMAND, cmd | PCI_COMMAND_MEMORY);
+	    msleep(50);
+
+	    /* Check again */
+	    HAL_MCR_RD(prAdapter, 0x18000000, &u4Val);
+	    if (u4Val == 0xffffffff) {
+		DBGLOG(HAL, ERROR, "Tier-7: Hardware is physically detached. Aborting to prevent lockup.\n");
+		goto recovery_failed;
+	    }
+	}
+	DBGLOG(HAL, WARN, "Tier-7: BAR is alive. Proceeding to MCU boot.\n");
+
 	if (mt79xx_wfsys_cold_boot_and_wait(prAdapter) != 0) {
 		DBGLOG(HAL, ERROR, "Tier-3: MCU cold boot failed\n");
 		goto recovery_failed;
