@@ -140,7 +140,8 @@ static void pcieDumpRx(struct GL_HIF_INFO *prHifInfo,
 		       uint32_t u4Idx, uint32_t u4DumpLen);
 
 
-
+static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id);
+static void mtk_pci_remove(struct pci_dev *pdev);
 /* Supported PCI device IDs for MT7902 */
 static const struct pci_device_id mtk_pci_ids[] = {
     { PCI_DEVICE(0x14c3, 0x7902), 
@@ -152,10 +153,9 @@ MODULE_DEVICE_TABLE(pci, mtk_pci_ids);
 static struct pci_driver mtk_pci_driver = {
     .name = "mtk_pci_driver",
     .id_table = mtk_pci_ids,
-    /* .probe and other members are assigned later in glRegisterBus */
+    .probe = mtk_pci_probe,   // IMPORTANT: Make sure these aren't missing
+    .remove = mtk_pci_remove, // IMPORTANT: Make sure these aren't missing
 };
-
-
 
 /*******************************************************************************
  * F U N C T I O N S
