@@ -265,6 +265,7 @@ static void pcieDumpRx(struct GL_HIF_INFO *prHifInfo,
 /*----------------------------------------------------------------------------*/
 void mt7902_schedule_recovery_from_atomic(struct GLUE_INFO *prGlueInfo)
 {
+
     struct GL_HIF_INFO *prHifInfo = &prGlueInfo->rHifInfo;
     
     /* Only schedule once */

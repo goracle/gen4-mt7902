@@ -57,6 +57,7 @@
 
 #ifndef _HIF_H
 #define _HIF_H
+#define MTK_FLAG_MMIO_GONE 0
 
 #include "hif_pdma.h"
 
