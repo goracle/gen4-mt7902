@@ -209,20 +209,46 @@ static inline void mt7902_mark_irq_dead(struct GL_HIF_INFO *prHifInfo)
  * \return void
  */
 /*----------------------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Schedule recovery from atomic/IRQ/tasklet context
+ *
+ * \param[in] func  pointer to PCIE handle
+ *
+ * \return void
+ */
+/*----------------------------------------------------------------------------*/
 void mt7902_schedule_recovery_from_atomic(struct GLUE_INFO *prGlueInfo)
 {
     struct GL_HIF_INFO *prHifInfo = &prGlueInfo->rHifInfo;
     
-    /* Only schedule once */
-    if (test_and_set_bit(MTK_FLAG_MMIO_GONE, &prHifInfo->state_flags))
+    /* * FIX 8A: GUARD DURING PROBE 
+     * If the driver hasn't finished probing (g_fgDriverProbed is FALSE), 
+     * we are likely in the middle of a cold boot, firmware download, or reset.
+     * MMIO reads of 0xdead0003 or 0xffffffff are EXPECTED during this phase.
+     * We must NOT arm the recovery workqueue yet.
+     */
+    if (!g_fgDriverProbed) {
+        /* Optional: limit log spam if this happens a lot during boot */
+        static int boot_warn_limit = 0;
+        if (boot_warn_limit++ < 5) {
+            printk(KERN_WARNING "mt7902: Ignoring MMIO error during probe (boot phase)\n");
+        }
         return;
+    }
 
-    DBGLOG(HAL, WARN, "MMIO failure in atomic context - scheduling recovery\n");
+    /* FIX 8B: LOUD LOGGING */
+    /* If we get here, the driver *was* alive, and now it's dying. Log it clearly. */
+    printk(KERN_ERR "mt7902: 🪤 RECOVERY TRIGGERED! MMIO is gone. Flags: %lx\n", 
+           prHifInfo->state_flags);
+
+    /* Only schedule once */
+    if (test_and_set_bit(MTK_FLAG_MMIO_GONE, &prHifInfo->state_flags)) {
+        printk(KERN_ERR "mt7902: Recovery already scheduled, skipping.\n");
+        return;
+    }
     
-    /* Mark IRQ as dead IMMEDIATELY - no more synchronize_irq allowed */
-    mt7902_mark_irq_dead(prHifInfo);
-
-    /* Disable IRQ (nosync is safe even if IRQ is already dying) */
+    /* Disable IRQ and stop queues safely from atomic context */
     if (prHifInfo->saved_irq > 0)
         disable_irq_nosync(prHifInfo->saved_irq);
         
@@ -231,6 +257,9 @@ void mt7902_schedule_recovery_from_atomic(struct GLUE_INFO *prGlueInfo)
 
     schedule_work(&prHifInfo->recovery_work);
 }
+
+
+
 
 static void mt7902_recovery_work(struct work_struct *work)
 {
