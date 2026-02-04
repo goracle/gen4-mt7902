@@ -6559,14 +6559,15 @@ void wlanSchedOidWorkQueue(struct work_struct *work)
 					prOidReq->pvInfoBuf);
 				kalMemFree(prOidReq->pvInfoBuf, VIR_MEM_TYPE, prOidReq->u4InfoBufLen);
 				prOidReq->pvInfoBuf = NULL;
-#if KERNEL_VERSION(6, 11, 0) <= LINUX_VERSION_CODE
-int mtk_cfg_start_radar_detection(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_chan_def *chandef, u32 cac_time_ms, int chain_mask)
-#else
-int mtk_cfg_start_radar_detection(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_chan_def *chandef, u32 cac_time_ms)
-#endif
-{
-	return 0;
+			}
+			DBGLOG(REQ, TRACE, "Free prOidReq 0x%px\n", prOidReq);
+			kalMemFree(prOidReq, VIR_MEM_TYPE, sizeof(PARAM_OID_REQ));
+		}
+	}
+
+	return;
 }
+#endif
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 void kalIndicateRxAuthToUpperLayer(struct net_device *prDevHandler,
