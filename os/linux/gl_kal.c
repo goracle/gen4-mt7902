@@ -6559,15 +6559,14 @@ void wlanSchedOidWorkQueue(struct work_struct *work)
 					prOidReq->pvInfoBuf);
 				kalMemFree(prOidReq->pvInfoBuf, VIR_MEM_TYPE, prOidReq->u4InfoBufLen);
 				prOidReq->pvInfoBuf = NULL;
-			}
-			DBGLOG(REQ, TRACE, "Free prOidReq 0x%px\n", prOidReq);
-			kalMemFree(prOidReq, VIR_MEM_TYPE, sizeof(PARAM_OID_REQ));
-		}
-	}
-
-	return;
-}
+#if KERNEL_VERSION(6, 11, 0) <= LINUX_VERSION_CODE
+int mtk_cfg_start_radar_detection(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_chan_def *chandef, u32 cac_time_ms, int chain_mask)
+#else
+int mtk_cfg_start_radar_detection(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_chan_def *chandef, u32 cac_time_ms)
 #endif
+{
+	return 0;
+}
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 void kalIndicateRxAuthToUpperLayer(struct net_device *prDevHandler,
@@ -9572,7 +9571,11 @@ void kalIndicateChannelSwitch(IN struct GLUE_INFO *prGlueInfo,
 
 	cfg80211_chandef_create(&chandef, prChannel, rChannelType);
 #if (CFG_ADVANCED_80211_MLO == 1)
+#if KERNEL_VERSION(6, 11, 0) <= LINUX_VERSION_CODE
+	cfg80211_ch_switch_notify(prGlueInfo->prDevHandler, &chandef, linkIdx);
+#else
 	cfg80211_ch_switch_notify(prGlueInfo->prDevHandler, &chandef, linkIdx, true);
+#endif
 #else
 	cfg80211_ch_switch_notify(prGlueInfo->prDevHandler, &chandef, true);
 #endif
