@@ -371,28 +371,18 @@ static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 				id->driver_data)->chip_info;
 	prChipInfo->pdev = (void *)pdev;
 
-#if (CFG_POWER_ON_DOWNLOAD_EMI_ROM_PATCH == 1)
-		g_fgDriverProbed = TRUE;
-		g_u4DmaMask = prChipInfo->bus_info->u4DmaMask;
-		
-		/* Clear initial cold boot flag - probe completed successfully */
-		g_fgInInitialColdBoot = FALSE;
-		DBGLOG(INIT, INFO, "Initial cold boot complete, WFDMA polling now enabled\n");
-#else
-	if (pfWlanProbe((void *) pdev,
-		(void *) id->driver_data) != WLAN_STATUS_SUCCESS) {
-		DBGLOG(INIT, INFO, "pfWlanProbe fail!call pfWlanRemove()\n");
-		pfWlanRemove();
-		ret = -1;
+	/* Always call the probe path and set global 'probed' only on success */
+	if (pfWlanProbe((void *) pdev, (void *) id->driver_data) != WLAN_STATUS_SUCCESS) {
+	    DBGLOG(INIT, INFO, "pfWlanProbe fail!call pfWlanRemove()\n");
+	    pfWlanRemove();
+	    ret = -1;
 	} else {
-		g_fgDriverProbed = TRUE;
-		g_u4DmaMask = prChipInfo->bus_info->u4DmaMask;
-		
-		/* Clear initial cold boot flag - probe completed successfully */
-		g_fgInInitialColdBoot = FALSE;
-		DBGLOG(INIT, INFO, "Initial cold boot complete, WFDMA polling now enabled\n");
+	    g_fgDriverProbed = TRUE;
+	    g_u4DmaMask = prChipInfo->bus_info->u4DmaMask;
+	    /* Clear initial cold boot flag - probe completed successfully */
+	    g_fgInInitialColdBoot = FALSE;
+	    DBGLOG(INIT, INFO, "Initial cold boot complete, WFDMA polling now enabled\n");
 	}
-#endif
 
 out:
 	DBGLOG(INIT, INFO, "mtk_pci_probe() done(%d)\n", ret);
