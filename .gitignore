@@ -16,4 +16,13 @@ Module.symvers
 modules.order
 .modules.order.cmd
 .Module.symvers.cmd
+# bring-up / manual backup artifacts
+*.backup_*
+*.backup_compilefix_*
+*.backup_mobile_*
 
+# editor undo files
+.*.~undo-tree~
+
+# local logs
+*_dmesg.log
