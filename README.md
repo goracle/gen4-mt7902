@@ -107,6 +107,15 @@ Confirm firmware exists where your kernel expects it (e.g. `/lib/firmware/WIFI_R
 
 3. The `mt7902-late.service` will run after login to bind/load the module. This path is **optional** — use it only if you want the service-managed load behavior.
 
+### C) Optional systemd Reset Helper (Automated Shutdown Fix)
+If you experience hangs during shutdown or reboot, enable this service to automate the unload process:
+
+```bash
+sudo cp mt7902-reset.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable mt7902-reset.service
+```
+
 ### B) Simple manual / per-login method (no systemd)
 
 (Use this if you do **not** want to use the systemd service.)
@@ -153,10 +162,11 @@ sudo dkms install -m gen4-mt7902 -v 0.1
 
 ### Shutdown/reboot hang
 
-If your system hangs during shutdown or reboot, manually unload the module first:
+If your system hangs during shutdown or reboot, the module likely needs to be unloaded. This repo now includes `mt7902-reset.service` to handle this automatically (see Installation section). If you prefer manual intervention:
 
 ```bash
 sudo rmmod mt7902
+```
 ```
 
 I don't yet know how to make this automatic.
