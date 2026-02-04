@@ -1,4 +1,6 @@
 *.o
+*.orig
+*.rej
 mt7902_dmesg.log
 *undo-tree*
 *\#*\#
