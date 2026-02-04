@@ -1,0 +1,26 @@
+# /etc/systemd/system/mt7902-late.service
+[Unit]
+Description=Late Load MT7902 WiFi Driver
+# We wait until the Display Manager (Login Screen) is ready.
+# This is usually when PCIe power management is "finalized" for user interaction.
+After=graphical.target systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+User=root
+# CRITICAL: Set this to the folder containing your load.sh and .ko file
+WorkingDirectory=/home/<your username>/builds/gen4-mt7902
+
+# The "Magic" Delay:
+# Waits 15 seconds after the GUI starts before trying to load.
+# This mimics "after login" timing without needing user interaction.
+ExecStartPre=/usr/bin/sleep 15
+
+# Run the script
+ExecStart=/bin/bash ./load.sh
+
+# Consider the service "active" after it runs, so it doesn't try to restart oddly
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical.target
