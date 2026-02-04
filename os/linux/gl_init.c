@@ -6135,6 +6135,8 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 	u_int8_t i = 0;
 	struct REG_INFO *prRegInfo;
 	struct mt66xx_chip_info *prChipInfo;
+	/* ---- 1) Declare a local hif pointer near other locals in wlanProbe() ---- */
+	struct GL_HIF_INFO *prHifInfo = NULL; /* <-- add this near prGlueInfo/prAdapter declarations */
 	struct WIFI_VAR *prWifiVar;
 #if (MTK_WCN_HIF_SDIO && CFG_WMT_WIFI_PATH_SUPPORT)
 	int32_t i4RetVal = 0;
@@ -6223,6 +6225,62 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		/* At this point MCU is alive */
 		DBGLOG(INIT, INFO, "WFSYS MCU is alive, continuing adapter start\n");
 
+		/* --- SANITY: ensure host arbitration domain (CONNINFRA) is responsive --- */
+		/* Insert after: "WFSYS MCU is alive, continuing adapter start" */
+
+		{
+		    int poll = 0;
+		    int max_poll = 50; /* 50 * 10ms = 500ms total wait; tuneable */
+		    uint32_t sample = 0;
+		    void __iomem *bar = NULL;
+
+		    /* defensive wiring: prGlueInfo should have been set earlier */
+		    if (prGlueInfo)
+			prHifInfo = &prGlueInfo->rHifInfo;
+
+		    if (prHifInfo)
+			bar = prHifInfo->CSRBaseAddress;
+
+		    if (bar) {
+			for (poll = 0; poll < max_poll; poll++) {
+			    /* Use a host-status CSR (fallback offset 0x710c used in logs).
+			    * Replace with a symbolic offset if available.
+			    */
+		#ifdef HOST_STATUS_OFFSET
+			    sample = readl_relaxed(bar + HOST_STATUS_OFFSET);
+		#else
+			    sample = readl_relaxed(bar + 0x710c);
+		#endif
+			    /* Consider the host live if we don't get the blind or dead patterns */
+			    if (sample != 0xFFFFFFFF && ((sample & 0xFFFF0000) != 0xDEAD0000)) {
+				break;
+			    }
+			    mdelay(10);
+			}
+		    }
+
+		    if (poll == max_poll) {
+			DBGLOG(INIT, ERROR,
+			    "CONNINFRA sanity-check failed after MCU boot: host status=0x%08x\n",
+			    sample);
+			/* safe-guarded dumps (only call if pointers valid) */
+			if (prHifInfo && prHifInfo->pdev)
+			    dump_pci_state(prHifInfo->pdev);
+			if (prAdapter)
+			    dump_mailbox(prAdapter);
+			if (prAdapter)
+			    dump_pdma_state(prAdapter);
+
+			/* Fail fast - driver cannot proceed to LP-OWN if arbitration domain hung */
+			i4Status = -EIO;
+			eFailReason = ADAPTER_START_FAIL;
+			goto probe_done_cleanup;
+		    }
+
+		    DBGLOG(INIT, INFO,
+			"CONNINFRA host arbitration sane after MCU boot (status=0x%08x) after %d loops\n",
+			sample, poll);
+		}
 
 		if (wlanAdapterStart(prAdapter,
 				     prRegInfo, FALSE) != WLAN_STATUS_SUCCESS)
@@ -6350,6 +6408,8 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		}
 #endif
 	} while (FALSE);
+
+probe_done_cleanup:
 
 	if (i4Status == 0) {
 		wlanOnWhenProbeSuccess(prGlueInfo, prAdapter, FALSE);
