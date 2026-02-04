@@ -743,18 +743,17 @@ int mtk_cfg_testmode_cmd(struct wiphy *wiphy, void *data,
 
 #if (CFG_SUPPORT_DFS_MASTER == 1)
 #if KERNEL_VERSION(3, 15, 0) <= CFG80211_VERSION_CODE
-int mtk_cfg_start_radar_detection(struct wiphy *wiphy,
-				  struct net_device *dev,
-				  struct cfg80211_chan_def *chandef,
-				  unsigned int cac_time_ms
-#if CFG80211_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
-				  //, int link_id
-#endif
-				);
+#if KERNEL_VERSION(6, 11, 0) <= LINUX_VERSION_CODE
+int mtk_cfg_start_radar_detection(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_chan_def *chandef, u32 cac_time_ms, int chain_mask);
 #else
-int mtk_cfg_start_radar_detection(struct wiphy *wiphy,
-				  struct net_device *dev,
-				  struct cfg80211_chan_def *chandef);
+int mtk_cfg_start_radar_detection(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_chan_def *chandef, u32 cac_time_ms);
+#endif
+#else
+#if KERNEL_VERSION(6, 11, 0) <= LINUX_VERSION_CODE
+int mtk_cfg_start_radar_detection(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_chan_def *chandef, u32 cac_time_ms, int chain_mask);
+#else
+int mtk_cfg_start_radar_detection(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_chan_def *chandef, u32 cac_time_ms);
+#endif
 #endif
 
 
