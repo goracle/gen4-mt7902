@@ -86,6 +86,9 @@ static remove_card pfWlanRemove;
 static u_int8_t g_fgDriverProbed = FALSE;
 static uint32_t g_u4DmaMask = 32;
 
+u_int8_t g_fgInInitialColdBoot = TRUE;  /* Exported for HAL layer */
+
+
 /*******************************************************************************
  * M A C R O S
  *******************************************************************************
@@ -218,45 +221,61 @@ static inline void mt7902_mark_irq_dead(struct GL_HIF_INFO *prHifInfo)
  * \return void
  */
 /*----------------------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Schedule recovery from atomic/IRQ/tasklet context
+ *
+ * \param[in] prGlueInfo Pointer to Glue Info
+ *
+ * \return void
+ */
+/*----------------------------------------------------------------------------*/
 void mt7902_schedule_recovery_from_atomic(struct GLUE_INFO *prGlueInfo)
 {
-    struct GL_HIF_INFO *prHifInfo = &prGlueInfo->rHifInfo;
-    
-    /* * FIX 8A: GUARD DURING PROBE 
-     * If the driver hasn't finished probing (g_fgDriverProbed is FALSE), 
-     * we are likely in the middle of a cold boot, firmware download, or reset.
-     * MMIO reads of 0xdead0003 or 0xffffffff are EXPECTED during this phase.
-     * We must NOT arm the recovery workqueue yet.
+    struct GL_HIF_INFO *prHifInfo;
+
+    if (!prGlueInfo)
+        return;
+
+    prHifInfo = &prGlueInfo->rHifInfo;
+
+    /* * FIX: PREVENT ILLEGAL RECOVERY SEQUENCING
+     * As diagnosed: Recovery logic assumes Host Ownership, configured DMA rings,
+     * and specific WFDMA states. None of these exist before Probe completes.
+     *
+     * 0xDEADxxxx reads during probe are often transient (split-brain window).
+     * Triggering recovery here is illegal; we must let the probe fail gracefully
+     * or retry via standard init logic, not invoke SER/DMA polling.
      */
     if (!g_fgDriverProbed) {
-        /* Optional: limit log spam if this happens a lot during boot */
-        static int boot_warn_limit = 0;
-        if (boot_warn_limit++ < 5) {
-            printk(KERN_WARNING "mt7902: Ignoring MMIO error during probe (boot phase)\n");
+        if (net_ratelimit()) {
+            printk(KERN_WARNING "mt7902: Ignoring recovery request during probe/boot phase. "
+                   "MMIO anomaly (0x%08x) is likely transient or sequencing error.\n",
+                   readl(prHifInfo->CSRBaseAddress + 0x0));
         }
         return;
     }
 
-    /* FIX 8B: LOUD LOGGING */
-    /* If we get here, the driver *was* alive, and now it's dying. Log it clearly. */
-    printk(KERN_ERR "mt7902: 🪤 RECOVERY TRIGGERED! MMIO is gone. Flags: %lx\n", 
-           prHifInfo->state_flags);
-
-    /* Only schedule once */
+    /* Standard Recovery Logic - Only runs POST-PROBE */
     if (test_and_set_bit(MTK_FLAG_MMIO_GONE, &prHifInfo->state_flags)) {
-        printk(KERN_ERR "mt7902: Recovery already scheduled, skipping.\n");
+        /* Prevent duplicate scheduling */
         return;
     }
     
-    /* Disable IRQ and stop queues safely from atomic context */
+    printk(KERN_ERR "mt7902: MMIO failure detected post-probe. Scheduling recovery.\n");
+
+    /* Disable IRQ safely */
     if (prHifInfo->saved_irq > 0)
         disable_irq_nosync(prHifInfo->saved_irq);
         
+    /* Stop queues */
     if (prGlueInfo->prDevHandler)
         netif_tx_stop_all_queues(prGlueInfo->prDevHandler);
 
     schedule_work(&prHifInfo->recovery_work);
 }
+
+
 
 
 
@@ -334,8 +353,7 @@ static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	ASSERT(pdev);
 	ASSERT(id);
 
-	ret = pci_enable_device(pdev); if (ret) DBGLOG(HAL, ERROR, "Tier-6: Failed to re-enable PCIe device\n");
-
+	ret = pci_enable_device(pdev);
 	if (ret) {
 		DBGLOG(INIT, INFO, "pci_enable_device failed!\n");
 		goto out;
@@ -356,6 +374,10 @@ static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 #if (CFG_POWER_ON_DOWNLOAD_EMI_ROM_PATCH == 1)
 		g_fgDriverProbed = TRUE;
 		g_u4DmaMask = prChipInfo->bus_info->u4DmaMask;
+		
+		/* Clear initial cold boot flag - probe completed successfully */
+		g_fgInInitialColdBoot = FALSE;
+		DBGLOG(INIT, INFO, "Initial cold boot complete, WFDMA polling now enabled\n");
 #else
 	if (pfWlanProbe((void *) pdev,
 		(void *) id->driver_data) != WLAN_STATUS_SUCCESS) {
@@ -365,6 +387,10 @@ static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	} else {
 		g_fgDriverProbed = TRUE;
 		g_u4DmaMask = prChipInfo->bus_info->u4DmaMask;
+		
+		/* Clear initial cold boot flag - probe completed successfully */
+		g_fgInInitialColdBoot = FALSE;
+		DBGLOG(INIT, INFO, "Initial cold boot complete, WFDMA polling now enabled\n");
 	}
 #endif
 
@@ -374,6 +400,7 @@ out:
 	return ret;
 }
 
+
 static void mtk_pci_remove(struct pci_dev *pdev)
 {
 	ASSERT(pdev);
@@ -381,6 +408,9 @@ static void mtk_pci_remove(struct pci_dev *pdev)
 	if (g_fgDriverProbed)
 		pfWlanRemove();
 	DBGLOG(INIT, INFO, "pfWlanRemove done\n");
+	
+	/* Reset the flag in case module is reloaded */
+	g_fgInInitialColdBoot = TRUE;
 
 	/* Unmap CSR base address */
 	iounmap(CSRBaseAddress);
@@ -389,9 +419,10 @@ static void mtk_pci_remove(struct pci_dev *pdev)
 	pci_release_regions(pdev);
 
 	pci_disable_device(pdev);
-    pci_disable_msi(pdev);
+	pci_disable_msi(pdev);
 	DBGLOG(INIT, INFO, "mtk_pci_remove() done\n");
 }
+
 
 static int mtk_pci_suspend(struct pci_dev *pdev, pm_message_t state)
 {
@@ -1027,7 +1058,6 @@ void glResetHifInfo(struct GLUE_INFO *prGlueInfo)
 uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 					    struct GLUE_INFO *prGlueInfo)
 {
-
     /* CRITICAL V2 FIX: Check if called from atomic context */
     if (in_atomic() || in_interrupt() || irqs_disabled()) {
         DBGLOG(HAL, ERROR, 
@@ -1284,6 +1314,14 @@ uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 	DBGLOG(HAL, WARN, "Tier-3: Performing WFSYS MCU cold boot\n");
 	prAdapter->fgIsFwOwn = TRUE;
 	prHifInfo->u8RecoveryStage = RECOV_STAGE_MCU_COLDBOOT;
+
+	/* CRITICAL FIX: During recovery cold boot, we CAN poll WFDMA because 
+	 * fabric should be properly reset by this point (we did D3cold, SBR, etc.)
+	 * Unlike initial cold boot where fabric is uninitialized, here we're
+	 * recovering from a known state and WFDMA polling is appropriate.
+	 */
+	g_fgInInitialColdBoot = FALSE;
+	DBGLOG(HAL, INFO, "Recovery context: enabling WFDMA polling for cold boot\n");
 
 	{
 		int coldboot_ret = mt79xx_wfsys_cold_boot_and_wait(prAdapter);
@@ -2007,5 +2045,6 @@ void halPciePreSuspendTimeout(
 	prAdapter->prGlueInfo->rHifInfo.eSuspendtate =
 		PCIE_STATE_PRE_SUSPEND_FAIL;
 }
+
 
 
