@@ -1,4 +1,4 @@
-/*******************************************************************************
+/********************************************************************************
  *
  * This file is provided under a dual license.  When you use or
  * distribute this software, you may choose to be licensed under
@@ -1451,11 +1451,9 @@ static void glLoadNvram(struct GLUE_INFO *prGlueInfo,
 	ASSERT(prGlueInfo);
 
 	DBGLOG(INIT, INFO, "g_NvramFsm = %d\n", g_NvramFsm);
-	if (g_NvramFsm != NVRAM_STATE_READY) {
-		DBGLOG(INIT, WARN, "Nvram not available\n");
-		return;
-	}
-
+	DBGLOG(INIT, INFO, "FORCING LOAD\n");
+	g_NvramFsm = NVRAM_STATE_READY;
+	(void)prNvramSettings;
 	if (sizeof(struct WIFI_CFG_PARAM_STRUCT) >
 					sizeof(g_aucNvram)) {
 		DBGLOG(INIT, ERROR,
@@ -3746,7 +3744,7 @@ void wlanGetConfig(struct ADAPTER *prAdapter)
 			   WLAN_CFG_FILE_BUF_SIZE, &u4ConfigReadLen,
 			   prAdapter->prGlueInfo->prDev) == 0) {
 			/* ToDo:: Nothing */
-		} else if (kalReadToFile("/data/misc/wifi/wifi.cfg",
+		} else if (kalReadToFile("/lib/firmware/mediatek/mt7902/wifi.cfg",
 			   pucConfigBuf, WLAN_CFG_FILE_BUF_SIZE,
 			   &u4ConfigReadLen) == 0) {
 			/* ToDo:: Nothing */
@@ -4852,6 +4850,34 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 			DBGLOG(INIT, INFO, "MAC address: " MACSTR,
 			MAC2STR(prAdapter->rWifiVar.aucMacAddress));
 #endif
+
+	/* Replay cached regdom update if one occurred before glue was ready */
+	extern struct mtk_regd_control g_mtk_regd_control;
+	if (g_mtk_regd_control.pending_regdom_update) {
+		char acAlpha2[3] = {0};
+		acAlpha2[0] = (g_mtk_regd_control.cached_alpha2 & 0xFF);
+		acAlpha2[1] = ((g_mtk_regd_control.cached_alpha2 >> 8) & 0xFF);
+		/* Only replay if it's not "00" */
+		if (acAlpha2[0] != '0' || acAlpha2[1] != '0') {
+			DBGLOG(INIT, INFO, "Replaying cached regdom update: %s\n", acAlpha2);
+			rlmDomainSetCountryCode(acAlpha2, 2);
+			rlmDomainCountryCodeUpdate(prAdapter, wlanGetWiphy(), 
+				g_mtk_regd_control.cached_alpha2);
+		} else {
+			/* Query the current regulatory domain from cfg80211 */
+			const struct ieee80211_regdomain *regdom;
+			DBGLOG(INIT, INFO, "Cached regdom was (00), querying current regdom\n");
+			regdom = get_wiphy_regdom(wlanGetWiphy());
+			if (regdom && regdom->alpha2[0] != '0') {
+				DBGLOG(INIT, INFO, "Applying current regdom: %c%c\n", 
+					regdom->alpha2[0], regdom->alpha2[1]);
+				rlmDomainSetCountryCode((char *)regdom->alpha2, 2);
+				rlmDomainCountryCodeUpdate(prAdapter, wlanGetWiphy(),
+					rlmDomainAlpha2ToU32((char *)regdom->alpha2, 2));
+			}
+		}
+		g_mtk_regd_control.pending_regdom_update = FALSE;
+	}
 		}
 
 		/* wlan1 */
@@ -5041,6 +5067,18 @@ int32_t wlanOnWhenProbeSuccess(struct GLUE_INFO *prGlueInfo,
 #if CFG_MTK_ANDROID_WMT
 	update_driver_loaded_status(prGlueInfo->u4ReadyFlag);
 #endif
+
+	/* ===== MT7902 FIX #2B: Restore carrier after reset ===== */
+	if (kalIsResetting() && prGlueInfo->prDevHandler) {
+		DBGLOG(INIT, WARN,
+		       "MT7902-FIX: Carrier ON after reset recovery\n");
+		netif_carrier_on(prGlueInfo->prDevHandler);
+		netif_tx_wake_all_queues(prGlueInfo->prDevHandler);
+	}
+	/* ===== END FIX #2B ===== */
+
+
+
 
 	kalSetHalted(FALSE);
 
@@ -5923,6 +5961,158 @@ int32_t wlanOnAtReset(void)
  * \retval negative value Failed
  */
 /*----------------------------------------------------------------------------*/
+/* helper: try to cold-boot WFSYS MCU and verify it comes up */
+int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter)
+{
+    struct mt66xx_chip_info *prChipInfo;
+    struct GL_HIF_INFO      *prHifInfo;
+    void __iomem            *bar;
+    int  attempts = 2;
+    int  ret      = -ETIMEDOUT;
+
+    if (!prAdapter) return -EINVAL;
+
+    prChipInfo = prAdapter->chip_info;
+    if (!prChipInfo || !prChipInfo->asicWfsysRst ||
+        !prChipInfo->asicPollWfsysSwInitDone) {
+        DBGLOG(INIT, WARN, "WFSYS reset/poll hooks not present\n");
+        return -ENOTSUPP;
+    }
+
+    /* Grab the BAR pointer for the raw blind-check.  We do NOT use
+     * HAL_MCR_RD here because HAL_MCR_RD short-circuits on
+     * ADAPTER_FLAG_HW_ERR; if that flag is stale we would never see
+     * 0xffffffff and would burn attempts against a dead bus.
+     */
+    prHifInfo = &prAdapter->prGlueInfo->rHifInfo;
+    bar       = prHifInfo->CSRBaseAddress;
+    if (!bar) {
+        DBGLOG(INIT, ERROR, "cold_boot: CSRBaseAddress is NULL\n");
+        return -EIO;
+    }
+
+    /* Log whether WFSYS thinks it is already alive.  We force the
+     * cold boot regardless (the caller already did clock/power
+     * hammering that invalidates any prior state), but the value is
+     * useful in the log.
+     */
+    if (prChipInfo->asicPollWfsysSwInitDone(prAdapter))
+        DBGLOG(INIT, WARN, "WFSYS poll says init-done PRE-reset; forcing cold boot anyway\n");
+
+    while (attempts-- > 0) {
+        int      i;
+        bool     ok   = false;
+        uint32_t bar0 = 0;
+
+        DBGLOG(INIT, INFO, "WFSYS cold-boot attempt %d of 2\n", 2 - attempts);
+
+        /* ----------------------------------------------------------
+         * BAR blind-check: raw readl, no HAL indirection.
+         * If the bus is dead we return -EIO immediately and do NOT
+         * consume another attempt.  pcie.c maps -EIO to
+         * RECOV_FAIL_COLDBOOT_BLIND.
+         * ----------------------------------------------------------
+         */
+        bar0 = readl_relaxed(bar);
+        DBGLOG(INIT, INFO, "  BAR0[0] pre-reset = 0x%08x\n", bar0);
+        if (bar0 == 0xffffffff) {
+            DBGLOG(INIT, ERROR,
+                   "  BAR blind (0xffffffff) - bus is dead, aborting cold boot\n");
+            dump_pci_state(prHifInfo->pdev);
+            dump_mailbox(prAdapter);
+            return -EIO;
+        }
+
+        /* ----------------------------------------------------------
+         * CONNINFRA revision snapshot (pre-reset, debug only)
+         * ----------------------------------------------------------
+         */
+#ifdef CONNINFRA_INFRACON_REV_ADDR
+        {
+            uint32_t pre_rev = 0;
+            HAL_MCR_RD(prAdapter, CONNINFRA_INFRACON_REV_ADDR, &pre_rev);
+            DBGLOG(INIT, INFO, "  CONNINFRA rev pre-reset: 0x%08x\n", pre_rev);
+        }
+#endif
+
+        /* Assert reset (hold MCU) */
+        prChipInfo->asicWfsysRst(prAdapter, TRUE);
+        mdelay(5);   /* 5 ms settle for reset to propagate */
+
+        /* Deassert reset - MCU ROM starts executing */
+        prChipInfo->asicWfsysRst(prAdapter, FALSE);
+
+        /* ----------------------------------------------------------
+         * Poll for init-done: up to 1000 ms in 10 ms steps.
+         *
+         * On every iteration we also do a raw BAR read every 100 ms.
+         * If it goes 0xffffffff mid-poll the bus collapsed during
+         * boot (e.g. link retrained) - we bail immediately with -EIO
+         * rather than burning the remaining poll time.
+         *
+         * On the LAST iteration (timeout) we log the raw BAR value
+         * so the dump shows what the device was actually presenting,
+         * not just "timeout".
+         * ----------------------------------------------------------
+         */
+        for (i = 0; i < 100; i++) {
+            if (prChipInfo->asicPollWfsysSwInitDone(prAdapter)) {
+                ok = true;
+                break;
+            }
+
+            /* Periodic BAR sanity check every 10 iterations (100 ms) */
+            if ((i % 10) == 9) {
+                bar0 = readl_relaxed(bar);
+                if (bar0 == 0xffffffff) {
+                    DBGLOG(INIT, ERROR,
+                           "  BAR went blind at poll iter %d - bus collapsed\n", i);
+                    dump_pci_state(prHifInfo->pdev);
+                    dump_mailbox(prAdapter);
+                    return -EIO;
+                }
+            }
+            mdelay(10);
+        }
+
+        if (ok) {
+            DBGLOG(INIT, INFO, "  WFSYS MCU signaled init-done at iter %d\n", i);
+#ifdef CONNINFRA_INFRACON_REV_ADDR
+            {
+                uint32_t post_rev = 0;
+                HAL_MCR_RD(prAdapter, CONNINFRA_INFRACON_REV_ADDR, &post_rev);
+                DBGLOG(INIT, INFO, "  CONNINFRA rev post-reset: 0x%08x\n", post_rev);
+            }
+#endif
+            ret = 0;
+            break;   /* out of attempts loop */
+        }
+
+        /* ----------------------------------------------------------
+         * Timeout on this attempt.  Log the last raw BAR value and
+         * call the dump helpers so we get mailbox + PDMA state before
+         * we either retry or give up.
+         * ----------------------------------------------------------
+         */
+        bar0 = readl_relaxed(bar);
+        DBGLOG(INIT, WARN,
+               "  WFSYS init-done timeout (attempt %d). BAR0[0]=0x%08x\n",
+               2 - attempts, bar0);
+        dump_mailbox(prAdapter);
+        dump_pdma_state(prAdapter);
+
+        mdelay(50);  /* short backoff before retry */
+    }   /* end attempts */
+
+    /* If we fell through without ok==true, ret is still -ETIMEDOUT.
+     * pcie.c maps that to RECOV_FAIL_COLDBOOT_TIMEOUT.
+     */
+    return ret;
+
+}
+
+
+
 static int32_t wlanProbe(void *pvData, void *pvDriverData)
 {
 	struct wireless_dev *prWdev = NULL;
@@ -5945,6 +6135,8 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 	u_int8_t i = 0;
 	struct REG_INFO *prRegInfo;
 	struct mt66xx_chip_info *prChipInfo;
+	/* ---- 1) Declare a local hif pointer near other locals in wlanProbe() ---- */
+	struct GL_HIF_INFO *prHifInfo = NULL; /* <-- add this near prGlueInfo/prAdapter declarations */
 	struct WIFI_VAR *prWifiVar;
 #if (MTK_WCN_HIF_SDIO && CFG_WMT_WIFI_PATH_SUPPORT)
 	int32_t i4RetVal = 0;
@@ -6022,6 +6214,73 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 			prAdapter,
 			&prRegInfo,
 			&prChipInfo);
+
+		/* Try to cold-boot WFSYS MCU and wait for it */
+		if (mt79xx_wfsys_cold_boot_and_wait(prAdapter) != 0) {
+		    DBGLOG(INIT, ERROR,
+			"WFSYS init failed: MCU did not come alive\n");
+		    return -ENODEV;
+		}
+
+		/* At this point MCU is alive */
+		DBGLOG(INIT, INFO, "WFSYS MCU is alive, continuing adapter start\n");
+
+		/* --- SANITY: ensure host arbitration domain (CONNINFRA) is responsive --- */
+		/* Insert after: "WFSYS MCU is alive, continuing adapter start" */
+
+		{
+		    int poll = 0;
+		    int max_poll = 50; /* 50 * 10ms = 500ms total wait; tuneable */
+		    uint32_t sample = 0;
+		    void __iomem *bar = NULL;
+
+		    /* defensive wiring: prGlueInfo should have been set earlier */
+		    if (prGlueInfo)
+			prHifInfo = &prGlueInfo->rHifInfo;
+
+		    if (prHifInfo)
+			bar = prHifInfo->CSRBaseAddress;
+
+		    if (bar) {
+			for (poll = 0; poll < max_poll; poll++) {
+			    /* Use a host-status CSR (fallback offset 0x710c used in logs).
+			    * Replace with a symbolic offset if available.
+			    */
+		#ifdef HOST_STATUS_OFFSET
+			    sample = readl_relaxed(bar + HOST_STATUS_OFFSET);
+		#else
+			    sample = readl_relaxed(bar + 0x710c);
+		#endif
+			    /* Consider the host live if we don't get the blind or dead patterns */
+			    if (sample != 0xFFFFFFFF && ((sample & 0xFFFF0000) != 0xDEAD0000)) {
+				break;
+			    }
+			    mdelay(10);
+			}
+		    }
+
+		    if (poll == max_poll) {
+			DBGLOG(INIT, ERROR,
+			    "CONNINFRA sanity-check failed after MCU boot: host status=0x%08x\n",
+			    sample);
+			/* safe-guarded dumps (only call if pointers valid) */
+			if (prHifInfo && prHifInfo->pdev)
+			    dump_pci_state(prHifInfo->pdev);
+			if (prAdapter)
+			    dump_mailbox(prAdapter);
+			if (prAdapter)
+			    dump_pdma_state(prAdapter);
+
+			/* Fail fast - driver cannot proceed to LP-OWN if arbitration domain hung */
+			i4Status = -EIO;
+			eFailReason = ADAPTER_START_FAIL;
+			goto probe_done_cleanup;
+		    }
+
+		    DBGLOG(INIT, INFO,
+			"CONNINFRA host arbitration sane after MCU boot (status=0x%08x) after %d loops\n",
+			sample, poll);
+		}
 
 		if (wlanAdapterStart(prAdapter,
 				     prRegInfo, FALSE) != WLAN_STATUS_SUCCESS)
@@ -6149,6 +6408,8 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		}
 #endif
 	} while (FALSE);
+
+probe_done_cleanup:
 
 	if (i4Status == 0) {
 		wlanOnWhenProbeSuccess(prGlueInfo, prAdapter, FALSE);

@@ -397,6 +397,17 @@ void glResetTriggerMobile(IN struct ADAPTER *prAdapter, IN uint32_t u4RstFlag)
 #endif
 
 	fgIsResetting = TRUE;
+
+	/* ===== MT7902 FIX #2A: Carrier OFF during reset (Mobile) ===== */
+	if (prAdapter && prAdapter->prGlueInfo && prAdapter->prGlueInfo->prDevHandler) {
+		DBGLOG(INIT, WARN, "MT7902-FIX: Carrier OFF during reset (Mobile)\n");
+		netif_carrier_off(prAdapter->prGlueInfo->prDevHandler);
+		netif_tx_stop_all_queues(prAdapter->prGlueInfo->prDevHandler);
+	}
+	/* ===== END FIX #2A ===== */
+
+
+
 #if (CFG_SUPPORT_CONNINFRA == 1)
 	prChipInfo = prAdapter->chip_info;
 
@@ -566,6 +577,17 @@ void glResetTriggerCe(IN struct ADAPTER *prAdapter, IN uint32_t u4RstFlag)
 {
 	if (u4RstFlag & RST_FLAG_DO_WHOLE_RESET) {
 		fgIsResetting = TRUE;
+
+	/* ===== MT7902 FIX #2A: Carrier OFF during reset (CE) ===== */
+	if (prAdapter && prAdapter->prGlueInfo && prAdapter->prGlueInfo->prDevHandler) {
+		DBGLOG(INIT, WARN, "MT7902-FIX: Carrier OFF during reset (CE)\n");
+		netif_carrier_off(prAdapter->prGlueInfo->prDevHandler);
+		netif_tx_stop_all_queues(prAdapter->prGlueInfo->prDevHandler);
+	}
+	/* ===== END FIX #2A ===== */
+
+
+
 		fgSimplifyResetFlow = FALSE;
 		wifi_rst.prGlueInfo = prAdapter->prGlueInfo;
 		schedule_work(&(wifi_rst.rst_work));

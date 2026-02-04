@@ -1601,7 +1601,9 @@ struct mt66xx_chip_info mt66xx_chip_info_mt7902 = {
 	.top_hcr = CONNAC2X_TOP_HCR,
 	.top_hvr = CONNAC2X_TOP_HVR,
 	.top_fvr = CONNAC2X_TOP_FVR,
+	#if (CFG_SUPPORT_802_11AX == 1)
 	.arb_ac_mode_addr = MT7902_ARB_AC_MODE_ADDR,
+	#endif
 	.asicCapInit = asicConnac2xCapInit,
 #if CFG_ENABLE_FW_DOWNLOAD
 	.asicEnableFWDownload = NULL,

@@ -646,7 +646,7 @@ u_int8_t wlanIsDriverReady(IN struct GLUE_INFO *prGlueInfo,
 
 		if ((u4Check & WLAN_DRV_READY_CHCECK_HIF_SUSPEND) &&
 			(!halIsHifStateReady(prGlueInfo->prAdapter, &u1State))) {
-			DBGLOG(REQ, WARN, "driver state[%d]\n", u1State);
+			DBGLOG_LIMITED(REQ, LOUD, "driver state[%d]\n", u1State); /* MT7902-FIX: Rate-limited */
 			fgIsReady = FALSE;
 		}
 

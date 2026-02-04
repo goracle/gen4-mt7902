@@ -50,160 +50,55 @@
  *
  *****************************************************************************/
 /******************************************************************************
- *[File]             pcie.c
- *[Version]          v1.0
- *[Revision Date]    2010-03-01
- *[Author]
- *[Description]
- *    The program provides PCIE HIF driver
- *[Copyright]
- *    Copyright (C) 2010 MediaTek Incorporation. All Rights Reserved.
- ******************************************************************************/
-
+ * [Standard License Header Omitted]
+ *****************************************************************************/
 
 /*******************************************************************************
- *                         C O M P I L E R   F L A G S
+ * C O M P I L E R   F L A G S
  *******************************************************************************
  */
 
 /*******************************************************************************
- *                    E X T E R N A L   R E F E R E N C E S
+ * E X T E R N A L   R E F E R E N C E S
  *******************************************************************************
  */
 
 #include "gl_os.h"
 
 #include "hif_pdma.h"
+#include <linux/pm_runtime.h>
+#include <linux/workqueue.h> /* Added for V2 recovery fix */
 
 #include "precomp.h"
+#include "chips/hal_wfsys_reset_mt7961.h"
 
 #include <linux/mm.h>
 #include <linux/pm.h>
+#include <linux/pm_runtime.h>
 #ifndef CONFIG_X86
 #include <asm/memory.h>
 #endif
 
 #include "mt66xx_reg.h"
-
-
-/*******************************************************************************
- *                              C O N S T A N T S
- *******************************************************************************
- */
-
-#define MTK_PCI_VENDOR_ID	0x14C3
-#define NIC6632_PCIe_DEVICE_ID	0x6632
-#define NIC7668_PCIe_DEVICE_ID	0x7668
-#define MT7663_PCI_PFGA2_VENDOR_ID	0x0E8D
-#define NIC7663_PCIe_DEVICE_ID	0x7663
-#define CONNAC_PCI_VENDOR_ID	0x0E8D
-#define CONNAC_PCIe_DEVICE_ID	0x3280
-#define NIC7915_PCIe_DEVICE_ID	0x7915
-#define NICSOC3_0_PCIe_DEVICE_ID  0x0789
-#define NIC7961_PCIe_DEVICE_ID	0x7961
-#define NIC7933_PCIe_DEVICE_ID	0x0789
-#define NIC7922_PCIe_DEVICE_ID	0x7922
-#define NICSOC5_0_PCIe_DEVICE_ID  0x0789
-#define NIC7902_PCIe_DEVICE_ID	0x7902
-#define NIC6639_PCIe_DEVICE_ID 0x3107
-
-static const struct pci_device_id mtk_pci_ids[] = {
-#ifdef MT6632
-	{	PCI_DEVICE(MTK_PCI_VENDOR_ID, NIC6632_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_mt6632},
-#endif /* MT6632 */
-#ifdef MT7668
-	{	PCI_DEVICE(MTK_PCI_VENDOR_ID, NIC7668_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_mt7668},
-#endif /* MT7668 */
-#ifdef MT7663
-	{	PCI_DEVICE(MTK_PCI_VENDOR_ID, NIC7663_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_mt7663},
-	/* For FPGA2 temparay */
-	{	PCI_DEVICE(MT7663_PCI_PFGA2_VENDOR_ID, NIC7663_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_mt7663},
-#endif /* MT7663 */
-#ifdef CONNAC
-	{	PCI_DEVICE(CONNAC_PCI_VENDOR_ID, CONNAC_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_connac},
-#endif /* CONNAC */
-#ifdef CONNAC2X2
-	{	PCI_DEVICE(CONNAC_PCI_VENDOR_ID, CONNAC_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_connac2x2},
-#endif /* CONNAC */
-#ifdef MT7915
-	{	PCI_DEVICE(MTK_PCI_VENDOR_ID, NIC7915_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_mt7915},
-#endif /* MT7915 */
-#ifdef SOC3_0
-	{	PCI_DEVICE(MTK_PCI_VENDOR_ID, NICSOC3_0_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_soc3_0 },
-#endif /* SOC3_0 */
-#ifdef MT7961
-	{	PCI_DEVICE(MTK_PCI_VENDOR_ID, NIC7961_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_mt7961},
-#endif /* MT7961 */
-#ifdef MT7922
-	{	PCI_DEVICE(MTK_PCI_VENDOR_ID, NIC7922_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_mt7922},
-#endif /* MT7922 */
-#ifdef MT7902
-	{	PCI_DEVICE(MTK_PCI_VENDOR_ID, NIC7902_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_mt7902},
-#endif /* MT7902 */
-#ifdef MT7933
-	{	PCI_DEVICE(MTK_PCI_VENDOR_ID, NIC7933_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_mt7933},
-#endif /* MT7933 */
-#ifdef SOC5_0
-	{	PCI_DEVICE(MTK_PCI_VENDOR_ID, NICSOC5_0_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_soc5_0},
-#endif /* SOC5_0 */
-#ifdef MT6639
-	{	PCI_DEVICE(MTK_PCI_VENDOR_ID, NIC6639_PCIe_DEVICE_ID),
-		.driver_data = (kernel_ulong_t)&mt66xx_driver_data_mt6639},
-#endif /* MT6639 */
-	{ /* end: all zeroes */ },
-};
-
-MODULE_DEVICE_TABLE(pci, mtk_pci_ids);
-
-/*******************************************************************************
- *                             D A T A   T Y P E S
- *******************************************************************************
- */
-
-/*******************************************************************************
- *                            P U B L I C   D A T A
- *******************************************************************************
- */
-
-/*******************************************************************************
- *                           P R I V A T E   D A T A
- *******************************************************************************
- */
 static probe_card pfWlanProbe;
 static remove_card pfWlanRemove;
 
-static struct pci_driver mtk_pci_driver = {
-	.name = "wlan",
-	.id_table = mtk_pci_ids,
-	.probe = NULL,
-	.remove = NULL,
-};
-
 static u_int8_t g_fgDriverProbed = FALSE;
 static uint32_t g_u4DmaMask = 32;
+
+u_int8_t g_fgInInitialColdBoot = TRUE;  /* Exported for HAL layer */
+
+
 /*******************************************************************************
- *                                 M A C R O S
+ * M A C R O S
  *******************************************************************************
  */
 
 /*******************************************************************************
- *                   F U N C T I O N   D E C L A R A T I O N S
+ * F U N C T I O N   D E C L A R A T I O N S
  *******************************************************************************
  */
-
+uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev, struct GLUE_INFO *prGlueInfo);
 static void pcieAllocDesc(struct GL_HIF_INFO *prHifInfo,
 			  struct RTMP_DMABUF *prDescRing,
 			  uint32_t u4Num);
@@ -247,31 +142,186 @@ static void pcieDumpRx(struct GL_HIF_INFO *prHifInfo,
 		       struct RTMP_RX_RING *prRxRing,
 		       uint32_t u4Idx, uint32_t u4DumpLen);
 
+
+static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id);
+static void mtk_pci_remove(struct pci_dev *pdev);
+/* Supported PCI device IDs for MT7902 */
+static const struct pci_device_id mtk_pci_ids[] = {
+    { PCI_DEVICE(0x14c3, 0x7902), 
+      .driver_data = (kernel_ulong_t)&mt66xx_driver_data_mt7902 },
+    { 0, }
+};
+MODULE_DEVICE_TABLE(pci, mtk_pci_ids);
+
+static struct pci_driver mtk_pci_driver = {
+    .name = "mtk_pci_driver",
+    .id_table = mtk_pci_ids,
+    .probe = mtk_pci_probe,   // IMPORTANT: Make sure these aren't missing
+    .remove = mtk_pci_remove, // IMPORTANT: Make sure these aren't missing
+};
+
 /*******************************************************************************
- *                              F U N C T I O N S
+ * F U N C T I O N S
  *******************************************************************************
  */
 
 /*----------------------------------------------------------------------------*/
-/*!
- * \brief This function is a PCIE interrupt callback function
+/*! \brief Fast MMIO liveness check - safe in atomic context
+ *
+ * \param[in] prHifInfo Pointer to HIF info structure
+ * \return TRUE if MMIO is dead (0xffffffff), FALSE if alive
+ */
+/*----------------------------------------------------------------------------*/
+static inline u_int8_t mt7902_mmio_dead(struct GL_HIF_INFO *prHifInfo)
+{
+	uint32_t u4Val;
+	
+	if (!prHifInfo || !prHifInfo->CSRBaseAddress)
+		return TRUE;
+	
+	/* Read a safe register - chip ID at offset 0x0 */
+	u4Val = readl(prHifInfo->CSRBaseAddress + 0x0);
+	
+	return (u4Val == 0xFFFFFFFF);
+}
+
+/*----------------------------------------------------------------------------*/
+/*! \brief Mark IRQs as dead - call before any PCI teardown
+ *
+ * This MUST be called before:
+ * - pci_disable_device()
+ * - pci_clear_master()
+ * - pci_set_power_state(D3*)
+ * - pci_disable_msi()
+ * - Writing PCI COMMAND=0
+ *
+ * \param[in] prHifInfo Pointer to HIF info structure
+ */
+/*----------------------------------------------------------------------------*/
+static inline void mt7902_mark_irq_dead(struct GL_HIF_INFO *prHifInfo)
+{
+	clear_bit(MTK_FLAG_IRQ_ALIVE, &prHifInfo->state_flags);
+	DBGLOG(HAL, WARN, "IRQ marked as DEAD - no more synchronize_irq allowed\n");
+}
+
+/*----------------------------------------------------------------------------*/
+/*! \brief Schedule recovery from atomic/IRQ/tasklet context
  *
  * \param[in] func  pointer to PCIE handle
  *
  * \return void
  */
 /*----------------------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Schedule recovery from atomic/IRQ/tasklet context
+ *
+ * \param[in] func  pointer to PCIE handle
+ *
+ * \return void
+ */
+/*----------------------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Schedule recovery from atomic/IRQ/tasklet context
+ *
+ * \param[in] prGlueInfo Pointer to Glue Info
+ *
+ * \return void
+ */
+/*----------------------------------------------------------------------------*/
+void mt7902_schedule_recovery_from_atomic(struct GLUE_INFO *prGlueInfo)
+{
+    struct GL_HIF_INFO *prHifInfo;
+
+    if (!prGlueInfo)
+        return;
+
+    prHifInfo = &prGlueInfo->rHifInfo;
+
+    /* * FIX: PREVENT ILLEGAL RECOVERY SEQUENCING
+     * As diagnosed: Recovery logic assumes Host Ownership, configured DMA rings,
+     * and specific WFDMA states. None of these exist before Probe completes.
+     *
+     * 0xDEADxxxx reads during probe are often transient (split-brain window).
+     * Triggering recovery here is illegal; we must let the probe fail gracefully
+     * or retry via standard init logic, not invoke SER/DMA polling.
+     */
+    if (!g_fgDriverProbed) {
+        if (net_ratelimit()) {
+            printk(KERN_WARNING "mt7902: Ignoring recovery request during probe/boot phase. "
+                   "MMIO anomaly (0x%08x) is likely transient or sequencing error.\n",
+                   readl(prHifInfo->CSRBaseAddress + 0x0));
+        }
+        return;
+    }
+
+    /* Standard Recovery Logic - Only runs POST-PROBE */
+    if (test_and_set_bit(MTK_FLAG_MMIO_GONE, &prHifInfo->state_flags)) {
+        /* Prevent duplicate scheduling */
+        return;
+    }
+    
+    printk(KERN_ERR "mt7902: MMIO failure detected post-probe. Scheduling recovery.\n");
+
+    /* Disable IRQ safely */
+    if (prHifInfo->saved_irq > 0)
+        disable_irq_nosync(prHifInfo->saved_irq);
+        
+    /* Stop queues */
+    if (prGlueInfo->prDevHandler)
+        netif_tx_stop_all_queues(prGlueInfo->prDevHandler);
+
+    schedule_work(&prHifInfo->recovery_work);
+}
+
+
+
+
+
+
+static void mt7902_recovery_work(struct work_struct *work)
+{
+    struct GL_HIF_INFO *prHifInfo = container_of(work, struct GL_HIF_INFO, recovery_work);
+    struct GLUE_INFO *prGlueInfo = container_of(prHifInfo, struct GLUE_INFO, rHifInfo);
+    
+    /* Ensure only one recovery at a time */
+    if (!mutex_trylock(&prHifInfo->recovery_lock)) {
+        DBGLOG(HAL, WARN, "Recovery already in progress\n");
+        return;
+    }
+
+    DBGLOG(HAL, INFO, "=== Recovery work starting (process context) ===\n");
+    mt79xx_pci_function_recover(prHifInfo->pdev, prGlueInfo);
+    
+    /* Clean up flags after recovery */
+    /* MTK_FLAG_MMIO_GONE is cleared in mt79xx_pci_function_recover on success */
+    
+    mutex_unlock(&prHifInfo->recovery_lock);
+}
+
+
 static void *CSRBaseAddress;
 
 static irqreturn_t mtk_pci_interrupt(int irq, void *dev_instance)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
+    struct GL_HIF_INFO *prHifInfo = NULL;
 
 	prGlueInfo = (struct GLUE_INFO *) dev_instance;
 	if (!prGlueInfo) {
 		DBGLOG(HAL, INFO, "No glue info in mtk_pci_interrupt()\n");
 		return IRQ_NONE;
 	}
+    
+    prHifInfo = &prGlueInfo->rHifInfo;
+
+    /* CRITICAL: Check MMIO before touching hardware (V2 Fix) */
+    if (mt7902_mmio_dead(prHifInfo)) {
+        DBGLOG(HAL, ERROR, "MMIO dead in ISR - scheduling recovery\n");
+        mt7902_schedule_recovery_from_atomic(prGlueInfo);
+        return IRQ_HANDLED;
+    }
 
 	halDisableInterrupt(prGlueInfo->prAdapter);
 
@@ -304,7 +354,6 @@ static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	ASSERT(id);
 
 	ret = pci_enable_device(pdev);
-
 	if (ret) {
 		DBGLOG(INIT, INFO, "pci_enable_device failed!\n");
 		goto out;
@@ -322,26 +371,25 @@ static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 				id->driver_data)->chip_info;
 	prChipInfo->pdev = (void *)pdev;
 
-#if (CFG_POWER_ON_DOWNLOAD_EMI_ROM_PATCH == 1)
-		g_fgDriverProbed = TRUE;
-		g_u4DmaMask = prChipInfo->bus_info->u4DmaMask;
-#else
-	if (pfWlanProbe((void *) pdev,
-		(void *) id->driver_data) != WLAN_STATUS_SUCCESS) {
-		DBGLOG(INIT, INFO, "pfWlanProbe fail!call pfWlanRemove()\n");
-		pfWlanRemove();
-		ret = -1;
+	/* Always call the probe path and set global 'probed' only on success */
+	if (pfWlanProbe((void *) pdev, (void *) id->driver_data) != WLAN_STATUS_SUCCESS) {
+	    DBGLOG(INIT, INFO, "pfWlanProbe fail!call pfWlanRemove()\n");
+	    pfWlanRemove();
+	    ret = -1;
 	} else {
-		g_fgDriverProbed = TRUE;
-		g_u4DmaMask = prChipInfo->bus_info->u4DmaMask;
+	    g_fgDriverProbed = TRUE;
+	    g_u4DmaMask = prChipInfo->bus_info->u4DmaMask;
+	    /* Clear initial cold boot flag - probe completed successfully */
+	    g_fgInInitialColdBoot = FALSE;
+	    DBGLOG(INIT, INFO, "Initial cold boot complete, WFDMA polling now enabled\n");
 	}
-#endif
 
 out:
 	DBGLOG(INIT, INFO, "mtk_pci_probe() done(%d)\n", ret);
 
 	return ret;
 }
+
 
 static void mtk_pci_remove(struct pci_dev *pdev)
 {
@@ -350,6 +398,9 @@ static void mtk_pci_remove(struct pci_dev *pdev)
 	if (g_fgDriverProbed)
 		pfWlanRemove();
 	DBGLOG(INIT, INFO, "pfWlanRemove done\n");
+	
+	/* Reset the flag in case module is reloaded */
+	g_fgInInitialColdBoot = TRUE;
 
 	/* Unmap CSR base address */
 	iounmap(CSRBaseAddress);
@@ -358,8 +409,10 @@ static void mtk_pci_remove(struct pci_dev *pdev)
 	pci_release_regions(pdev);
 
 	pci_disable_device(pdev);
+	pci_disable_msi(pdev);
 	DBGLOG(INIT, INFO, "mtk_pci_remove() done\n");
 }
+
 
 static int mtk_pci_suspend(struct pci_dev *pdev, pm_message_t state)
 {
@@ -465,8 +518,8 @@ static int mtk_pci_suspend(struct pci_dev *pdev, pm_message_t state)
 	RECLAIM_POWER_CONTROL_TO_PM(prAdapter, FALSE);
 
 	/* Wait for
-	*  1. The other unfinished ownership handshakes
-	*  2. FW own back
+	* 1. The other unfinished ownership handshakes
+	* 2. FW own back
 	*/
 	while (wait < 500) {
 		if ((prAdapter->u4PwrCtrlBlockCnt == 0) &&
@@ -715,6 +768,14 @@ void glSetHifInfo(struct GLUE_INFO *prGlueInfo, unsigned long ulCookie)
 
 	SET_NETDEV_DEV(prGlueInfo->prDevHandler, &prHif->pdev->dev);
 
+	/* Disable runtime PM — MTK firmware assumes the platform never does
+	 * surprise PM. On Android the WiFi service owns this. On Linux, nothing
+	 * does. This card draws ~2mW idle anyway. */
+	pm_runtime_forbid(&prHif->pdev->dev);
+	pm_runtime_set_active(&prHif->pdev->dev);
+	/* Force ASPM off - link state transitions can wedge PDMA during reset */
+	glBusConfigASPM(prHif->pdev, 0);
+
 	prGlueInfo->u4InfType = MT_DEV_INF_PCIE;
 
 	prHif->rErrRecoveryCtl.eErrRecovState = ERR_RECOV_STOP_IDLE;
@@ -735,6 +796,8 @@ void glSetHifInfo(struct GLUE_INFO *prGlueInfo, unsigned long ulCookie)
 	prHif->u4TxDataQLen = 0;
 
 	prHif->fgIsPowerOff = true;
+	prHif->fgIsDumpLog  = false;
+	pcie_recovery_debugfs_set_hif(prHif);
 	prHif->fgIsDumpLog = false;
 
 	prMemOps->allocTxDesc = pcieAllocDesc;
@@ -757,6 +820,161 @@ void glSetHifInfo(struct GLUE_INFO *prGlueInfo, unsigned long ulCookie)
 	prMemOps->freePacket = pcieFreePacket;
 	prMemOps->dumpTx = pcieDumpTx;
 	prMemOps->dumpRx = pcieDumpRx;
+}
+
+/* short helper */
+void dump_pci_state(struct pci_dev *pdev)
+{
+    u16 cmd, status;
+    u32 lnksta; // cap removed
+    pci_read_config_word(pdev, PCI_COMMAND, &cmd);
+    pci_read_config_word(pdev, PCI_STATUS, &status);
+    pcie_capability_read_dword(pdev, PCI_EXP_LNKSTA, &lnksta);
+    printk(KERN_ERR "PCI: cmd=0x%04x status=0x%04x lnksta=0x%08x\n", cmd, status, lnksta);
+
+    /* read first 64 dwords of BAR0 */
+    if (pci_resource_len(pdev, 0) >= 256) {
+        void __iomem *bar = ioremap(pci_resource_start(pdev,0), 256);
+        if (bar) {
+            int i;
+            for (i = 0; i < 64; i++)
+                printk(KERN_ERR "BAR0[%02x]=0x%08x\n", i*4, readl(bar + i*4));
+            iounmap(bar);
+        }
+    }
+
+    /* AER — only source that proves the root complex saw an error */
+    {
+        int aer_pos = pci_find_ext_capability(pdev, PCI_EXT_CAP_ID_ERR);
+        if (aer_pos) {
+            u32 uncorr = 0, corr = 0, uncorr_sev = 0;
+            pci_read_config_dword(pdev, aer_pos + PCI_ERR_UNCOR_STATUS, &uncorr);
+            pci_read_config_dword(pdev, aer_pos + PCI_ERR_UNCOR_SEVER, &uncorr_sev);
+            pci_read_config_dword(pdev, aer_pos + PCI_ERR_COR_STATUS,  &corr);
+            printk(KERN_ERR "AER: uncorr_status=0x%08x sev=0x%08x corr_status=0x%08x\n",
+                   uncorr, uncorr_sev, corr);
+        } else {
+            printk(KERN_ERR "AER: capability not present on this device\n");
+        }
+    }
+}
+
+/*
+ * safe_write_reg — write a single BAR register with pre-check and read-back.
+ *
+ * Intentionally uses raw readl_relaxed / writel_relaxed INSTEAD of
+ * HAL_MCR_WR.  HAL_MCR_WR gates on ADAPTER_FLAG_HW_ERR and
+ * ACPI_STATE_D3; both flags are stale / meaningless while the PCIe
+ * function is being resurrected.  We want to hit the wire unconditionally.
+ *
+ * Caller must guarantee CSRBaseAddress is valid (post-ioremap).
+ *
+ * Returns  0 on success, -EIO if the pre-read or read-back fails.
+ */
+int safe_write_reg(void __iomem *base, u32 offset, u32 val)
+{
+    u32 r = readl_relaxed(base + offset);
+    if (r == 0xffffffff) return -EIO;
+    writel_relaxed(val, base + offset);
+    /* read-back verify */
+    if (readl_relaxed(base + offset) != val) return -EIO;
+    return 0;
+}
+
+/* ---------------------------------------------------------------------
+ * dump_mailbox — snapshot the four CONNINFRA mailbox registers.
+ *
+ * These are the primary host↔firmware communication channel.  If the
+ * MCU is stuck the mailbox words often contain the last message it was
+ * waiting on, which is the single most useful datum in the dump.
+ *
+ * Uses HAL_MCR_RD so that the ACPI / bus-mapping indirection is
+ * respected; by the time this is called CSRBaseAddress is live.
+ * Exported (non-static) so gl_init.c can call it on cold-boot timeout.
+ * ---------------------------------------------------------------------
+ */
+void dump_mailbox(struct ADAPTER *prAdapter)
+{
+    uint32_t v;
+
+    if (!prAdapter || !prAdapter->prGlueInfo ||
+        !prAdapter->prGlueInfo->rHifInfo.CSRBaseAddress) {
+        printk(KERN_ERR "dump_mailbox: CSRBaseAddress NULL, skipping\n");
+        return;
+    }
+
+    /* CONN_INFRA_CFG mailbox pair (0x18001000 + 0x100 / 0x104) */
+    HAL_MCR_RD(prAdapter, 0x18001100, &v);
+    printk(KERN_ERR "MAILBOX: CONN2AP  (0x18001100) = 0x%08x\n", v);
+
+    HAL_MCR_RD(prAdapter, 0x18001104, &v);
+    printk(KERN_ERR "MAILBOX: AP2CONN  (0x18001104) = 0x%08x\n", v);
+
+    /* HOST_CSR_TOP mailbox debug mirrors — these are read-only
+     * shadow copies; useful because they survive some resets that
+     * clear the live mailbox.
+     */
+    HAL_MCR_RD(prAdapter, 0x180C0024, &v);   /* HOST_MAILBOX_WF */
+    printk(KERN_ERR "MAILBOX: HOST_MAILBOX_WF (0x180C0024) = 0x%08x\n", v);
+
+    HAL_MCR_RD(prAdapter, 0x180C002C, &v);   /* WF_MAILBOX_DBG */
+    printk(KERN_ERR "MAILBOX: WF_MAILBOX_DBG  (0x180C002C) = 0x%08x\n", v);
+}
+
+/* ---------------------------------------------------------------------
+ * dump_pdma_state — snapshot TX-ring-0 and RX-ring-0 CIDX / DIDX / CNT.
+ *
+ * BUS_INFO already contains per-chip ring register addresses
+ * (host_tx_ring_cidx_addr, etc.).  We read those instead of hard-coding
+ * offsets so this function works on mt7902 / mt7933 / future chips
+ * without changes.
+ *
+ * Exported for the same reason as dump_mailbox.
+ * ---------------------------------------------------------------------
+ */
+void dump_pdma_state(struct ADAPTER *prAdapter)
+{
+    struct BUS_INFO *prBusInfo;
+    uint32_t v;
+
+    if (!prAdapter || !prAdapter->chip_info ||
+        !prAdapter->prGlueInfo ||
+        !prAdapter->prGlueInfo->rHifInfo.CSRBaseAddress) {
+        printk(KERN_ERR "dump_pdma_state: prerequisites NULL, skipping\n");
+        return;
+    }
+
+    prBusInfo = prAdapter->chip_info->bus_info;
+    if (!prBusInfo) {
+        printk(KERN_ERR "dump_pdma_state: bus_info NULL\n");
+        return;
+    }
+
+    /* TX ring 0 */
+    HAL_MCR_RD(prAdapter, prBusInfo->host_tx_ring_cidx_addr, &v);
+    printk(KERN_ERR "PDMA TX0: CIDX = %u (reg 0x%08x)\n",
+           v, prBusInfo->host_tx_ring_cidx_addr);
+
+    HAL_MCR_RD(prAdapter, prBusInfo->host_tx_ring_didx_addr, &v);
+    printk(KERN_ERR "PDMA TX0: DIDX = %u (reg 0x%08x)\n",
+           v, prBusInfo->host_tx_ring_didx_addr);
+
+    HAL_MCR_RD(prAdapter, prBusInfo->host_tx_ring_cnt_addr, &v);
+    printk(KERN_ERR "PDMA TX0: CNT  = %u (reg 0x%08x)\n",
+           v, prBusInfo->host_tx_ring_cnt_addr);
+
+    /* RX ring 0 */
+    HAL_MCR_RD(prAdapter, prBusInfo->host_rx_ring_cidx_addr, &v);
+    printk(KERN_ERR "PDMA RX0: CIDX = %u (reg 0x%08x)\n",
+           v, prBusInfo->host_rx_ring_cidx_addr);
+
+    HAL_MCR_RD(prAdapter, prBusInfo->host_rx_ring_didx_addr, &v);
+    printk(KERN_ERR "PDMA RX0: DIDX = %u (reg 0x%08x)\n",
+           v, prBusInfo->host_rx_ring_didx_addr);
+
+    HAL_MCR_RD(prAdapter, prBusInfo->host_rx_ring_cnt_addr, &v);
+    printk(KERN_ERR "PDMA RX0: CNT  = %u (reg 0x%08x)\n",
+           v, prBusInfo->host_rx_ring_cnt_addr);
 }
 
 /*----------------------------------------------------------------------------*/
@@ -813,12 +1031,364 @@ void glResetHifInfo(struct GLUE_INFO *prGlueInfo)
 
 /*----------------------------------------------------------------------------*/
 /*!
+ * \brief Tier-3 recovery: PCIe function resurrection after power loss
+ *
+ * This function handles the case where the device lost power and MMIO
+ * reads return 0xffffffff. It performs a full PCIe re-initialization
+ * followed by cold-boot MCU init, effectively treating the device as
+ * if it was hot-unplugged and replugged.
+ *
+ * \param[in] pdev       The PCI device
+ * \param[in] prGlueInfo The glue info structure
+ *
+ * \retval WLAN_STATUS_SUCCESS   Recovery successful, device resurrected
+ * \retval WLAN_STATUS_FAILURE   Recovery failed, device remains dead
+ */
+/*----------------------------------------------------------------------------*/
+uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
+					    struct GLUE_INFO *prGlueInfo)
+{
+    /* CRITICAL V2 FIX: Check if called from atomic context */
+    if (in_atomic() || in_interrupt() || irqs_disabled()) {
+        DBGLOG(HAL, ERROR, 
+            "Recovery called in atomic context - scheduling workqueue\n");
+        mt7902_schedule_recovery_from_atomic(prGlueInfo);
+        return WLAN_STATUS_PENDING;
+    }
+    
+    DBGLOG(HAL, INFO, "Recovery in process context - safe to sleep\n");
+
+	struct ADAPTER *prAdapter;
+	struct mt66xx_chip_info *prChipInfo;
+	struct REG_INFO *prRegInfo;
+	uint32_t u4Status;
+	struct GL_HIF_INFO *prHifInfo;
+	uint32_t u4Val;
+	int pm_ret;
+
+	/* Tier-4: SAFETY FIRST - Silence the Bus Immediately */
+	/* This prevents the "Hold Power Button" hard lock */
+	if (pdev) {
+		pci_clear_master(pdev); /* Stop DMA transactions */
+		pci_disable_msi(pdev);  /* Stop Interrupts */
+	}
+    
+    prHifInfo = &prGlueInfo->rHifInfo;
+
+    /* CRITICAL V2 FIX: Mark IRQ as dead BEFORE any further PCI operations */
+    mt7902_mark_irq_dead(prHifInfo);
+
+	if (!pdev || !prGlueInfo) {
+		DBGLOG(HAL, ERROR, "Tier-3 recovery: NULL parameters\n");
+		return WLAN_STATUS_FAILURE;
+	}
+
+	prAdapter = prGlueInfo->prAdapter;
+	prChipInfo = prAdapter->chip_info;
+
+	/* Prevent concurrent recovery attempts */
+	if (prHifInfo->fgInPciRecovery) {
+		DBGLOG(HAL, WARN, "Tier-3 recovery already in progress\n");
+		return WLAN_STATUS_FAILURE;
+	}
+
+	prHifInfo->fgInPciRecovery = TRUE;
+	prHifInfo->fgMmioGone = true;
+	prHifInfo->u8RecoveryStage      = RECOV_STAGE_QUIESCE;
+	prHifInfo->u8RecoveryFailReason = RECOV_FAIL_NONE;
+	prHifInfo->u4LastBarSample      = 0;
+	prHifInfo->u_recovery_fail_time = 0;
+
+	DBGLOG(HAL, WARN, "=== Tier-3 PCIe Recovery Start (Safe Mode) ===\n");
+
+	/* Tier-4.5: Diplomatic Wake (NOW it is safe to try this) */
+	pm_ret = pm_runtime_get_sync(&pdev->dev);
+	pci_set_power_state(pdev, PCI_D0);
+	
+	/* Force disable ASPM to prevent link entry/exit issues during reset */
+	pci_disable_link_state(pdev, PCIE_LINK_STATE_L0S | PCIE_LINK_STATE_L1 | PCIE_LINK_STATE_CLKPM);
+	
+	DBGLOG(HAL, WARN, "Tier-4.5: PM Wake (ret %d). ASPM Disabled. Bus Master Cleared.\n", pm_ret);
+
+	/* Force-clear the MMIO mapping to stop pending CPU transactions */
+	if (prHifInfo->CSRBaseAddress) {
+		iounmap(prHifInfo->CSRBaseAddress);
+		prHifInfo->CSRBaseAddress = NULL;
+	}
+
+	/* Step 1: Stop upper layer activity */
+	DBGLOG(HAL, INFO, "Tier-3: Stopping network queues\n");
+    /* V2 FIX: Removed unsafe kernel quiesce block that contained synchronize_irq() */
+	netif_tx_stop_all_queues(prGlueInfo->prDevHandler);
+
+	/* Step 2: Disable interrupts */
+    /* V2 FIX: Use nosync since IRQ might be dead */
+    DBGLOG(HAL, WARN, "Disabling IRQs (no sync - IRQ is dead)\n");
+	if (prHifInfo->u4IrqId) {
+		disable_irq_nosync(prHifInfo->u4IrqId);
+	}
+
+	/* Step 3: Tear down PCIe function state */
+	pci_disable_device(pdev);
+
+	/* Step 4: Force device to D0 power state (Deep Sleep Exit) */
+	pci_set_power_state(pdev, PCI_D0);
+	msleep(100);
+
+	/* Step 5: Re-enable PCIe function */
+	/* Tier-6: ACPI D3Cold Power Cycle */
+	DBGLOG(HAL, WARN, "Tier-6: Triggering ACPI D3cold power-cycle\n");
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_D3COLD_CYCLE;
+	pci_save_state(pdev);
+	pci_set_power_state(pdev, PCI_D3cold);
+	msleep(200);
+	pci_set_power_state(pdev, PCI_D0);
+	pci_restore_state(pdev);
+
+	u4Status = pci_enable_device(pdev);
+	if (u4Status != 0) {
+		DBGLOG(HAL, ERROR, "Tier-3: pci_enable_device failed: %d\n", u4Status);
+		prHifInfo->u8RecoveryFailReason = RECOV_FAIL_ENABLE_DEVICE;
+		goto recovery_failed;
+	}
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_REENABLE;
+
+	/* Step 6: Restore PCI state */
+	pci_restore_state(pdev);
+	
+	/* Step 7: Re-map MMIO BAR space */
+	DBGLOG(HAL, WARN, "Tier-3: Re-mapping MMIO BAR\n");
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_BAR_REMAP;
+	CSRBaseAddress = ioremap(pci_resource_start(pdev, 0), pci_resource_len(pdev, 0));
+	if (!CSRBaseAddress) {
+		DBGLOG(HAL, ERROR, "Tier-3: ioremap failed\n");
+		prHifInfo->u8RecoveryFailReason = RECOV_FAIL_IOREMAP;
+		goto recovery_failed;
+	}
+	/* Update the global handle so macros work */
+	prHifInfo->CSRBaseAddress = CSRBaseAddress;
+
+	/* Tier-4: Manual Secondary Bus Reset (SBR) */
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_SBR;
+	if (pdev->bus && pdev->bus->self) {
+		uint16_t ctrl;
+		struct pci_dev *bridge = pdev->bus->self;
+		DBGLOG(HAL, WARN, "Tier-4: Forcing Manual SBR via Bridge %04x:%02x\n", 
+			pci_domain_nr(bridge->bus), bridge->devfn);
+		pci_read_config_word(bridge, PCI_BRIDGE_CONTROL, &ctrl);
+		ctrl |= PCI_BRIDGE_CTL_BUS_RESET;
+		pci_write_config_word(bridge, PCI_BRIDGE_CONTROL, ctrl);
+		msleep(100); 
+		ctrl &= ~PCI_BRIDGE_CTL_BUS_RESET;
+		pci_write_config_word(bridge, PCI_BRIDGE_CONTROL, ctrl);
+		msleep(200);
+		pci_restore_state(pdev);
+	}
+
+	/* Tier-3.5: Platform Reset via PERST# */
+	DBGLOG(HAL, WARN, "Tier-3: Requesting PCIe Fundamental Reset\n");
+	if (pci_reset_function(pdev) != 0) {
+		if (pdev->bus->self)
+			pci_bridge_secondary_bus_reset(pdev->bus->self);
+	}
+	msleep(100);
+	pci_restore_state(pdev);
+
+	/* Before any HAL_MCR_WR */
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_BAR_PREFLIGHT;
+	HAL_MCR_RD(prAdapter, 0x18000000, &u4Val);
+	prHifInfo->u4LastBarSample = u4Val;
+	if (u4Val == 0xffffffff) {
+	    dump_pci_state(pdev);
+	    DBGLOG(HAL, ERROR, "BAR blind before any WFSYS writes - aborting\n");
+	    prHifInfo->u8RecoveryFailReason = RECOV_FAIL_BAR_BLIND_PRE;
+	    goto recovery_failed;
+	}
+
+	/* Tier-3.5: Force WFSYS Power Domain Cycle */
+	DBGLOG(HAL, WARN, "Tier-3: Power-cycling WFSYS domain\n");
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_WFSYS_PWRCYCLE;
+	HAL_MCR_RD(prAdapter, 0x18000100, &u4Val);
+	u4Val |= BIT(3);
+	HAL_MCR_WR(prAdapter, 0x18000100, u4Val);
+	mdelay(50);
+	u4Val &= ~BIT(3);
+	HAL_MCR_WR(prAdapter, 0x18000100, u4Val);
+	mdelay(100);
+
+	/* Tier-5: Forcing WFSYS clocks and performing hard reset */
+	DBGLOG(HAL, WARN, "Tier-5: Forcing WFSYS clocks and performing hard reset\n");
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_CLOCKS;
+	HAL_MCR_WR(prAdapter, 0x18000100, 0x00010001);
+	udelay(500);
+	HAL_MCR_WR(prAdapter, 0x18000100, 0x00010000);
+	msleep(100);
+	HAL_MCR_WR(prAdapter, 0x18000100, 0x00000000);
+	msleep(50);
+	
+	/* Reset Latch Toggle */
+	HAL_MCR_RD(prAdapter, 0x18000100, &u4Val);
+	u4Val |= BIT(0);
+	HAL_MCR_WR(prAdapter, 0x18000100, u4Val);
+	udelay(100);
+	u4Val &= ~BIT(0);
+	HAL_MCR_WR(prAdapter, 0x18000100, u4Val);
+	msleep(50);
+
+	/* Wait for Link Training */
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_LINK_WAIT;
+	{
+		uint16_t lnksta;
+		int retry = 50;
+		while (retry--) {
+			pcie_capability_read_word(pdev, PCI_EXP_LNKSTA, &lnksta);
+			if (!(lnksta & PCI_EXP_LNKSTA_LT)) break;
+			mdelay(10);
+		}
+		DBGLOG(HAL, WARN, "Tier-4: Link stable (LnkSta: 0x%04x)\n", lnksta);
+	}
+
+	/* Tier-4.7: Quiesce and Phased Clock Wake */
+	DBGLOG(HAL, WARN, "Tier-4: Phased WFSYS wake-up sequence\n");
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_PHASED_WAKE;
+	HAL_MCR_WR(prAdapter, 0x18000000 + 0x100, 0x00000000);
+	udelay(50);
+	HAL_MCR_WR(prAdapter, 0x18000000 + 0x158, 0xFFFFFFFF);
+	mdelay(10);
+	HAL_MCR_WR(prAdapter, 0x18000000 + 0x108, 0x00000000);
+	msleep(20);
+
+	/* Tier-6: Purging DMA engine */
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_DMA_PURGE;
+	HAL_MCR_WR(prAdapter, 0x1802b000 + 0x008, 0x00000001);
+	HAL_MCR_WR(prAdapter, 0x1802b000 + 0x010, 0x00000000);
+	udelay(500);
+	HAL_MCR_WR(prAdapter, 0x1802b000 + 0x008, 0x00000000);
+	msleep(100);
+
+	/* Final MCU Kickstart */
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_MCU_KICKSTART;
+	HAL_MCR_WR(prAdapter, 0x18000000 + 0x150, 0x00000001);
+	HAL_MCR_WR(prAdapter, 0x18000000 + 0x100, 0x00000000);
+	HAL_MCR_WR(prAdapter, 0x18000000 + 0x108, 0x00000000);
+	mdelay(20);
+	HAL_MCR_RD(prAdapter, 0x18000000 + 0x150, &u4Val);
+	u4Val |= BIT(0);
+	HAL_MCR_WR(prAdapter, 0x18000000 + 0x150, u4Val);
+
+	/* Tier-7: BAR Re-Sync / Link Verification */
+	DBGLOG(HAL, WARN, "Tier-7: Verifying BAR visibility before MCU boot\n");
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_BAR_TIER7;
+	HAL_MCR_RD(prAdapter, 0x18000000, &u4Val);
+	prHifInfo->u4LastBarSample = u4Val;
+	if (u4Val == 0xffffffff) {
+	    uint16_t cmd;
+	    DBGLOG(HAL, ERROR, "Tier-7: BAR is blind (0xffffffff). Attempting Command Register Kick.\n");
+	    pci_read_config_word(pdev, PCI_COMMAND, &cmd);
+	    pci_write_config_word(pdev, PCI_COMMAND, cmd & ~PCI_COMMAND_MEMORY);
+	    udelay(100);
+	    pci_write_config_word(pdev, PCI_COMMAND, cmd | PCI_COMMAND_MEMORY);
+	    msleep(50);
+
+	    /* Check again */
+	    HAL_MCR_RD(prAdapter, 0x18000000, &u4Val);
+	    prHifInfo->u4LastBarSample = u4Val;
+	    if (u4Val == 0xffffffff) {
+		DBGLOG(HAL, ERROR, "Tier-7: Hardware is physically detached. Aborting to prevent lockup.\n");
+		prHifInfo->u8RecoveryFailReason = RECOV_FAIL_BAR_BLIND_TIER7;
+		goto recovery_failed;
+	    }
+	}
+	DBGLOG(HAL, WARN, "Tier-7: BAR is alive. Proceeding to MCU boot.\n");
+
+	DBGLOG(HAL, WARN, "Tier-3: Performing WFSYS MCU cold boot\n");
+	prAdapter->fgIsFwOwn = TRUE;
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_MCU_COLDBOOT;
+
+	/* CRITICAL FIX: During recovery cold boot, we CAN poll WFDMA because 
+	 * fabric should be properly reset by this point (we did D3cold, SBR, etc.)
+	 * Unlike initial cold boot where fabric is uninitialized, here we're
+	 * recovering from a known state and WFDMA polling is appropriate.
+	 */
+	g_fgInInitialColdBoot = FALSE;
+	DBGLOG(HAL, INFO, "Recovery context: enabling WFDMA polling for cold boot\n");
+
+	{
+		int coldboot_ret = mt79xx_wfsys_cold_boot_and_wait(prAdapter);
+		if (coldboot_ret != 0) {
+			DBGLOG(HAL, ERROR, "Tier-3: MCU cold boot failed (ret=%d)\n", coldboot_ret);
+			if (coldboot_ret == -EIO)
+				prHifInfo->u8RecoveryFailReason = RECOV_FAIL_COLDBOOT_BLIND;
+			else if (coldboot_ret == -ETIMEDOUT)
+				prHifInfo->u8RecoveryFailReason = RECOV_FAIL_COLDBOOT_TIMEOUT;
+			else
+				prHifInfo->u8RecoveryFailReason = RECOV_FAIL_COLDBOOT_OTHER;
+			goto recovery_failed;
+		}
+	}
+	DBGLOG(HAL, INFO, "Tier-3: MCU is alive and initialized\n");
+	
+	/* NOW it is safe to re-enable Bus Mastering */
+	pci_set_master(pdev);
+	pm_runtime_put_sync(&pdev->dev);
+
+	DBGLOG(HAL, WARN, "Tier-3: Re-initializing adapter\n");
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_ADAPTER_START;
+	prRegInfo = &prGlueInfo->rRegInfo;
+
+	u4Status = wlanAdapterStart(prAdapter, prRegInfo, FALSE);
+	if (u4Status != WLAN_STATUS_SUCCESS) {
+		DBGLOG(HAL, ERROR, "Tier-3: wlanAdapterStart failed: 0x%x\n", u4Status);
+		prHifInfo->u8RecoveryFailReason = RECOV_FAIL_ADAPTER_START;
+		goto recovery_failed;
+	}
+
+	if (prHifInfo->u4IrqId) {
+		enable_irq(prHifInfo->u4IrqId);
+	}
+    
+    /* V2 FIX: Mark IRQ as alive again after successful recovery */
+    set_bit(MTK_FLAG_IRQ_ALIVE, &prHifInfo->state_flags);
+    clear_bit(MTK_FLAG_MMIO_GONE, &prHifInfo->state_flags);
+    
+	netif_tx_wake_all_queues(prGlueInfo->prDevHandler);
+
+	prHifInfo->fgInPciRecovery = FALSE;
+	prHifInfo->fgMmioGone = FALSE;
+	prHifInfo->u8RecoveryStage = RECOV_STAGE_COMPLETE;
+
+	DBGLOG(HAL, WARN, "=== Tier-3 PCIe Recovery Complete ===\n");
+	return WLAN_STATUS_SUCCESS;
+
+recovery_failed:
+	prHifInfo->u_recovery_fail_time = jiffies;
+	DBGLOG(HAL, ERROR,
+		"=== Tier-3 PCIe Recovery FAILED === stage=%u reason=%u lastBAR=0x%08x\n",
+		(unsigned)prHifInfo->u8RecoveryStage,
+		(unsigned)prHifInfo->u8RecoveryFailReason,
+		prHifInfo->u4LastBarSample);
+
+	/* Full-state dump — gives us PCI config + AER, mailbox words,
+	 * and PDMA ring indices in a single dmesg burst.  Each helper
+	 * guards itself against NULL CSRBaseAddress.
+	 */
+	dump_pci_state(pdev);
+	dump_mailbox(prAdapter);
+	dump_pdma_state(prAdapter);
+
+	prHifInfo->fgInPciRecovery = FALSE;
+	return WLAN_STATUS_FAILURE;
+}
+
+
+/*----------------------------------------------------------------------------*/
+/*!
  * \brief Initialize bus operation and hif related information, request
- *        resources.
+ * resources.
  *
  * \param[out] pvData    A pointer to HIF-specific data type buffer.
- *                       For eHPI, pvData is a pointer to UINT_32 type and
- *                       stores a mapped base address.
+ * For eHPI, pvData is a pointer to UINT_32 type and
+ * stores a mapped base address.
  *
  * \return (none)
  */
@@ -884,6 +1454,7 @@ err_out_free_res:
 	pci_release_regions(pdev);
 
 	pci_disable_device(pdev);
+    pci_disable_msi(pdev);
 
 	return FALSE;
 }
@@ -910,7 +1481,7 @@ void glBusRelease(void *pvData)
  * \param[in] pvCookie   Private data for pfnIsr function.
  *
  * \retval WLAN_STATUS_SUCCESS   if success
- *         NEGATIVE_VALUE   if fail
+ * NEGATIVE_VALUE   if fail
  */
 /*----------------------------------------------------------------------------*/
 int32_t glBusSetIrq(void *pvData, void *pfnIsr, void *pvCookie)
@@ -938,6 +1509,15 @@ int32_t glBusSetIrq(void *pvData, void *pfnIsr, void *pvCookie)
 	pdev = prHifInfo->pdev;
 
 	prHifInfo->u4IrqId = pdev->irq;
+
+	/* V2 FIX: Initialize recovery infrastructure */
+	INIT_WORK(&prHifInfo->recovery_work, mt7902_recovery_work);
+	mutex_init(&prHifInfo->recovery_lock);
+	prHifInfo->state_flags = 0;
+	set_bit(MTK_FLAG_IRQ_ALIVE, &prHifInfo->state_flags); /* IRQ starts alive */
+	prHifInfo->saved_irq = pdev->irq;
+	prHifInfo->pdev = pdev;
+
 	ret = request_irq(prHifInfo->u4IrqId, mtk_pci_interrupt,
 		IRQF_SHARED, prNetDevice->name, prGlueInfo);
 	if (ret != 0)
@@ -982,8 +1562,15 @@ void glBusFreeIrq(void *pvData, void *pvCookie)
 	prHifInfo = &prGlueInfo->rHifInfo;
 	pdev = prHifInfo->pdev;
 
+    /* V2 FIX: Mark IRQ dead before freeing */
+    mt7902_mark_irq_dead(prHifInfo);
+
 	synchronize_irq(pdev->irq);
 	free_irq(pdev->irq, prGlueInfo);
+    
+    /* V2 FIX: Clean up recovery infrastructure */
+    cancel_work_sync(&prHifInfo->recovery_work);
+    mutex_destroy(&prHifInfo->recovery_lock);
 }
 
 u_int8_t glIsReadClearReg(uint32_t u4Address)
@@ -997,6 +1584,8 @@ void glSetPowerState(IN struct GLUE_INFO *prGlueInfo, IN uint32_t ePowerMode)
 
 void glGetDev(void *ctx, struct device **dev)
 {
+	if (!ctx || !dev)
+		return;
 
 	*dev = &((struct pci_dev *)ctx)->dev;
 }
@@ -1446,3 +2035,6 @@ void halPciePreSuspendTimeout(
 	prAdapter->prGlueInfo->rHifInfo.eSuspendtate =
 		PCIE_STATE_PRE_SUSPEND_FAIL;
 }
+
+
+

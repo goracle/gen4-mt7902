@@ -259,7 +259,10 @@ static const uint16_t g_u2CountryGroup20[] = {
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
 struct mtk_regd_control g_mtk_regd_control = {
 	.en = FALSE,
-	.state = REGD_STATE_UNDEFINED
+	.state = REGD_STATE_UNDEFINED,
+	.txpwr_limit_loaded = FALSE,
+	.pending_regdom_update = FALSE,
+	.cached_alpha2 = 0x00003030  /* "00" */
 };
 
 #if CFG_SUPPORT_BW160
@@ -309,7 +312,7 @@ struct TX_PWR_LIMIT_SECTION {
 	const char *arSectionNames[TX_PWR_LIMIT_SECTION_NUM];
 } gTx_Pwr_Limit_Section[] = {
 	{5,
-	 {"legacy", "ht20", "ht40", "vht20", "offset"}
+	 {"cck", "ofdm", "ht40", "vht20", "offset"}
 	},
 	{9,
 	 {"cck", "ofdm", "ht20", "ht40", "vht20", "vht40",
@@ -2118,7 +2121,7 @@ u_int32_t rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode(
 	       "Cannot find the %s RegDomain. Set to default WW\n",
 	       acCountryCodeStr);
 		pRegdom = &default_regdom_ww;
-		u4FinalCountryCode = COUNTRY_CODE_WW;
+		u4FinalCountryCode = 0x5355;
 	}
 
 	kalApplyCustomRegulatory(pWiphy, pRegdom);
@@ -2777,20 +2780,7 @@ u_int8_t rlmDomainTxPwrLimitLoad(
 	uint8_t *prFileName = prAdapter->chip_info->prTxPwrLimitFile;
 
 
-	if (!rlmDomainTxPwrLimitGetCountryRange(u4CountryCode, pucBuf,
-		u4BufLen, &u4CountryStart, &u4CountryEnd)) {
-		DBGLOG(RLM, ERROR, "Can't find specified table in %s\n",
-			prFileName);
-
-		/* Use WW as default country */
-		if (!rlmDomainTxPwrLimitGetCountryRange(COUNTRY_CODE_WW, pucBuf,
-			u4BufLen, &u4CountryStart, &u4CountryEnd)) {
-			DBGLOG(RLM, ERROR,
-				"Can't find default table (WW) in %s\n",
-				prFileName);
-			return FALSE;
-		}
-	}
+	u4CountryStart = 0; u4CountryEnd = u4BufLen;
 
 	u4Pos = u4CountryStart;
 
@@ -3172,9 +3162,9 @@ u_int8_t rlmDomainTxPwrLimitLoadFromFile(
 	kalMemZero(aucPath, sizeof(aucPath));
 	kalSnprintf(aucPath[0], TXPWRLIMIT_FILE_LEN, "%s", prFileName);
 	kalSnprintf(aucPath[1], TXPWRLIMIT_FILE_LEN,
-		"/data/misc/%s", prFileName);
+		"/lib/firmware/mediatek/mt7902/%s", prFileName);
 	kalSnprintf(aucPath[2], TXPWRLIMIT_FILE_LEN,
-		"/data/misc/wifi/%s", prFileName);
+		"/lib/firmware/mediatek/mt7902/wifi/%s", prFileName);
 	kalSnprintf(aucPath[3], TXPWRLIMIT_FILE_LEN,
 		"/storage/sdcard0/%s", prFileName);
 
@@ -5053,10 +5043,29 @@ void rlmDomainSendPwrLimitCmd_V2(struct ADAPTER *prAdapter)
 {
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
 	uint8_t ucVersion = 0;
+
+	uint32_t u4CountryCode;
 	struct TX_PWR_LIMIT_DATA *pTxPwrLimitData = NULL;
 	struct TX_PWR_LEGACY_LIMIT_DATA *pTxPwrLegacyLimitData = NULL;
-
+	
 	DBGLOG(RLM, INFO, "rlmDomainSendPwrLimitCmd()\n");
+	
+	u4CountryCode = rlmDomainGetCountryCode();
+	
+	/* Skip if already loaded successfully */
+	if (g_mtk_regd_control.txpwr_limit_loaded) {
+		DBGLOG(RLM, INFO, 
+			"TxPwrLimit already loaded, skipping\n");
+		return;
+	}
+	
+	/* Skip if country code is still uninitialized (00) */
+	if (u4CountryCode == 0x00003030) {
+		DBGLOG(RLM, INFO, 
+			"Country code still '00', deferring TxPwrLimit load until regdom update\n");
+		return;
+	}
+
 	pTxPwrLimitData = rlmDomainInitTxPwrLimitData(prAdapter);
 	pTxPwrLegacyLimitData = rlmDomainInitTxPwrLegacyLimitData(prAdapter);
 
@@ -5113,6 +5122,10 @@ void rlmDomainSendPwrLimitCmd_V2(struct ADAPTER *prAdapter)
 		DBGLOG(RLM, WARN, "Unsupported TxPwrLimit dat version %u\n",
 			ucVersion);
 	}
+	
+	/* Mark as successfully loaded */
+	g_mtk_regd_control.txpwr_limit_loaded = TRUE;
+	DBGLOG(RLM, INFO, "TxPwrLimit loaded successfully\n");
 
 #if (CFG_SUPPORT_SINGLE_SKU_6G == 1)
 	if (pTxPwrLimitData && pTxPwrLimitData->rChannelTxPwrLimit)
@@ -6245,7 +6258,7 @@ void txPwrCtrlCfgFileToList(struct ADAPTER *prAdapter)
 		    WLAN_CFG_FILE_BUF_SIZE, &u4ConfigReadLen,
 		    prAdapter->prGlueInfo->prDev) == 0) {
 			/* ToDo:: Nothing */
-		} else if (kalReadToFile("/data/misc/wifi/txpowerctrl.cfg",
+		} else if (kalReadToFile("/lib/firmware/mediatek/mt7902/wifi/txpowerctrl.cfg",
 			   pucConfigBuf, WLAN_CFG_FILE_BUF_SIZE,
 			   &u4ConfigReadLen) == 0) {
 			/* ToDo:: Nothing */
@@ -6518,7 +6531,7 @@ struct CMD_DOMAIN_CHANNEL *rlmDomainGetActiveChannels(void)
 
 void rlmDomainSetDefaultCountryCode(void)
 {
-	g_mtk_regd_control.alpha2 = COUNTRY_CODE_WW;
+	g_mtk_regd_control.alpha2 = 0x5355; /* US in hex (LSB) */
 }
 
 void rlmDomainResetCtrlInfo(u_int8_t force)
@@ -6659,7 +6672,7 @@ void rlmDomainParsingChannel(IN struct wiphy *pWiphy)
 						   sizeof(chan_flag_string));
 
 			if (chan->flags & IEEE80211_CHAN_DISABLED) {
-				DBGLOG(RLM, INFO,
+				DBGLOG(RLM, TRACE,
 				       "channels[%d][%d]: ch%d (freq = %d) flags=0x%x [ %s]\n",
 				    band_idx, ch_idx, chan->hw_value,
 				    chan->center_freq, chan->flags,
@@ -6673,7 +6686,7 @@ void rlmDomainParsingChannel(IN struct wiphy *pWiphy)
 			}
 
 			/* Allowable channel */
-			if (ch_count == MAXIMUM_OPERATION_CHANNEL_LIST) {
+			if (ch_count == MAX_CHN_NUM) {
 				DBGLOG(RLM, ERROR,
 				       "%s(): no buffer to store channel information.\n",
 				       __func__);
@@ -6682,7 +6695,7 @@ void rlmDomainParsingChannel(IN struct wiphy *pWiphy)
                   
 			rlmDomainAddActiveChannel(band_idx);
 
-			DBGLOG(RLM, INFO,
+			DBGLOG(RLM, TRACE,
 			       "channels[%d][%d]: ch%d (freq = %d) flgs=0x%x [%s]\n",
 				band_idx, ch_idx, chan->hw_value,
 				chan->center_freq, chan->flags,

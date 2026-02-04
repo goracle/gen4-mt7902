@@ -111,7 +111,10 @@
  *                   F U N C T I O N   D E C L A R A T I O N S
  *******************************************************************************
  */
+extern void mt7902_schedule_recovery_from_atomic(struct GLUE_INFO *prGlueInfo);
 static void halResetMsduToken(IN struct ADAPTER *prAdapter);
+uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
+					    struct GLUE_INFO *prGlueInfo);
 
 /*******************************************************************************
  *                              F U N C T I O N S
@@ -501,6 +504,9 @@ void halSerPollDoneInSuspend(IN struct ADAPTER *prAdapter)
  * \return (none)
  */
 /*----------------------------------------------------------------------------*/
+/* Forward declaration if not already in your headers */
+extern void mt7902_schedule_recovery_from_atomic(struct GLUE_INFO *prGlueInfo);
+
 u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 {
 	struct mt66xx_chip_info *prChipInfo;
@@ -522,14 +528,13 @@ u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 #if CFG_SUPPORT_PCIE_ASPM
 	prHifInfo = &prAdapter->prGlueInfo->rHifInfo;
 #endif
-	/* if direct trx,  set drv/fw own will be called
-	*  in softirq/tasklet/thread context,
-	*  if normal trx, set drv/fw own will only
-	*  be called in thread context
-	*/
+
+	/* * Locking Strategy:
+	 * If direct TRX (SoftIRQ/Tasklet), use Spinlock.
+	 * If normal TRX (Thread), use Mutex.
+	 */
 	if (HAL_IS_TX_DIRECT(prAdapter) || HAL_IS_RX_DIRECT(prAdapter))
-		spin_lock_bh(
-			&prAdapter->prGlueInfo->rSpinLock[SPIN_LOCK_SET_OWN]);
+		spin_lock_bh(&prAdapter->prGlueInfo->rSpinLock[SPIN_LOCK_SET_OWN]);
 	else
 		KAL_ACQUIRE_MUTEX(prAdapter, MUTEX_SET_OWN);
 
@@ -554,14 +559,14 @@ u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 		kalUdelay(LP_OWN_BACK_LOOP_DELAY_MAX_US);
 
 		if (!prBusInfo->fgCheckDriverOwnInt ||
-		    test_bit(GLUE_FLAG_INT_BIT, &prAdapter->prGlueInfo->ulFlag))
+			test_bit(GLUE_FLAG_INT_BIT, &prAdapter->prGlueInfo->ulFlag))
 			HAL_LP_OWN_RD(prAdapter, &fgResult);
 
 		fgTimeout = ((kalGetTimeTick() - u4CurrTick) >
 			     LP_OWN_BACK_TOTAL_DELAY_MS) ? TRUE : FALSE;
 
 		if (fgResult) {
-			/* Check WPDMA FW own interrupt status and clear */
+			/* SUCCESS: Check WPDMA FW own interrupt status and clear */
 			if (prBusInfo->fgCheckDriverOwnInt)
 				HAL_MCR_WR(prAdapter,
 					prBusInfo->fw_own_clear_addr,
@@ -570,18 +575,58 @@ u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 			prAdapter->u4OwnFailedCount = 0;
 			prAdapter->u4OwnFailedLogCount = 0;
 			break;
+
 		} else if (wlanIsChipNoAck(prAdapter)) {
+			/* FAILURE: Chip No Ack (Hardware Reset/Crash) */
 			DBGLOG(INIT, INFO,
-			"Driver own return due to chip reset and chip no response.\n");
+				"Driver own return due to chip reset and chip no response.\n");
 #if (CFG_SUPPORT_DEBUG_SOP == 1)
-			prChipInfo->prDebugOps->show_debug_sop_info(prAdapter,
-			  SLAVENORESP);
+			prChipInfo->prDebugOps->show_debug_sop_info(prAdapter, SLAVENORESP);
 #endif
 			fgStatus = FALSE;
 			break;
+
+		} else if ((i > LP_OWN_BACK_FAILED_RETRY_CNT) &&
+			   prAdapter->prGlueInfo->rHifInfo.fgMmioGone) {
+			/* * FAILURE: Tier-3 Recovery (MMIO Dead/Power Loss)
+			 * 0xffffffff read detected. We must escalate to full PCIe recovery.
+			 */
+			DBGLOG(INIT, ERROR, "Driver own timeout: MMIO reads = 0xffffffff (power loss)\n");
+			DBGLOG(INIT, WARN, "==> Escalating to Tier-3 PCIe function recovery\n");
+			
+			/* CRITICAL: Unlock before calling recovery (which is slow/blocking) */
+			if (HAL_IS_TX_DIRECT(prAdapter) || HAL_IS_RX_DIRECT(prAdapter))
+				spin_unlock_bh(&prAdapter->prGlueInfo->rSpinLock[SPIN_LOCK_SET_OWN]);
+			else
+				KAL_RELEASE_MUTEX(prAdapter, MUTEX_SET_OWN);
+			
+			/* Check context to decide how to run recovery */
+			if (in_atomic() || in_interrupt()) {
+				/* Atomic Context: Cannot sleep. Schedule workqueue. */
+				DBGLOG(HAL, WARN, "MMIO failure in atomic context - scheduling recovery\n");
+				mt7902_schedule_recovery_from_atomic(prAdapter->prGlueInfo);
+				
+				/* Return FALSE to indicate DriverOwn failed, stopping current flow */
+				return FALSE; 
+			} else {
+				/* Check context: Defer if atomic, otherwise run directly */
+				if (in_atomic() || in_interrupt()) {
+					DBGLOG(HAL, WARN, "MMIO failure in atomic context - scheduling recovery\n");
+					mt7902_schedule_recovery_from_atomic(prAdapter->prGlueInfo);
+					return FALSE;
+				}
+
+				DBGLOG(HAL, INFO, "Running recovery directly (process context)\n");
+				fgStatus = (mt79xx_pci_function_recover(
+						prAdapter->prGlueInfo->rHifInfo.pdev,
+						prAdapter->prGlueInfo) == WLAN_STATUS_SUCCESS);
+				return fgStatus;
+			}
+
 		} else if ((i > LP_OWN_BACK_FAILED_RETRY_CNT) &&
 			   (kalIsCardRemoved(prAdapter->prGlueInfo) ||
 			    fgIsBusAccessFailed || fgTimeout)) {
+			/* FAILURE: General Timeout */
 			halDriverOwnTimeout(prAdapter, u4CurrTick, fgTimeout);
 			fgStatus = FALSE;
 			break;
@@ -590,9 +635,7 @@ u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 		u4WriteTickTemp = kalGetTimeTick();
 		if ((i == 0) || TIME_AFTER(u4WriteTickTemp,
 			(u4WriteTick + LP_OWN_REQ_CLR_INTERVAL_MS))) {
-			/* Driver get LP ownership per 200 ms,
-			 * to avoid iteration time not accurate
-			 */
+			/* Driver get LP ownership per 200 ms */
 			HAL_LP_OWN_CLR(prAdapter, &fgResult);
 			u4WriteTick = u4WriteTickTemp;
 		}
@@ -602,74 +645,57 @@ u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 
 #if !CFG_CONTROL_ASPM_BY_FW
 #if CFG_SUPPORT_PCIE_ASPM
-	glBusConfigASPM(prHifInfo->pdev,
-					DISABLE_ASPM_L1);
+	glBusConfigASPM(prHifInfo->pdev, DISABLE_ASPM_L1);
 #endif
 #endif
 
-	/* For Low power Test */
-	/* 1. Driver need to polling until CR4 ready,
-	 *    then could do normal Tx/Rx
-	 * 2. After CR4 ready, send a dummy command to change data path
-	 *    to store-forward mode
-	 */
+	/* Logic for normal success path continues here */
 	if (prAdapter->fgIsFwDownloaded && prChipInfo->is_support_cr4)
 		fgStatus &= halDriverOwnCheckCR4(prAdapter);
 
 	if (fgStatus) {
 		if (prAdapter->fgIsFwDownloaded) {
 			if (halSerHappendInSuspend(prAdapter)) {
-				DBGLOG(INIT, INFO,
-				       "[SER][L1] reset happens in suspend\n");
-
+				DBGLOG(INIT, INFO, "[SER][L1] reset happens in suspend\n");
 				halSerPollDoneInSuspend(prAdapter);
 
 				if (prBusInfo->DmaShdlReInit)
 					prBusInfo->DmaShdlReInit(prAdapter);
 
-				/* only reset TXD & RXD */
 				halWpdmaAllocRing(prAdapter->prGlueInfo, false);
 				halResetMsduToken(prAdapter);
-
 				halWpdmaInitRing(prAdapter->prGlueInfo);
-
 				nicSerReInitBeaconFrame(prAdapter);
-			} else
-				/*WFDMA re-init flow after chip deep sleep*/
-				if (prChipInfo->asicWfdmaReInit)
-					prChipInfo->asicWfdmaReInit(prAdapter);
+			} else if (prChipInfo->asicWfdmaReInit) {
+				prChipInfo->asicWfdmaReInit(prAdapter);
+			}
 		}
-		/* Check consys enter sleep mode DummyReg(0x0F) */
 		if (prBusInfo->checkDummyReg)
 			prBusInfo->checkDummyReg(prAdapter->prGlueInfo);
 	} else {
 		DBGLOG(INIT, WARN, "DRIVER OWN Fail!\n");
 		if (prChipInfo->prDebugOps->show_mcu_debug_info)
-			prChipInfo->prDebugOps->show_mcu_debug_info(prAdapter, NULL, 0,
-				DBG_MCU_DBG_ALL, NULL);
+			prChipInfo->prDebugOps->show_mcu_debug_info(prAdapter, NULL, 0, DBG_MCU_DBG_ALL, NULL);
 #if (CFG_SUPPORT_DEBUG_SOP == 1)
 		if (prChipInfo->prDebugOps->show_debug_sop_info)
-			prChipInfo->prDebugOps->show_debug_sop_info(prAdapter,
-				SLAVENORESP);
+			prChipInfo->prDebugOps->show_debug_sop_info(prAdapter, SLAVENORESP);
 #endif
 		if (prChipInfo->prDebugOps->showCsrInfo)
 			prChipInfo->prDebugOps->showCsrInfo(prAdapter);
 	}
 
 	KAL_REC_TIME_END();
-	DBGLOG(INIT, INFO,
-		"DRIVER OWN Done[%lu us]\n", KAL_GET_TIME_INTERVAL());
+	DBGLOG(INIT, INFO, "DRIVER OWN Done[%lu us]\n", KAL_GET_TIME_INTERVAL());
 
 end:
+	/* Standard unlock for success/fail paths that didn't exit early */
 	if (HAL_IS_TX_DIRECT(prAdapter) || HAL_IS_RX_DIRECT(prAdapter))
-		spin_unlock_bh(
-			&prAdapter->prGlueInfo->rSpinLock[SPIN_LOCK_SET_OWN]);
+		spin_unlock_bh(&prAdapter->prGlueInfo->rSpinLock[SPIN_LOCK_SET_OWN]);
 	else
 		KAL_RELEASE_MUTEX(prAdapter, MUTEX_SET_OWN);
 
 	return fgStatus;
 }
-
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief This routine is used to process the POWER ON procedure.

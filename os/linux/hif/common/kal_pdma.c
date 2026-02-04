@@ -146,8 +146,12 @@ static inline bool kalIsChipDead(struct GLUE_INFO *prGlueInfo,
 
 	prHifInfo = &prGlueInfo->rHifInfo;
 
-	if (*pu4Value != HIF_DEADFEED_VALUE)
+	/* Check for both 0xdeadfeed (SW marker) and 0xffffffff (HW powered off) */
+	if (*pu4Value != HIF_DEADFEED_VALUE && *pu4Value != 0xFFFFFFFF)
 		return false;
+	
+	/* Store which type of failure we detected */
+	prHifInfo->fgMmioGone = (*pu4Value == 0xFFFFFFFF);
 
 	if (!halChipToStaticMapBusAddr(prGlueInfo, CONN_CFG_CHIP_ID_ADDR,
 				       &u4BusAddr)) {

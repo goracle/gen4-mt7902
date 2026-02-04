@@ -568,6 +568,43 @@ void sysMacAddrOverride(uint8_t *prMacAddr)
 #if (CFG_SUPPORT_SNIFFER_RADIOTAP == 1)
 static struct dentry *dbgFsDir;
 
+
+static int pcie_recovery_state_show(struct seq_file *m, void *v)
+{
+    struct GL_HIF_INFO *prHif = g_prRecovHifInfo;
+    if (!prHif) {
+        seq_puts(m, "stage=UNAVAILABLE reason=UNAVAILABLE\n");
+        return 0;
+    }
+    seq_printf(m,
+        "stage=%u\n"
+        "fail_reason=%u\n"
+        "last_bar_sample=0x%08x\n"
+        "fail_time_jiffies=%lu\n",
+        (unsigned)prHif->u8RecoveryStage,
+        (unsigned)prHif->u8RecoveryFailReason,
+        prHif->u4LastBarSample,
+        prHif->u_recovery_fail_time);
+    return 0;
+}
+
+static int pcie_recovery_state_open(struct file *file, void *data)
+{
+    return single_open(file, pcie_recovery_state_show, NULL);
+}
+
+static const struct file_operations pcie_recovery_state_fops = {
+    .owner   = THIS_MODULE,
+    .open    = pcie_recovery_state_open,
+    .read    = seq_read,
+    .llseek  = seq_lseek,
+    .release = single_release,
+};
+
+{
+    g_prRecovHifInfo = (void *)prHif;
+}
+
 static int debugfs_u8_get(void *data, uint64_t *val)
 {
 	*val = *(uint8_t *)data;
@@ -617,6 +654,9 @@ int32_t sysCreateMonDbgFs(struct GLUE_INFO *prGlueInfo)
 
 	/* /sys/kernel/debug/mtk_mon_dbgfs/drop_fcs_err, mode: wr */
 	dbgFsFile = debugfs_create_file("drop_fcs_err",
+	if (dbgFsDir)
+		debugfs_create_file("pcie_recovery_state",
+			0444, dbgFsDir, NULL, &pcie_recovery_state_fops);
 		0666, dbgFsDir, &prGlueInfo->fgDropFcsErrorFrame, &fops_u8);
 
 	return 0;
@@ -627,3 +667,11 @@ void sysRemoveMonDbgFs(void)
 	debugfs_remove_recursive(dbgFsDir);
 }
 #endif
+
+/* Called by pcie.c:glSetHifInfo once, at probe time. */
+static void * volatile g_prRecovHifInfo = NULL;
+void pcie_recovery_debugfs_set_hif(struct GL_HIF_INFO *prHif)
+{
+    g_prRecovHifInfo = (void *)prHif;
+}
+EXPORT_SYMBOL(pcie_recovery_debugfs_set_hif);

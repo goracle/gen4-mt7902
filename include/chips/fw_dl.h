@@ -228,7 +228,7 @@ struct PATCH_FORMAT_T {
 	uint32_t u4SwHwVersion;
 	uint32_t u4PatchVersion;
 	uint16_t u2CRC;		/* CRC calculated for image only */
-	uint8_t ucPatchImage[0];
+	uint8_t ucPatchImage[];
 };
 
 struct PATCH_FORMAT_V2_T {

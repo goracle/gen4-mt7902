@@ -114,7 +114,6 @@ static bool halIsTxHang(struct ADAPTER *prAdapter);
  *                              F U N C T I O N S
  *******************************************************************************
  */
-
 void halPrintHifDbgInfo(IN struct ADAPTER *prAdapter)
 {
 	halCheckHifState(prAdapter);
@@ -123,7 +122,24 @@ void halPrintHifDbgInfo(IN struct ADAPTER *prAdapter)
 
 static void halCheckHifState(struct ADAPTER *prAdapter)
 {
+	struct GL_HIF_INFO *prHifInfo = NULL;
 	uint32_t u4DebugLevel = 0;
+	static bool reset_attempted = false;
+
+	/* Circuit breaker: only attempt reset once per module load.
+	 * If reset fails, we enter terminal state rather than looping.
+	 * Prevents reset storms that hard-lock the kernel. */
+	if (reset_attempted) {
+		return;
+	}
+
+	if (!prAdapter)
+		return;
+
+	prHifInfo = &prAdapter->prGlueInfo->rHifInfo;
+	if (!prHifInfo)
+		return;
+
 	if (prAdapter->u4HifChkFlag & HIF_CHK_TX_HANG) {
 		if (halIsTxHang(prAdapter)) {
 			DBGLOG(HAL, ERROR,
@@ -133,12 +149,17 @@ static void halCheckHifState(struct ADAPTER *prAdapter)
 				prAdapter->u4HifDbgFlag |= DEG_HIF_ALL;
 			else
 				halShowLitePleInfo(prAdapter);
+
+			/* TX engine is wedged — trigger L0.5 reset to recover
+			 * without unloading the driver. On Android the WiFi
+			 * service restarts the stack; on Linux nothing does,
+			 * so we have to do it ourselves. */
+			reset_attempted = true;
+			GL_DEFAULT_RESET_TRIGGER(prAdapter, RST_SER_L1_FAIL);
 		}
 	}
-
 	if (prAdapter->u4HifChkFlag & HIF_DRV_SER)
 		halSetDrvSer(prAdapter);
-
 	prAdapter->u4HifChkFlag = 0;
 }
 

@@ -593,7 +593,7 @@ struct INIT_WIFI_CMD {
 	/* add one DW to compatible with normal TXD format. */
 	uint32_t     au4D3toD7Rev[5];
 	/* add 5 DW to compatible with normal TXD format. */
-	uint8_t      aucBuffer[0];
+	uint8_t      aucBuffer[];
 };
 
 struct INIT_WIFI_EVENT {
@@ -604,7 +604,7 @@ struct INIT_WIFI_EVENT {
 	uint8_t      ucSeqNum;
 	uint8_t      aucReserved[2];
 
-	uint8_t      aucBuffer[0];
+	uint8_t      aucBuffer[];
 };
 
 struct INIT_HIF_TX_HEADER {
@@ -1129,7 +1129,7 @@ struct CMD_SCAN_REQ {
 	uint8_t          aucReserved[2];
 	struct CHANNEL_INFO  arChannelList[32];
 	uint16_t         u2IELen;
-	uint8_t          aucIE[0];  /*depends on u2IELen*/
+	uint8_t          aucIE[1];  /*depends on u2IELen*/
 };
 
 struct PARAM_SSID {
@@ -1224,7 +1224,7 @@ struct CMD_SET_NETWORK_ADDRESS_LIST {
 	uint8_t      ucAddressCount;
 	uint8_t      ucVersion;
 	uint8_t      ucReserved[1];
-	struct CMD_IPV4_NETWORK_ADDRESS arNetAddress[1];
+	struct CMD_IPV4_NETWORK_ADDRESS arNetAddress[];
 };
 
 struct CMD_IPV6_NETWORK_ADDRESS {
@@ -1235,7 +1235,7 @@ struct CMD_IPV6_NETWORK_ADDRESS_LIST {
 	uint8_t  ucBssIndex;
 	uint8_t  ucAddressCount;
 	uint8_t  ucReserved[2];
-	struct CMD_IPV6_NETWORK_ADDRESS arNetAddress[1];
+	struct CMD_IPV6_NETWORK_ADDRESS arNetAddress[];
 };
 
 struct CMD_SET_RRM_CAPABILITY {
@@ -1321,7 +1321,7 @@ struct CMD_SCAN_SCHED_REQ {
 	/*    SCHED SCN Interval    */
 	uint16_t au2MspList[10];
 	uint8_t aucPadding_3[64];
-	uint8_t aucIE[0];
+	uint8_t aucIE[];
 };
 
 enum WIFI_SCAN_EVENT {
@@ -1398,7 +1398,7 @@ struct CMD_MDDP_FILTER_RULE {
 	uint8_t  ucPfType;
 	uint8_t  ucPfNum;
 	uint8_t  aucPadding1[2];
-	uint8_t  aucWhPfClsFilterMddp[0];
+	uint8_t  aucWhPfClsFilterMddp[];
 };
 
 #if (CFG_SUPPORT_SNIFFER_RADIOTAP == 1)
@@ -1993,7 +1993,7 @@ struct CMD_DOMAIN_ACTIVE_CHANNEL_LIST {
 	uint8_t u1ActiveChNum5g;
 	uint8_t u1ActiveChNum6g;
 	uint8_t aucPadding[1];
-	struct CMD_DOMAIN_CHANNEL arChannels[0];
+  struct CMD_DOMAIN_CHANNEL arChannels[]; //fix [0]->[], UBSAN false positive
 };
 
 struct CMD_SET_DOMAIN_INFO_V2 {
@@ -2056,7 +2056,7 @@ struct CMD_SET_TXPOWER_COUNTRY_TX_POWER_LIMIT_PER_RATE {
 	uint8_t aucPadding2[32];
 
 	/* DWORD_11 ~ - Tx power limit values*/
-	struct CMD_TXPOWER_CHANNEL_POWER_LIMIT_PER_RATE rChannelPowerLimit[0];
+	struct CMD_TXPOWER_CHANNEL_POWER_LIMIT_PER_RATE rChannelPowerLimit[];
 };
 
 struct CMD_SET_TXPOWER_COUNTRY_TX_LEGACY_POWER_LIMIT_PER_RATE {
@@ -2080,7 +2080,7 @@ struct CMD_SET_TXPOWER_COUNTRY_TX_LEGACY_POWER_LIMIT_PER_RATE {
 
 	/* DWORD_11 ~ - Legacy Tx power limit values*/
 	struct CMD_TXPOWER_CHANNEL_LEGACY_POWER_LIMIT_PER_RATE
-	    rChannelLegacyPowerLimit[0];
+	    rChannelLegacyPowerLimit[];
 };
 
 #define POWER_LIMIT_TXBF_BACKOFF_PARAM_NUM 6

@@ -712,7 +712,7 @@ struct TX_PWR_CTRL_ELEMENT {
 	uint8_t index; /* scenario index */
 	enum ENUM_TX_POWER_CTRL_TYPE eCtrlType;
 	uint8_t settingCount;
-	struct TX_PWR_CTRL_CHANNEL_SETTING rChlSettingList[1];
+	struct TX_PWR_CTRL_CHANNEL_SETTING rChlSettingList[];
 };
 
 enum ENUM_POWER_LIMIT {
@@ -909,7 +909,7 @@ struct CHANNEL_POWER_LIMIT {
 	int8_t cPwrLimit80;
 	int8_t cPwrLimit160;
 	uint8_t ucFlag;
-	uint8_t aucReserved[1];
+	uint8_t aucReserved[];
 };
 
 struct COUNTRY_CHANNEL_POWER_LIMIT {
@@ -989,6 +989,9 @@ enum regd_state {
 struct mtk_regd_control {
 	u_int8_t en;
 	u_int8_t isEfuseCountryCodeUsed;
+	u_int8_t txpwr_limit_loaded;
+	u_int8_t pending_regdom_update;
+	u_int32_t cached_alpha2;
 	enum regd_state state;
 	u_int32_t alpha2;
 	u_int32_t tmp_alpha2; /*store country code set by iwpriv "country XX"*/
