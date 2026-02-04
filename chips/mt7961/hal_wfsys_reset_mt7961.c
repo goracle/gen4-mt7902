@@ -56,6 +56,7 @@
      from MediaTek 802.11 Wireless LAN driver stack to GLUE Layer.
 */
 
+
 #if defined(MT7961) || defined(MT7922) || defined(MT7902)
 
 /*******************************************************************************
@@ -93,6 +94,9 @@
 *                            P U B L I C   D A T A
 ********************************************************************************
 */
+
+/* External flag from pcie.c - TRUE during initial cold boot, FALSE after */
+extern u_int8_t g_fgInInitialColdBoot;
 
 /*******************************************************************************
 *                           P R I V A T E   D A T A
@@ -134,17 +138,38 @@ u_int8_t mt7961HalCbtopRguWfRst(struct ADAPTER *prAdapter,
 
 	if (fgAssertRst) {
 
-		/* check wfdma idle before reset */
-		fgIsWfdmaIdle = mt7961HalPollWfdmaIdle(prAdapter);
-
-		while (fgIsWfdmaIdle == FALSE && ucPollingCount < 10) {
+		/* CRITICAL FIX: Skip WFDMA polling during initial cold boot
+		 * 
+		 * During initial probe, the PCIe fabric is not fully initialized.
+		 * Registers like INT_WRAP_CSR_WFDMA_HIF_MISC return 0xDEAD0003,
+		 * which is EXPECTED - the HIF wrapper isn't ready yet.
+		 * 
+		 * The polling loop below would waste 1+ seconds reading this
+		 * error pattern, then continue anyway. The MCU boots successfully
+		 * regardless, so the polling serves no purpose during initial boot.
+		 * 
+		 * During SER recovery (after probe completes), the flag will be
+		 * FALSE and WFDMA polling will proceed normally as intended.
+		 */
+		if (!g_fgInInitialColdBoot) {
+			/* SER Recovery Context: Poll WFDMA before reset */
+			DBGLOG(HAL, INFO, "[SER][L0.5] Polling WFDMA idle before reset\n");
+			
+			/* check wfdma idle before reset */
 			fgIsWfdmaIdle = mt7961HalPollWfdmaIdle(prAdapter);
-			ucPollingCount += 1;
-			kalMsleep(100);
-		}
 
-		if (ucPollingCount == 10) {
-			DBGLOG(HAL, ERROR, "[SER][L0.5]SER Polling WFDMA Idle Fail!\n");
+			while (fgIsWfdmaIdle == FALSE && ucPollingCount < 10) {
+				fgIsWfdmaIdle = mt7961HalPollWfdmaIdle(prAdapter);
+				ucPollingCount += 1;
+				kalMsleep(100);
+			}
+
+			if (ucPollingCount == 10) {
+				DBGLOG(HAL, ERROR, "[SER][L0.5]SER Polling WFDMA Idle Fail!\n");
+			}
+		} else {
+			/* Initial Cold Boot Context: Skip WFDMA check */
+			DBGLOG(HAL, INFO, "[INIT] Skipping WFDMA idle check during initial cold boot (fabric not ready)\n");
 		}
 
 		/* Set PCIE2AP public mapping CR4 */
