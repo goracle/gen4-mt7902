@@ -1,138 +1,243 @@
-> [!CAUTION]
-> This driver is still in Work-In-Progress state ! Using it requires extra work which will be explained below. It is not suitable for everyday use yet !
-
 # gen4-mt7902
 
-This is a driver for the Mediatek MT7902 PCIe card based on the `gen4-mt79xx` driver Mediatek gave for Android OEMs. This driver is extracted from [Xiaomi's rodin BSP](https://github.com/MiCode/MTK_kernel_modules/tree/bsp-rodin-v-oss/connectivity/wlan/core/gen4-mt79xx) and is being modified to focusing on supporting the MT7902 card only. The main goal of the project is to provide an usable driver for this particular M.2 PCIe card which is not available on the [mt76 driver](https://wireless.docs.kernel.org/en/latest/en/users/drivers/mediatek.html) yet.
+> ⚠️ **Work-In-Progress — Use at your own risk.** This driver is experimental and intended for advanced users who accept manual recovery steps. It is **not** recommended for daily use on systems where stable networking is critical.
 
-## Status
+A focused out-of-tree driver derived from Mediatek's `gen4-mt79xx` (Xiaomi rodin BSP) to support the Mediatek **MT7902** PCIe M.2 card. This repository includes driver sources and the firmware files used during testing.
 
-The driver is buildable and loadable. It can be able to connect to 2.4Ghz wifi so far. However, upon testing, I've noticed these issues:
+I started from [hmtheboy154/gen4-mt7902](https://github.com/hmtheboy154/gen4-mt7902) and made changes until it was stable enough on my laptop.
 
-- Can't switch to 5Ghz if you are on a SSID with both 2.4/5. (it could be because I test this card without antenna !)
-- WPA3 broken when using `iwd` according to this [finding](https://github.com/hmtheboy154/gen4-mt7902/issues/7#issuecomment-3622679513), so use `wpa_supplicant` instead.
-- Can't create wifi hotspot to act as a repeater.
-- Chunky compiled size with almost ~100mb, might be due to the debug code it has.
-- Suspend using s2idle is working thanks to [kadenslater95](https://github.com/kadenslater95), S3 suspend is broken and will show black screen when waking up.
-- There are some reports about the driver causing kernel panic, mostly on ASUS hardware with the AW-XB552NF card. The panic looks like [this](https://tinyurl.com/2s74vtkx) 
+---
 
-> [!WARNING]
-> If the wifi is ever flaky just restart your device and it should kick back on. If it doesn't work or the card power management is broken, use `sudo rmmod mt7902` whenever you wanna sleep or shut down the device !
+## Quick summary
 
-There are some features that are untested such as Bluetooth (which is not covered by this driver) and WIFI 6/6E.
+- **Status:** buildable, loadable, connects to 2.4 GHz and 5 GHz (no 6 GHz firmware included).  
+- **Kernel tested:** Ubuntu 24.04.3 LTS with `6.8.0-40-generic` (your results may vary).  
+- **Known:** intermittent long-uptime instability under heavy DMA + deep-idle transitions.  
+- **Recovery:** if the card becomes unresponsive, a full power drain (hold power button with AC unplugged) reliably recovers the device.
 
-## Installation guide
+---
 
-> [!IMPORTANT]
-> Before building & installing this driver, remember to install essential packages to build a kernel driver like linux kernel's headers & toolchain. I will not cover it here.
+## Status & known issues
 
-- Get the source by using `git`
+### Working
+- Basic STA mode: 2.4 GHz and 5 GHz connections
+
+### Known issues
+- Flaky band switching on dual-band SSIDs (antenna/regulatory influence)
+- WPA3: reported problems with `iwd`; `wpa_supplicant` is more reliable
+- AP/hotspot mode is not fully tested/functional
+- Large build size (~100 MB with debug blobs). Consider removing debug for distribution builds
+- S2Idle may work; S3 resume often fails (black-screen)
+- Intermittent kernel panic reports on some hardware (see issues)
+- **Shutdown/reboot hang:** you may need to manually `sudo rmmod mt7902` before shutdown/reboot
+
+---
+
+## Installation (what you *must* do)
+
+> The firmware installation step below is **required** — the driver will not function correctly without the firmware installed into the system firmware directory. The module install/start behavior is currently not automated by `sudo make install` (see note below); choose **either** the systemd path (optional) **or** the manual insmod/modprobe path after login.
+
+### 1) Prereqs
+Install kernel headers and build tools for your distribution first (example for Debian/Ubuntu):
 
 ```bash
-git clone https://github.com/hmtheboy154/gen4-mt7902
+sudo apt update
+sudo apt install build-essential linux-headers-$(uname -r) bc libelf-dev
+````
+
+### 2) Clone & build
+
+```bash
+git clone https://github.com/<you>/gen4-mt7902.git
 cd gen4-mt7902
-```
-
-- To only build the driver, use this command
-
-```bash
 make -j$(nproc)
 ```
 
-- To build the driver & install it, use this command
+### 3) **Firmware (required)**
+
+**This is required** — copy the firmware files to your system firmware directory. You can use the provided helper:
 
 ```bash
-sudo make install -j$(nproc)
-```
-
-- To install the firmware required for the driver, use this command
-
-```bash
+# installs firmware to the system firmware directory (usually /lib/firmware)
 sudo make install_fw
 ```
 
-Once you got the driver & firmware installed, reboot to see changes.
-
-### Automatic installation via DKMS
-
-If you want the driver to be automatically rebuilt after each kernel update, use DKMS:
-
-- Install DKMS:
+If you prefer to do it manually:
 
 ```bash
-# Debian/Ubuntu
+# example (adjust if your distro uses /usr/lib/firmware instead)
+sudo cp -v firmware/* /lib/firmware/
+sudo chmod 644 /lib/firmware/WIFI_RAM_CODE_MT7902_1.bin
+sudo update-initramfs -u   # optional, only if you want firmware included in initramfs
+```
+
+Confirm firmware exists where your kernel expects it (e.g. `/lib/firmware/WIFI_RAM_CODE_MT7902_1.bin`).
+
+> **Why:** without the firmware in the system firmware path, the kernel driver will fail to load/initialize the device even if the module is present.
+
+---
+
+## Important note about `sudo make install` (behavior)
+
+`sudo make install` in this tree **does not** currently provide a robust, automatic "install & enable the driver at boot" experience.
+
+* It may copy kernel objects / artifacts, but **it does not guarantee the module will be loaded at boot**.
+* At present, you must choose one of the two approaches below to get the module loaded for interactive use:
+
+### A) Recommended for systemd users — Optional systemd helper (explicit)
+
+(Use this if you want the module to be started automatically *after user login* via the supplied service.)
+
+1. Edit the service file to set your username:
+
+   ```bash
+   # Replace <YOUR_USERNAME> in the file
+   sed -i 's/<YOUR_USERNAME>/your-username-here/' mt7902-late.service
+   ```
+
+2. Copy and enable the service:
+
+   ```bash
+   sudo cp mt7902-late.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now mt7902-late.service
+   # Check status:
+   sudo systemctl status mt7902-late.service
+   ```
+
+3. The `mt7902-late.service` will run after login to bind/load the module. This path is **optional** — use it only if you want the service-managed load behavior.
+
+### B) Simple manual / per-login method (no systemd)
+
+(Use this if you do **not** want to use the systemd service.)
+
+After building, load the module manually after you log in (or add to your login scripts):
+
+```bash
+# as root (or via sudo)
+sudo insmod ./mt7902.ko            # insert local built module (path to the .ko)
+# OR prefer modprobe if installed to kernel modules path:
+sudo cp -v out/mt7902.ko /lib/modules/$(uname -r)/kernel/drivers/net/wireless/
+sudo depmod -a
+sudo modprobe mt7902
+```
+
+If you want the module loaded on every boot without systemd, consider adding the module name to `/etc/modules-load.d/gen4-mt7902.conf`:
+
+```bash
+echo mt7902 | sudo tee /etc/modules-load.d/gen4-mt7902.conf
+```
+
+> Note: Because of current quirks, some systems may still require you to `insmod` or `modprobe` after login rather than at early boot. If you hit issues, prefer the systemd `mt7902-late.service` or an explicit user login hook.
+
+---
+
+## DKMS (optional)
+
+If you prefer DKMS so the module rebuilds for new kernels:
+
+```bash
 sudo apt install dkms
-
-# Fedora
-sudo dnf install dkms
-
-# Arch
-sudo pacman -S dkms
-```
-
-- Copy the source to `/usr/src`:
-
-```bash
 sudo mkdir -p /usr/src/gen4-mt7902-0.1
-sudo cp -r * /usr/src/gen4-mt7902-0.1/
-```
-
-- Register, build, and install the driver with DKMS:
-
-```bash
+sudo cp -r . /usr/src/gen4-mt7902-0.1
 sudo dkms add -m gen4-mt7902 -v 0.1
 sudo dkms build -m gen4-mt7902 -v 0.1
 sudo dkms install -m gen4-mt7902 -v 0.1
 ```
 
-- To install the firmware required for the driver, use this command (if you didn't install it before)
+**Important:** DKMS handles module compilation/installation but **does not** replace the required firmware step above. Make sure `make install_fw` (or manual copy) is done first.
+
+---
+
+## Post-install: troubleshooting & recovery
+
+### Shutdown/reboot hang
+
+If your system hangs during shutdown or reboot, manually unload the module first:
 
 ```bash
-sudo make install_fw
+sudo rmmod mt7902
 ```
 
-After reboot, the driver should be loaded automatically, and DKMS will rebuild it for any future kernel updates.
+I don't yet know how to make this automatic.
 
-## Tested hardware
+### BAR0 = `0xdead0003` (MMIO dead) recovery
 
-Currently the driver is being tested on some of these models:
+1. Shut down the machine
+2. Unplug AC and remove battery (if easily removable)
+3. Hold the power button 20–40 seconds to drain charge and clear retention latches
+4. Wait ~1–2 minutes, reattach power and boot
 
-- WMDM-257AX (tested without antenna connected)
-- AW-XB552NF
+This performs a full hardware power cycle to clear stuck power/reset domains.
 
-> [!CAUTION]
-> For AW-XB552NF, you might want to read [Status](#status) again 
+### Soft recovery attempts
 
-## FAQs
+May not work if the PCIe fabric is latched:
 
-### What's the minimum kernel version that the driver is going to aim ?
+```bash
+sudo rmmod mt7902 || true
+sudo modprobe mt7902
+# or try bus rescan
+echo 1 | sudo tee /sys/bus/pci/rescan
+```
 
-I'm thinking 5.4+. Older version may work, but you're on your own.
+---
 
-### Will you be around fixing bugs & maintain this driver ?
+## Troubleshooting tips & useful commands
 
-I will try, but my knowledge & abilities are very limited. Not to mention I am very busy right now due to spending time on [BlissOS](https://blissos.org/) & focusing most of my time on university's capsule project.
+**Check runtime PM status:**
 
-Any contributions to the project especially during these times are like **_✨gold✨_** to me, thank you very much. 🙏
+```bash
+cat /sys/bus/pci/devices/0000:02:00.0/power/runtime_status
+echo on | sudo tee /sys/bus/pci/devices/0000:02:00.0/power/control
+```
 
-### From the info gathered in this driver, can we add MT7902 support to mt76 driver ?
+**Disable ASPM temporarily** (for Wi-Fi device only):
 
-Yes and No. `Yes` you can and I already did some attempt before. However, `No` because it is not as easy as adding mt7902 info to the driver and expecting it to run smoothly. It turned out that Mediatek gave [a very special firmware to the MT7921 family](https://github.com/tnguy3333/mt7902/issues/7#issuecomment-3263501573) and you will have to spend extra time to figuring out how to use the Windows firmware on the mt76 driver.
+```bash
+# for device 0000:02:00.0 (check your device with lspci)
+sudo setpci -s 02:00.0 CAP_EXP+0x10.w=0x0000
+```
 
-### How about Bluetooth ?
+**Check firmware load errors:**
 
-I don't know, I never tested Bluetooth before. I did make a patch for `btmtk` based on the info I gathered from [rodin's BSP](https://github.com/MiCode/MTK_kernel_modules/tree/bsp-rodin-v-oss/connectivity/bt/linux_v2). If you planned to build the kernel on your own or making OOT driver for `btmtk`, you can find it here:
+```bash
+dmesg | grep -i mt7902
+journalctl -k | grep mt7902
+```
 
-https://gist.github.com/hmtheboy154/b2675e02d5f9a0bb861598e77ec2f38f
+---
 
-### I noticed there's this newer [gen4m](https://github.com/MiCode/MTK_kernel_modules/tree/bsp-rodin-v-oss/connectivity/wlan/core/gen4m) driver which looks more active. Can we bring MT7902 info to that driver and use it instead ?
+## Development notes
 
-Maybe ? I've tried to compare [gen4m's MT7961](https://github.com/MiCode/MTK_kernel_modules/tree/bsp-rodin-v-oss/connectivity/wlan/core/gen4m/chips/mt7961) to the `gen4-mt79xx` one before and looks like there're a lot of changes. It doesn't look impossible though, maybe you can try :).
+* Use `make clean` and `git clean -fdX` to clear build artifacts
+* Suggested branch workflow: keep `backup-raw-history` with original commits before history surgery. Use a `tidy-history` branch for the public-clean history you push
+* If you fork upstream, set `upstream` remote and keep `origin` as your fork for PRs
 
-### Is there a place like a group chat that we can talk about the development of the driver ?
+---
 
-There's this [Discord group](https://discord.gg/JGhjAxEFhz) that I [found](https://github.com/OnlineLearningTutorials/mt7902_temp/issues/8#issuecomment-2933979855).
+## Firmware & licensing
 
-### Is there any documents to show which device has been tested ? I want to check/contribute to it.
+This repo includes firmware files used for reproducible testing. Firmware may contain vendor licensing — see `FIRMWARE_LICENSES.md` for provenance notes and license text (if available).
 
-There's one on the Discord group above.
+If you prefer not to include firmware in your public repo: remove `firmware/` from the tree and instruct users to obtain firmware separately — but remember that **local testing requires the firmware** in the system firmware directory.
+
+---
+
+## Contributing
+
+See `CONTRIBUTING.md` for how to run tests, write patches, and prepare PRs. If you submit firmware or vendor settings, explicitly document provenance in `FIRMWARE_LICENSES.md`.
+
+---
+
+## CHANGELOG
+
+See `CHANGELOG.md` for the full shortlog. Example release:
+
+```
+v0.1.0 — initial BSP import, basic MT7902 bring-up, firmware packaging, initial fixes for runtime PM and bring-up.
+```
+
+```
+```
+

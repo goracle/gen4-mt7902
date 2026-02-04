@@ -445,7 +445,7 @@ enum ENUM_PARAM_NETWORK_TYPE {
 
 struct PARAM_NETWORK_TYPE_LIST {
 	uint32_t NumberOfItems;	/*!< At least 1 */
-	enum ENUM_PARAM_NETWORK_TYPE eNetworkType[1];
+	enum ENUM_PARAM_NETWORK_TYPE eNetworkType[];
 };
 
 enum ENUM_PARAM_PRIVACY_FILTER {
@@ -556,12 +556,12 @@ struct PARAM_BSSID_EX {
 	enum ENUM_PARAM_OP_MODE eOpMode;
 	uint8_t rSupportedRates[PARAM_MAX_LEN_RATES_EX];
 	uint32_t u4IELength;
-	uint8_t aucIEs[1];
+	uint8_t aucIEs[];
 };
 
 struct PARAM_BSSID_LIST_EX {
 	uint32_t u4NumberOfItems;	/*!< at least 1 */
-	struct PARAM_BSSID_EX arBssid[1];
+	struct PARAM_BSSID_EX arBssid[];
 };
 
 struct PARAM_WEP {
@@ -706,7 +706,7 @@ struct PARAM_CAPABILITY {
 	uint32_t u4Version;
 	uint32_t u4NoOfAuthEncryptPairsSupported;
 	struct PARAM_AUTH_ENCRYPTION
-		arAuthenticationEncryptionSupported[1];
+		arAuthenticationEncryptionSupported[];
 };
 
 #define NL80211_KCK_LEN                 16
@@ -1652,7 +1652,7 @@ struct BSSINFO_ARGUMENT {
 	uint8_t Active;
 	uint8_t WmmIdx;
 	uint32_t u4BssInfoFeature;
-	uint8_t aucBuffer[0];
+	uint8_t aucBuffer[];
 };
 
 struct PARAM_CUSTOM_PFMU_TAG_READ_STRUCT {
@@ -2895,7 +2895,7 @@ struct EXT_CMD_SER_T {
 	uint8_t ucAction;
 	uint8_t ucSerSet;
 	uint8_t ucDbdcIdx;
-	uint8_t aucReserve[1];
+	uint8_t aucReserve[];
 };
 
 #if (CFG_SUPPORT_TXPOWER_INFO == 1)
@@ -3133,7 +3133,7 @@ struct PARAM_COEX_ISO_DETECT {
 
 /* Coex Info Structure */
 /************************************************/
-/*  char   cCoexInfo[];                        */
+/*  char   cCoexInfo[1];                        */
 /************************************************/
 struct PARAM_COEX_GET_INFO {
 	uint32_t   u4CoexInfo[COEX_INFO_LEN];

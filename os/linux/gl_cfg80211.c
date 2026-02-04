@@ -6090,10 +6090,18 @@ mtk_reg_notify(IN struct wiphy *pWiphy,
 		DBGLOG(RLM, ERROR, "wlan is halt, skip reg callback\n");
 		return;
 	}
-
 	if (!rlmDomainCountryCodeUpdateSanity(
 		prGlueInfo, pBaseWiphy, &prAdapter)) {
-		DBGLOG(RLM, ERROR, "sanity check failed, skip!\n");
+		/* Cache regdom for later replay, but only if it's not "00" */
+		extern struct mtk_regd_control g_mtk_regd_control;
+		if (pRequest->alpha2[0] != '0' || pRequest->alpha2[1] != '0') {
+			g_mtk_regd_control.cached_alpha2 = rlmDomainAlpha2ToU32(pRequest->alpha2, 2);
+			g_mtk_regd_control.pending_regdom_update = TRUE;
+			DBGLOG(RLM, WARN, "prGlueInfo not ready, caching alpha2=%s for later\n",
+				pRequest->alpha2);
+		} else {
+			DBGLOG(RLM, INFO, "prGlueInfo not ready, ignoring world regdom (00)\n");
+		}
 		return;
 	}
 
@@ -6556,7 +6564,7 @@ int mtk_cfg_start_radar_detection(struct wiphy *wiphy,
 				  struct cfg80211_chan_def *chandef,
 				  unsigned int cac_time_ms
 #if CFG80211_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
-                  ,int link_id
+				  //,int link_id
 #endif
 )
 {

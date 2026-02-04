@@ -247,6 +247,8 @@ void scnSendScanReq(IN struct ADAPTER *prAdapter)
  * \return none
  */
 /*----------------------------------------------------------------------------*/
+
+#define SCAN_COOLDOWN_MS 5000
 void scnSendScanReqV2(IN struct ADAPTER *prAdapter)
 {
 	struct SCAN_INFO *prScanInfo;
@@ -258,6 +260,15 @@ void scnSendScanReqV2(IN struct ADAPTER *prAdapter)
 	ASSERT(prAdapter);
 
 	prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
+
+	OS_SYSTIME now = kalGetTimeTick();
+	if (!CHECK_FOR_TIMEOUT(now, prScanInfo->rLastScanCompletedTime,
+			       MSEC_TO_SYSTIME(SCAN_COOLDOWN_MS))) {
+		log_dbg(SCN, INFO, "Scan suppressed (cooldown active)\n");
+		prScanInfo->rLastScanCompletedTime = now;  // ← ADD THIS LINE
+		return;
+	}
+	
 	prScanParam = &(prScanInfo->rScanParam);
 
 	prCmdScanReq = kalMemAlloc(
