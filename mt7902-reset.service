@@ -1,0 +1,17 @@
+[Unit]
+Description=Remove MT7902 driver on shutdown to prevent hang
+DefaultDependencies=no
+After=network.target
+Before=shutdown.target reboot.target halt.target
+
+[Service]
+Type=oneshot
+# Ensure the interface is down so the module isn't 'busy'
+ExecStartPre=-/sbin/modprobe -r mt7902
+# Unload in the correct dependency order: main driver, then libs
+ExecStart=/sbin/modprobe -r mt7902 mt7902_lib mt76_connac_lib mt76
+StandardOutput=syslog
+RemainAfterExit=yes
+
+[Install]
+WantedBy=shutdown.target reboot.target halt.target
