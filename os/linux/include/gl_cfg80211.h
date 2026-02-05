@@ -743,33 +743,24 @@ int mtk_cfg_testmode_cmd(struct wiphy *wiphy, void *data,
 
 #if (CFG_SUPPORT_DFS_MASTER == 1)
 #if KERNEL_VERSION(3, 15, 0) <= CFG80211_VERSION_CODE
-
-/* Cleaned up declaration logic for 6.11+ kernels */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
-int mtk_cfg_start_radar_detection(struct wiphy *wiphy, 
-                                  struct net_device *dev, 
-                                  struct cfg80211_chan_def *chandef, 
-                                  u32 cac_time_ms, 
-                                  int chain_mask);
-#else
-int mtk_cfg_start_radar_detection(struct wiphy *wiphy, 
-                                  struct net_device *dev, 
-                                  struct cfg80211_chan_def *chandef, 
-                                  u32 cac_time_ms);
-#endif
-
-#endif
-#endif
-
-
-
+#if KERNEL_VERSION(6, 11, 0) <= CFG80211_VERSION_CODE
+int mtk_cfg_start_radar_detection(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_chan_def *chandef, u32 cac_time_ms, int chain_mask);
+#else //KERNEL_VERSION(6, 11, 0) > CFG80211_VERSION_CODE
+int mtk_cfg_start_radar_detection(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_chan_def *chandef, u32 cac_time_ms);
+#endif //KERNEL_VERSION(6, 11, 0) <= CFG80211_VERSION_CODE
+#else //KERNEL_VERSION(3, 15, 0) > CFG80211_VERSION_CODE
+#if KERNEL_VERSION(6, 11, 0) <= CFG80211_VERSION_CODE
+int mtk_cfg_start_radar_detection(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_chan_def *chandef, int chain_mask);
+#else //KERNEL_VERSION(6, 11, 0) > CFG80211_VERSION_CODE
+int mtk_cfg_start_radar_detection(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_chan_def *chandef);
+#endif //KERNEL_VERSION(6, 11, 0) <= CFG80211_VERSION_CODE
+#endif //KERNEL_VERSION(3, 15, 0) <= CFG80211_VERSION_CODE
 #if KERNEL_VERSION(3, 13, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_channel_switch(struct wiphy *wiphy,
 			   struct net_device *dev,
 			   struct cfg80211_csa_settings *params);
-#endif
-#endif
-
+#endif //KERNEL_VERSION(3, 13, 0) <= CFG80211_VERSION_CODE
+#endif //CFG_SUPPORT_DFS_MASTER
 
 #if (CFG_ENABLE_WIFI_DIRECT_CFG_80211 != 0)
 int mtk_cfg_change_bss(struct wiphy *wiphy,
