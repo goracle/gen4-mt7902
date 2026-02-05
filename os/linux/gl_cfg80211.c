@@ -6560,61 +6560,65 @@ int mtk_uninit_ap_role(struct GLUE_INFO *prGlueInfo,
 #if (CFG_SUPPORT_DFS_MASTER == 1)
 #if KERNEL_VERSION(3, 15, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_start_radar_detection(struct wiphy *wiphy,
-				  struct net_device *dev,
-				  struct cfg80211_chan_def *chandef,
-				  unsigned int cac_time_ms
-#if CFG80211_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
-				  //,int link_id
+                                  struct net_device *dev,
+                                  struct cfg80211_chan_def *chandef,
+                                  unsigned int cac_time_ms
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+                                  , int chain_mask
 #endif
 )
 {
-	struct GLUE_INFO *prGlueInfo = NULL;
+    struct GLUE_INFO *prGlueInfo = NULL;
 
-	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
+    prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
 
-	if ((!prGlueInfo) ||
-		!wlanIsDriverReady(prGlueInfo, WLAN_DRV_READY_CHCECK_WLAN_ON |
-		WLAN_DRV_READY_CHCECK_HIF_SUSPEND)) {
-		DBGLOG(REQ, WARN, "driver is not ready\n");
-		return -EFAULT;
-	}
+    if ((!prGlueInfo) ||
+        !wlanIsDriverReady(prGlueInfo, WLAN_DRV_READY_CHCECK_WLAN_ON |
+        WLAN_DRV_READY_CHCECK_HIF_SUSPEND)) {
+        DBGLOG(REQ, WARN, "driver is not ready\n");
+        return -EFAULT;
+    }
 
-	if (mtk_IsP2PNetDevice(prGlueInfo, dev) <= 0) {
-		DBGLOG(REQ, WARN, "STA doesn't support this function\n");
-		return -EFAULT;
-	}
+    if (mtk_IsP2PNetDevice(prGlueInfo, dev) <= 0) {
+        DBGLOG(REQ, WARN, "STA doesn't support this function\n");
+        return -EFAULT;
+    }
 
-	return mtk_p2p_cfg80211_start_radar_detection(wiphy,
-						      dev,
-						      chandef,
-						      cac_time_ms);
-
+    /* Passing the parameters to the P2P layer */
+    return mtk_p2p_cfg80211_start_radar_detection(wiphy,
+                                                  dev,
+                                                  chandef,
+                                                  cac_time_ms
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+                                                  , chain_mask
+#endif
+    );
 }
 #else
+/* Fallback for very old kernel versions (Pre-3.15) */
 int mtk_cfg_start_radar_detection(struct wiphy *wiphy,
-				  struct net_device *dev,
-				  struct cfg80211_chan_def *chandef)
+                                  struct net_device *dev,
+                                  struct cfg80211_chan_def *chandef)
 {
-	struct GLUE_INFO *prGlueInfo = NULL;
+    struct GLUE_INFO *prGlueInfo = NULL;
 
-	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
+    prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
 
-	if ((!prGlueInfo) ||
-		!wlanIsDriverReady(prGlueInfo, WLAN_DRV_READY_CHCECK_WLAN_ON |
-		WLAN_DRV_READY_CHCECK_HIF_SUSPEND)) {
-		DBGLOG(REQ, WARN, "driver is not ready\n");
-		return -EFAULT;
-	}
+    if ((!prGlueInfo) ||
+        !wlanIsDriverReady(prGlueInfo, WLAN_DRV_READY_CHCECK_WLAN_ON |
+        WLAN_DRV_READY_CHCECK_HIF_SUSPEND)) {
+        DBGLOG(REQ, WARN, "driver is not ready\n");
+        return -EFAULT;
+    }
 
-	if (mtk_IsP2PNetDevice(prGlueInfo, dev) <= 0) {
-		DBGLOG(REQ, WARN, "STA doesn't support this function\n");
-		return -EFAULT;
-	}
+    if (mtk_IsP2PNetDevice(prGlueInfo, dev) <= 0) {
+        DBGLOG(REQ, WARN, "STA doesn't support this function\n");
+        return -EFAULT;
+    }
 
-	return mtk_p2p_cfg80211_start_radar_detection(wiphy, dev, chandef);
-
+    return mtk_p2p_cfg80211_start_radar_detection(wiphy, dev, chandef);
 }
-
+#endif
 #endif
 
 
