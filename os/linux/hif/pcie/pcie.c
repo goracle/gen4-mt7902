@@ -349,44 +349,49 @@ static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	int ret = 0;
 	struct mt66xx_chip_info *prChipInfo;
-
+	
 	ASSERT(pdev);
 	ASSERT(id);
-
+	
 	ret = pci_enable_device(pdev);
 	if (ret) {
 		DBGLOG(INIT, INFO, "pci_enable_device failed!\n");
 		goto out;
 	}
-
+	
+	/* Manual ASPM Disable because we are an out-of-tree module */
+	pr_info("MT7902: Disabling ASPM L1/L1.1/L1.2 manually in probe\n");
+	pci_disable_link_state(pdev, PCIE_LINK_STATE_L1 | 
+	                             PCIE_LINK_STATE_L1_1 | 
+	                             PCIE_LINK_STATE_L1_2);
+	
 #if defined(SOC3_0)
 	if ((void *)&mt66xx_driver_data_soc3_0 == (void *)id->driver_data)
 		DBGLOG(INIT, INFO,
 			"[MJ]&mt66xx_driver_data_soc3_0 == id->driver_data\n");
 #endif
-
+	
 	DBGLOG(INIT, INFO, "pci_enable_device done!\n");
-
+	
 	prChipInfo = ((struct mt66xx_hif_driver_data *)
 				id->driver_data)->chip_info;
 	prChipInfo->pdev = (void *)pdev;
-
+	
 	/* Always call the probe path and set global 'probed' only on success */
 	if (pfWlanProbe((void *) pdev, (void *) id->driver_data) != WLAN_STATUS_SUCCESS) {
-	    DBGLOG(INIT, INFO, "pfWlanProbe fail!call pfWlanRemove()\n");
-	    pfWlanRemove();
-	    ret = -1;
+		DBGLOG(INIT, INFO, "pfWlanProbe fail!call pfWlanRemove()\n");
+		pfWlanRemove();
+		ret = -1;
 	} else {
-	    g_fgDriverProbed = TRUE;
-	    g_u4DmaMask = prChipInfo->bus_info->u4DmaMask;
-	    /* Clear initial cold boot flag - probe completed successfully */
-	    g_fgInInitialColdBoot = FALSE;
-	    DBGLOG(INIT, INFO, "Initial cold boot complete, WFDMA polling now enabled\n");
+		g_fgDriverProbed = TRUE;
+		g_u4DmaMask = prChipInfo->bus_info->u4DmaMask;
+		/* Clear initial cold boot flag - probe completed successfully */
+		g_fgInInitialColdBoot = FALSE;
+		DBGLOG(INIT, INFO, "Initial cold boot complete, WFDMA polling now enabled\n");
 	}
-
+	
 out:
 	DBGLOG(INIT, INFO, "mtk_pci_probe() done(%d)\n", ret);
-
 	return ret;
 }
 
