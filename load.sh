@@ -27,7 +27,7 @@ fi
 dmesg -C
 
 # Insert module
-insmod "$MODULE"
+insmod "$MODULE" disable_ps=1 disable_11ax=1
 
 # Capture logs (NO pipes to sudo)
 dmesg > "$LOGFILE"
