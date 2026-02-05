@@ -2679,6 +2679,14 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
 
 			prTransit = (struct CMD_ROAMING_TRANSIT *) (
 					    prEvent->aucBuffer);
+
+			// MT7902 FIX: Ignore firmware roaming events for stationary devices
+			if (prTransit->eReason == ROAMING_REASON_POOR_RCPI) {
+				DBGLOG(ROAMING, INFO,
+				       "[MT7902] Ignoring FW roaming event (POOR_RCPI)\n");
+				break;
+			}
+
 			roamingFsmProcessEvent(prAdapter, prTransit);
 		}
 #endif /* CFG_SUPPORT_ROAMING */
