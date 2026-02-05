@@ -1926,6 +1926,9 @@ static bool pcieCheckASPML1SS(struct pci_dev *dev, int i4BitMap)
 bool glBusConfigASPM(struct pci_dev *dev, int i4Enable)
 {
 
+/* FORCED DISABLE: Prevent PCIe link collapse on Vivobook */
+    return FALSE;
+
 	uint32_t u4Reg = 0;
 	struct pci_dev *parent = dev->bus->self;
 	int pos = parent->pcie_cap;

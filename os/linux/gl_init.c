@@ -4679,7 +4679,9 @@ void wlanOnPreAdapterStart(struct GLUE_INFO *prGlueInfo,
 	 *            sizeof(REG_INFO_T));
 	 */
 
-	(*pprRegInfo)->u4PowerMode = CFG_INIT_POWER_SAVE_PROF;
+	//(*pprRegInfo)->u4PowerMode = CFG_INIT_POWER_SAVE_PROF;
+	/* Force CAM mode to prevent PCIe L1 link collapse on Vivobook */
+	(*pprRegInfo)->u4PowerMode = ENUM_PSP_CONTINUOUS_ACTIVE;
 #if 0
 		prRegInfo->fgEnArpFilter = TRUE;
 #endif
