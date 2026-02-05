@@ -77,7 +77,8 @@
  *******************************************************************************
  */
 #define SCN_CHANNEL_DWELL_TIME_MIN_MSEC		12
-#define SCN_CHANNEL_DWELL_TIME_EXT_MSEC		98
+//#define SCN_CHANNEL_DWELL_TIME_EXT_MSEC		98
+#define SCN_CHANNEL_DWELL_TIME_EXT_MSEC   30  // Was 98
 
 #define SCN_TOTAL_PROBEREQ_NUM_FOR_FULL		3
 #define SCN_SPECIFIC_PROBEREQ_NUM_FOR_FULL	1

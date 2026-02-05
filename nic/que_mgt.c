@@ -86,6 +86,7 @@
  *******************************************************************************
  */
 OS_SYSTIME g_arMissTimeout[CFG_STA_REC_NUM][CFG_RX_MAX_BA_TID_NUM];
+static uint32_t g_u4BlockedAbsenceCount = 0;
 
 const uint8_t aucTid2ACI[TX_DESC_TID_NUM] = {
 	WMM_AC_BE_INDEX,	/* TID0 */
@@ -7299,26 +7300,29 @@ void qmHandleEventBssAbsencePresence(IN struct ADAPTER *prAdapter,
 	 *
 	 * Fix: If connected AND scanning, ignore firmware absence request.
 	 */
+
 	if (prEventBssStatus->ucIsAbsent &&
 	    prBssInfo->eConnectionState == MEDIA_STATE_CONNECTED &&
 	    prAdapter->rWifiVar.rScanInfo.eCurrentState != SCAN_STATE_IDLE) {
 		
-		DBGLOG(QM, WARN,
-		       "MT7902-FIX: Blocking absence during scan! BSS=%u ScanState=%d\n",
-		       prEventBssStatus->ucBssIndex,
-		       prAdapter->rWifiVar.rScanInfo.eCurrentState);
+		g_u4BlockedAbsenceCount++;
+		
+		// Only log occasionally to reduce spam
+		if (g_u4BlockedAbsenceCount % 10 == 1) {
+			DBGLOG(QM, INFO,
+			       "MT7902: Blocked %u scan absences (BSS=%u ScanState=%d)\n",
+			       g_u4BlockedAbsenceCount,
+			       prEventBssStatus->ucBssIndex,
+			       prAdapter->rWifiVar.rScanInfo.eCurrentState);
+		}
 		
 		/* Keep network present */
 		prBssInfo->fgIsNetAbsent = FALSE;
 		prBssInfo->ucBssFreeQuota = prEventBssStatus->ucBssFreeQuota;
 		
-		DBGLOG(QM, INFO, "NAF=%d,%d,%d (BLOCKED)\n",
-		       prEventBssStatus->ucBssIndex,
-		       prEventBssStatus->ucIsAbsent,
-		       prEventBssStatus->ucBssFreeQuota);
-		
 		return;
 	}
+
 	/* ========== END CRITICAL FIX ========== */
 
 	prBssInfo->fgIsNetAbsent = prEventBssStatus->ucIsAbsent;

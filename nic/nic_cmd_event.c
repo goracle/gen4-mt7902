@@ -5195,6 +5195,15 @@ void nicEventRoamingStatus(IN struct ADAPTER *prAdapter,
 		prTransit->ucBssidx = AIS_DEFAULT_INDEX;
 	}
 
+	// MT7902 FIX: Ignore firmware roaming events
+	if (prTransit->eReason == ROAMING_REASON_POOR_RCPI ||
+	    prTransit->eReason == ROAMING_REASON_TX_ERR) {
+		DBGLOG(ROAMING, INFO,
+		       "[MT7902] Ignoring FW roaming event (reason=%d)\n",
+		       prTransit->eReason);
+		return;
+	}
+
 	roamingFsmProcessEvent(prAdapter, prTransit);
 #endif /* CFG_SUPPORT_ROAMING */
 }

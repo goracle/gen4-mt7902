@@ -704,8 +704,11 @@ static uint16_t scanCalculateScoreByIdleTime(struct ADAPTER *prAdapter,
 	struct SCAN_INFO *prScanInfo;
 	struct SCAN_PARAM *prScanParam;
 	struct BSS_INFO *prAisBssInfo;
-#define CHNL_DWELL_TIME_DEFAULT  100
-#define CHNL_DWELL_TIME_ONLINE   50
+	//#define CHNL_DWELL_TIME_DEFAULT  100
+	//#define CHNL_DWELL_TIME_ONLINE   50
+#define CHNL_DWELL_TIME_DEFAULT  35   // Was 100
+#define CHNL_DWELL_TIME_ONLINE   25   // Was 50
+
 
 	prAisBssInfo = aisGetAisBssInfo(prAdapter, ucBssIndex);
 	prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
@@ -721,6 +724,11 @@ static uint16_t scanCalculateScoreByIdleTime(struct ADAPTER *prAdapter,
 		u2ChDwellTime = CHNL_DWELL_TIME_ONLINE;
 	else
 		u2ChDwellTime = CHNL_DWELL_TIME_DEFAULT;
+
+	// MT7902 FIX: Cap dwell time to reduce blocking absence
+	if (u2ChDwellTime > 35) {
+		u2ChDwellTime = 35;
+	}
 
 	for (u4ChCnt = 0; u4ChCnt < prScanInfo
 		->ucSparseChannelArrayValidNum; u4ChCnt++) {

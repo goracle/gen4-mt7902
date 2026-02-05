@@ -2008,6 +2008,34 @@ void aisFsmSteps(IN struct ADAPTER *prAdapter,
 				   */
 				   || aisFsmIsInProcessBeaconTimeout(
 				   prAdapter, ucBssIndex)) {
+
+
+    // MT7902 FIX: Disable roaming discovery scans for stationary devices
+    // Allow beacon timeout recovery scans to proceed
+    if (prRoamingFsmInfo->eCurrentState == ROAMING_STATE_DISCOVERY &&
+        !aisFsmIsInProcessBeaconTimeout(prAdapter, ucBssIndex)) {
+        DBGLOG(AIS, INFO,
+               "[MT7902] Roaming scan disabled - device in stationary mode\n");
+        // Clear the flag so we don't keep trying
+        prAisFsmInfo->fgTargetChnlScanIssued = FALSE;
+        
+        // Clean up the scan request and exit
+        kalMemZero(prAisFsmInfo->aucScanIEBuf,
+                   sizeof(prAisFsmInfo->aucScanIEBuf));
+        prScanRequest->ucShortSsidNum = 0;
+        prScanRequest->u4SsidNum = 0;
+        prScanRequest->ucScanType = SCAN_TYPE_ACTIVE_SCAN;
+        prScanRequest->u4IELength = 0;
+        prScanRequest->u4ChannelNum = 0;
+        prScanRequest->ucScnFuncMask = 0;
+        kalMemZero(prScanRequest->aucRandomMac, MAC_ADDR_LEN);
+        prAisFsmInfo->fgTryScan = FALSE;
+        prAisFsmInfo->fgIsScanning = FALSE;
+        
+        // Don't build or send the scan message
+        break;
+    }
+
 				struct RF_CHANNEL_INFO *prChnlInfo =
 				    &prScanReqMsg->arChnlInfoList[0];
 				uint8_t ucChannelNum = 0;
