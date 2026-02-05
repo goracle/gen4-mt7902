@@ -66,9 +66,18 @@ If you prefer to do it manually:
 
 ```bash
 # example (adjust if your distro uses /usr/lib/firmware instead)
-sudo cp -v firmware/* /lib/firmware/
-sudo chmod 644 /lib/firmware/WIFI_RAM_CODE_MT7902_1.bin
-sudo update-initramfs -u   # optional, only if you want firmware included in initramfs
+
+# Create firmware directory
+sudo mkdir -p /lib/firmware/mediatek/mt7902
+
+# Copy firmware files
+sudo cp -v firmware/* /lib/firmware/mediatek/mt7902/
+
+# Set permissions
+sudo chmod 644 /lib/firmware/mediatek/mt7902/*
+
+# Optional: update initramfs if needed
+sudo update-initramfs -u # optional, only if you want firmware included in initramfs
 ```
 
 Confirm firmware exists where your kernel expects it (e.g. `/lib/firmware/WIFI_RAM_CODE_MT7902_1.bin`).

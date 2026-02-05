@@ -1292,3 +1292,18 @@ endif
 # $(MODULE_NAME_RESET)-objs += $(RESET_OBJS)
 # obj-m += $(MODULE_NAME_RESET).o
 # endif
+
+# Add this section near the top of your Makefile, after the MODULE_NAME definition
+# or at the end of the file
+
+# Firmware installation
+FIRMWARE_DIR := /lib/firmware/mediatek/mt7902
+DESTDIR ?=
+
+.PHONY: install_fw
+
+install_fw:
+	@echo "Installing firmware to $(DESTDIR)$(FIRMWARE_DIR)..."
+	install -d $(DESTDIR)$(FIRMWARE_DIR)
+	install -m 644 firmware/* $(DESTDIR)$(FIRMWARE_DIR)/
+	@echo "Firmware installation complete."

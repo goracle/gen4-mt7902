@@ -2312,44 +2312,49 @@ u_int8_t rlmDomainTxPwrLimitGetCountryRange(
 	uint32_t u4TmpPos = 0;
 	char pcrCountryStr[TX_PWR_LIMIT_COUNTRY_STR_MAX_LEN + 1] = {0};
 	uint8_t cIdx = 0;
+	u_int8_t bFound = FALSE;
 
-	while (1) {
-		while (u4TmpPos < u4BufLen && pucBuf[u4TmpPos] != '[')
-			u4TmpPos++;
+	while (u4TmpPos < u4BufLen) {
+		// 1. Find a opening bracket
+		if (pucBuf[u4TmpPos++] != '[')
+			continue;
 
-		u4TmpPos++; /* skip the '[' char */
-
+		// 2. Read the string inside brackets
 		cIdx = 0;
-		while ((u4TmpPos < u4BufLen) &&
-			   (cIdx < TX_PWR_LIMIT_COUNTRY_STR_MAX_LEN) &&
-			   (pucBuf[u4TmpPos] != ']')) {
-			pcrCountryStr[cIdx++] = pucBuf[u4TmpPos];
-			u4TmpPos++;
+		while ((u4TmpPos < u4BufLen) && (cIdx < TX_PWR_LIMIT_COUNTRY_STR_MAX_LEN) && (pucBuf[u4TmpPos] != ']')) {
+			pcrCountryStr[cIdx++] = pucBuf[u4TmpPos++];
+		}
+		pcrCountryStr[cIdx] = '\0';
+		u4TmpPos++; // skip the ']'
+
+		// 3. Check if this bracket is our target Country Code
+		if (!bFound && u4CountryCode == rlmDomainAlpha2ToU32(pcrCountryStr, cIdx)) {
+			DBGLOG(RLM, INFO, "Found TxPwrLimit table for CountryCode \"%s\"\n", pcrCountryStr);
+			*pu4CountryStart = u4TmpPos;
+			bFound = TRUE;
+			continue; 
 		}
 
-		u4TmpPos++; /* skip the ']' char */
-
-		if ((u4TmpPos >= u4BufLen) ||
-		    (cIdx > TX_PWR_LIMIT_COUNTRY_STR_MAX_LEN))
-			return FALSE;
-
-		if (u4CountryCode ==
-			rlmDomainAlpha2ToU32(pcrCountryStr, cIdx)) {
-			DBGLOG(RLM, INFO,
-				"Found TxPwrLimit table for CountryCode \"%s\"\n",
-				pcrCountryStr);
-			*pu4CountryStart = u4TmpPos;
-			/* the location after char ']' */
-			break;
+		// 4. If we already found our country, and we hit ANOTHER bracket...
+		if (bFound) {
+			/* INNOVATIVE FIX: Only stop if the bracketed string is 
+			   exactly a 2-character country code or "WW". 
+			   Otherwise, treat it as a sub-section and keep going.
+			*/
+			if (cIdx == 2 || (cIdx == 3 && strcmp(pcrCountryStr, "WW") == 0)) {
+				*pu4CountryEnd = u4TmpPos - (cIdx + 2); // Stop before the new country bracket
+				return TRUE;
+			}
 		}
 	}
 
-	while (u4TmpPos < u4BufLen && pucBuf[u4TmpPos] != '[')
-		u4TmpPos++;
+	// If we reached EOF after finding the country, the end is the end of the buffer
+	if (bFound) {
+		*pu4CountryEnd = u4BufLen;
+		return TRUE;
+	}
 
-	*pu4CountryEnd = u4TmpPos;
-
-	return TRUE;
+	return FALSE;
 }
 
 u_int8_t rlmDomainTxPwrLimitSearchSection(const char *pSectionName,

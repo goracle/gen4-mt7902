@@ -5261,6 +5261,7 @@ void rlmProcessBcn(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb,
 {
 	struct BSS_INFO *prBssInfo;
 	u_int8_t fgNewParameter;
+	u_int8_t fgNewSRParam = FALSE; // Move it out of the #if guard here
 #if (CFG_SUPPORT_802_11AX == 1)
 	u_int8_t fgNewSRParam = FALSE;
 #endif
@@ -5270,85 +5271,62 @@ void rlmProcessBcn(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb,
 	ASSERT(prSwRfb);
 	ASSERT(pucIE);
 
-	fgNewParameter = FALSE;
-
-	/* When concurrent networks exist, GO shall have the same handle as
-	 * the other BSS, so the Beacon shall be processed for bandwidth and
-	 * protection mechanism.
-	 * Note1: we do not have 2 AP (GO) cases simultaneously now.
-	 * Note2: If we are GO, concurrent AIS AP should detect it and reflect
-	 *        action in its Beacon, so AIS STA just follows Beacon from AP.
-	 */
 	for (i = 0; i < prAdapter->ucHwBssIdNum; i++) {
 		prBssInfo = prAdapter->aprBssInfo[i];
 
-		if (IS_BSS_BOW(prBssInfo))
+		if (!prBssInfo || IS_BSS_BOW(prBssInfo) || !IS_BSS_ACTIVE(prBssInfo))
 			continue;
 
-		if (IS_BSS_ACTIVE(prBssInfo)) {
-			if (prBssInfo->eCurrentOPMode ==
-				    OP_MODE_INFRASTRUCTURE &&
-			    prBssInfo->eConnectionState ==
-				    MEDIA_STATE_CONNECTED) {
-				/* P2P client or AIS infra STA */
-				if (EQUAL_MAC_ADDR(
-					    prBssInfo->aucBSSID,
-					    ((struct WLAN_MAC_MGMT_HEADER
-						      *)(prSwRfb->pvHeader))
-						    ->aucBSSID)) {
+		/* Check if this beacon is from our associated AP */
+		if (prBssInfo->eCurrentOPMode == OP_MODE_INFRASTRUCTURE &&
+		    prBssInfo->eConnectionState == MEDIA_STATE_CONNECTED &&
+		    EQUAL_MAC_ADDR(prBssInfo->aucBSSID, 
+		    ((struct WLAN_MAC_MGMT_HEADER *)(prSwRfb->pvHeader))->aucBSSID)) {
 
-					fgNewParameter = rlmRecBcnInfoForClient(
-						prAdapter, prBssInfo, prSwRfb,
-						pucIE, u2IELength);
+			/* 1. Extract the info from the beacon */
+			fgNewParameter = rlmRecBcnInfoForClient(
+				prAdapter, prBssInfo, prSwRfb, pucIE, u2IELength);
+
 #if (CFG_SUPPORT_802_11AX == 1)
-					fgNewSRParam = heRlmRecHeSRParams(
-						prAdapter, prBssInfo,
-						prSwRfb, pucIE, u2IELength);
+			fgNewSRParam = heRlmRecHeSRParams(
+				prAdapter, prBssInfo, prSwRfb, pucIE, u2IELength);
 #endif
-				} else {
-					fgNewParameter =
-						rlmRecBcnFromNeighborForClient(
-							prAdapter, prBssInfo,
-							prSwRfb, pucIE,
-							u2IELength);
-				}
-			}
-#if CFG_ENABLE_WIFI_DIRECT
-			else if (prAdapter->fgIsP2PRegistered &&
-				 (prBssInfo->eCurrentOPMode ==
-					  OP_MODE_ACCESS_POINT ||
-				  prBssInfo->eCurrentOPMode ==
-					  OP_MODE_P2P_DEVICE)) {
-				/* AP scan to check if 20/40M bandwidth is
-				 * permitted
-				 */
-				rlmRecBcnFromNeighborForClient(
-					prAdapter, prBssInfo, prSwRfb, pucIE,
-					u2IELength);
-			}
-#endif
-			else if (prBssInfo->eCurrentOPMode == OP_MODE_IBSS) {
-				/* To do: Nothing */
-				/* To do: Ad-hoc */
-			}
 
-			/* Appy new parameters if necessary */
+			/* * INNOVATION: The Steady-State Lock.
+			 * Even if fgNewParameter is TRUE (meaning something in the beacon changed), 
+			 * we suppress the call to rlmSyncOperationParams() if we are in a 
+			 * connected steady-state. This prevents the "Blocking Absence" loop.
+			 */
 			if (fgNewParameter) {
-				rlmSyncOperationParams(prAdapter, prBssInfo);
-				fgNewParameter = FALSE;
+				DBGLOG(RLM, INFO, "MT7902-FIX: Suppressing sync for BSS %u (Steady-State Lock)\n", 
+				       prBssInfo->ucBssIndex);
+				fgNewParameter = FALSE; 
 			}
-#if (CFG_SUPPORT_802_11AX == 1)
+
 			if (fgNewSRParam) {
-				nicRlmUpdateSRParams(prAdapter,
-					prBssInfo->ucBssIndex);
+				DBGLOG(RLM, INFO, "MT7902-FIX: Suppressing HE SR update for BSS %u\n", 
+				       prBssInfo->ucBssIndex);
 				fgNewSRParam = FALSE;
 			}
-#endif
 
-		} /* end of IS_BSS_ACTIVE() */
+		} else if (IS_BSS_ACTIVE(prBssInfo)) {
+			/* Handle Beacons from Neighbors or during Association phase */
+			fgNewParameter = rlmRecBcnFromNeighborForClient(
+				prAdapter, prBssInfo, prSwRfb, pucIE, u2IELength);
+		}
+
+		/* Apply new parameters only if the Lock didn't clear the flags */
+		if (fgNewParameter) {
+			rlmSyncOperationParams(prAdapter, prBssInfo);
+		}
+
+#if (CFG_SUPPORT_802_11AX == 1)
+		if (fgNewSRParam) {
+			nicRlmUpdateSRParams(prAdapter, prBssInfo->ucBssIndex);
+		}
+#endif
 	}
 }
-
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief This function should be invoked after judging successful association.
