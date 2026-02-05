@@ -12,6 +12,7 @@ mt7902_dmesg.log
 *.mod.c
 *.mod.o
 *.mod.cmd
+*.bak
 Module.symvers
 modules.order
 .modules.order.cmd

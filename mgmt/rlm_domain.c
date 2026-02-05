@@ -2250,29 +2250,45 @@ rlmDomainSetCountry(struct ADAPTER *prAdapter)
 uint8_t rlmDomainTxPwrLimitGetTableVersion(
 	uint8_t *pucBuf, uint32_t u4BufLen)
 {
-#define TX_PWR_LIMIT_VERSION_STR_LEN 7
 #define TX_PWR_LIMIT_MAX_VERSION 2
-	uint32_t u4TmpPos = 0;
+	uint32_t i = 0;
 	uint8_t ucVersion = 0;
-
-	while (u4TmpPos < u4BufLen && pucBuf[u4TmpPos] != '<')
-		u4TmpPos++;
-
-	if (u4TmpPos >= (u4BufLen - TX_PWR_LIMIT_VERSION_STR_LEN))
-		return ucVersion;
-
-	if (kalStrnCmp(&pucBuf[u4TmpPos + 1], "Ver:", 4) == 0) {
-		ucVersion = (pucBuf[u4TmpPos + 5] - '0') * 10 +
-			(pucBuf[u4TmpPos + 6] - '0');
+	
+	/* 1. Find the first opening bracket '<' */
+	while (i < u4BufLen && pucBuf[i] != '<')
+		i++;
+	
+	/* 2. Search for "Ver:" in a reasonable window after the '<' */
+	/* Increased from 20 to 500 to handle files with comment headers that get replaced with spaces */
+	for (; i + 5 < u4BufLen && i < 500; i++) {
+		if (pucBuf[i] == 'V' && pucBuf[i+1] == 'e' && 
+		    pucBuf[i+2] == 'r' && pucBuf[i+3] == ':') {
+			
+			uint8_t *pucDigit = &pucBuf[i + 4];
+			
+			/* 3. Robust digit parsing */
+			if (*pucDigit >= '0' && *pucDigit <= '9') {
+				ucVersion = (*pucDigit - '0');
+				
+				/* Check for a second digit (like '02') */
+				if (i + 5 < u4BufLen && *(pucDigit + 1) >= '0' && *(pucDigit + 1) <= '9') {
+					ucVersion = (ucVersion * 10) + (*(pucDigit + 1) - '0');
+				}
+			}
+			
+			DBGLOG(RLM, INFO, "Found Ver tag. Parsed version: %u\n", ucVersion);
+			break;
+		}
 	}
-
-	if (ucVersion > TX_PWR_LIMIT_MAX_VERSION)
+	
+	if (ucVersion > TX_PWR_LIMIT_MAX_VERSION) {
+		DBGLOG(RLM, WARN, "Version %u exceeds MAX, defaulting to 0\n", ucVersion);
 		ucVersion = 0;
-
+	}
+	
 	return ucVersion;
-}
+}/*----------------------------------------------------------------------------*/
 
-/*----------------------------------------------------------------------------*/
 /*!
  * \brief Search the tx power limit setting range of the specified in the text
  *        file
@@ -2352,7 +2368,9 @@ u_int8_t rlmDomainTxPwrLimitSearchSection(const char *pSectionName,
 			return FALSE;
 
 		if (kalStrnCmp(&pucBuf[u4TmpPos],
-				pSectionName, uSectionNameLen) == 0) {
+			pSectionName, uSectionNameLen) == 0 &&
+		    (pucBuf[u4TmpPos + uSectionNameLen] == '>' ||
+		    pucBuf[u4TmpPos + uSectionNameLen] == ',')) {
 
 			/* Go to the end of section header line */
 			while ((u4TmpPos < u4BufEnd) &&
@@ -2745,26 +2763,33 @@ u_int8_t rlmDomainLegacyTxPwrLimitLoadChannelSetting(
 void rlmDomainTxPwrLimitRemoveComments(
 	uint8_t *pucBuf, uint32_t u4BufLen)
 {
-	uint32_t u4TmpPos = 0;
-	char cTmpChar = 0;
-
-	while (u4TmpPos < u4BufLen) {
-		cTmpChar = pucBuf[u4TmpPos];
-
-		if (cTmpChar == '#') {
-			while (cTmpChar != '\n') {
-				pucBuf[u4TmpPos] = ' ';
-
-				u4TmpPos++;
-				if (u4TmpPos >= u4BufLen)
-					break;
-
-				cTmpChar = pucBuf[u4TmpPos];
+	uint32_t u4ReadPos = 0;
+	uint32_t u4WritePos = 0;
+	
+	while (u4ReadPos < u4BufLen) {
+		if (pucBuf[u4ReadPos] == '#') {
+			/* Skip everything until newline */
+			while (u4ReadPos < u4BufLen && pucBuf[u4ReadPos] != '\n') {
+				u4ReadPos++;
 			}
+			/* Copy the newline if we found one */
+			if (u4ReadPos < u4BufLen && pucBuf[u4ReadPos] == '\n') {
+				pucBuf[u4WritePos++] = '\n';
+				u4ReadPos++;
+			}
+		} else {
+			/* Copy non-comment character */
+			pucBuf[u4WritePos++] = pucBuf[u4ReadPos++];
 		}
-		u4TmpPos++;
+	}
+	
+	/* Zero out the rest of the buffer */
+	while (u4WritePos < u4BufLen) {
+		pucBuf[u4WritePos++] = '\0';
 	}
 }
+
+
 
 u_int8_t rlmDomainTxPwrLimitLoad(
 	struct ADAPTER *prAdapter, uint8_t *pucBuf, uint32_t u4BufLen,
@@ -2779,46 +2804,85 @@ u_int8_t rlmDomainTxPwrLimitLoad(
 
 	uint8_t *prFileName = prAdapter->chip_info->prTxPwrLimitFile;
 
+	/* DIAGNOSTIC: Peek at the very beginning of the buffer */
+	DBGLOG(RLM, INFO, "DEBUG: Starting Parse of %s (Len: %u, ucVersion: %u)\n", 
+	       prFileName, u4BufLen, ucVersion);
+	if (u4BufLen > 8) {
+		DBGLOG(RLM, INFO, "DEBUG: Buffer Header Peek: [%.8s] (Hex: %02x %02x %02x %02x)\n", 
+		       pucBuf, pucBuf[0], pucBuf[1], pucBuf[2], pucBuf[3]);
+	}
 
-	u4CountryStart = 0; u4CountryEnd = u4BufLen;
-
+	u4CountryStart = 0; 
+	u4CountryEnd = u4BufLen;
 	u4Pos = u4CountryStart;
 
 	for (uSecIdx = 0; uSecIdx < ucSecNum; uSecIdx++) {
-		const uint8_t *pSecName =
-			prSection->arSectionNames[uSecIdx];
+		const uint8_t *pSecName = prSection->arSectionNames[uSecIdx];
+		uint32_t u4SearchStartPos = u4Pos;
+
+		/* DIAGNOSTIC: Trace the search attempt */
+		DBGLOG(RLM, INFO, "DEBUG: Searching for section [%s] (index %u/%u) starting at offset %u\n", 
+		       pSecName, uSecIdx + 1, ucSecNum, u4Pos);
 
 		if (!rlmDomainTxPwrLimitSearchSection(
 				pSecName, pucBuf, &u4Pos,
 				u4CountryEnd)) {
-			DBGLOG(RLM, ERROR,
-				"Can't find specified section %s in %s\n",
-				pSecName,
-				prFileName);
+			
+			/* DIAGNOSTIC: Search failed. Show context of where we were looking. */
+			DBGLOG(RLM, ERROR, "Can't find specified section %s in %s\n",
+				pSecName, prFileName);
+			
+			if (u4SearchStartPos < u4CountryEnd) {
+				uint32_t u4SnippetLen = (u4CountryEnd - u4SearchStartPos > 32) ? 32 : (u4CountryEnd - u4SearchStartPos);
+				DBGLOG(RLM, ERROR, "DEBUG: Search failed. Buffer context at search start: [%.*s]\n", 
+				       u4SnippetLen, &pucBuf[u4SearchStartPos]);
+			}
+
+			/* Reset u4Pos to the start of country or end of last successful section? 
+			   Usually, the driver keeps going, but let's see why it's failing. */
 			continue;
 		}
 
-		DBGLOG(RLM, INFO, "Find specified section %s in %s\n",
-			pSecName,
-			prFileName);
+		DBGLOG(RLM, INFO, "Find specified section %s in %s at offset %u\n",
+			pSecName, prFileName, u4Pos);
 
 		while (!rlmDomainTxPwrLimitSectionEnd(pucBuf,
 			pSecName,
 			&u4Pos, u4CountryEnd) &&
 			u4Pos < u4CountryEnd) {
+			
+			uint32_t u4PreLoadPos = u4Pos;
+
 			if (!rlmDomainTxPwrLimitLoadChannelSetting(
 				ucVersion, pucBuf, &u4Pos, u4CountryEnd,
-				pTxPwrLimitData, uSecIdx))
+				pTxPwrLimitData, uSecIdx)) {
+				
+				DBGLOG(RLM, ERROR, "DEBUG: Channel setting load FAILED in section %s at offset %u\n", 
+				       pSecName, u4PreLoadPos);
 				return FALSE;
+			}
+
+			/* If u4Pos didn't move, we'll hit an infinite loop */
+			if (u4Pos == u4PreLoadPos) {
+				DBGLOG(RLM, ERROR, "DEBUG: CRITICAL - u4Pos stuck at %u in section %s\n", 
+				       u4Pos, pSecName);
+				u4Pos++; 
+			}
+
 			if (rlmDomainTxPwrLimitIsTxBfBackoffSection(
 				ucVersion, uSecIdx))
 				g_bTxBfBackoffExists = TRUE;
 		}
+		
+		DBGLOG(RLM, INFO, "DEBUG: Finished section %s. Next search starts at %u\n", 
+		       pSecName, u4Pos);
 	}
 
 	DBGLOG(RLM, INFO, "Load %s finished\n", prFileName);
 	return TRUE;
 }
+
+
 
 u_int8_t rlmDomainTxPwrLegacyLimitLoad(
 	struct ADAPTER *prAdapter, uint8_t *pucBuf, uint32_t u4BufLen,
@@ -3223,6 +3287,7 @@ u_int8_t rlmDomainGetTxPwrLimit(
 	u_int8_t bRet = FALSE;
 	uint8_t *pucConfigBuf = NULL;
 	uint32_t u4ConfigReadLen = 0;
+    uint8_t *prFileName = prGlueInfo->prAdapter->chip_info->prTxPwrLimitFile;
 
 	pucConfigBuf = (uint8_t *) kalMemAlloc(
 		WLAN_TX_PWR_LIMIT_FILE_BUF_SIZE, VIR_MEM_TYPE);
@@ -3233,24 +3298,35 @@ u_int8_t rlmDomainGetTxPwrLimit(
 	bRet = rlmDomainTxPwrLimitLoadFromFile(prGlueInfo->prAdapter,
 		pucConfigBuf, &u4ConfigReadLen);
 
+    /* DIAGNOSTIC: Stop early if the file didn't load */
+    if (!bRet || u4ConfigReadLen == 0) {
+        DBGLOG(RLM, ERROR, "DEBUG: Skipping parse because %s failed to load.\n", prFileName);
+        goto error;
+    }
+
 	rlmDomainTxPwrLimitRemoveComments(pucConfigBuf, u4ConfigReadLen);
-	*pucVersion = rlmDomainTxPwrLimitGetTableVersion(pucConfigBuf,
-		u4ConfigReadLen);
+	
+    *pucVersion = rlmDomainTxPwrLimitGetTableVersion(pucConfigBuf, u4ConfigReadLen);
+    
+    /* DIAGNOSTIC: What version did we detect? */
+    DBGLOG(RLM, INFO, "DEBUG: File %s detected as Version %u\n", prFileName, *pucVersion);
 
 	if (!rlmDomainTxPwrLimitLoad(prGlueInfo->prAdapter,
 		pucConfigBuf, u4ConfigReadLen, *pucVersion,
 		country_code, pTxPwrLimitData)) {
+		DBGLOG(RLM, ERROR, "DEBUG: rlmDomainTxPwrLimitLoad failed for %s\n", prFileName);
 		bRet = FALSE;
 		goto error;
 	}
 
 error:
-
 	kalMemFree(pucConfigBuf,
 		VIR_MEM_TYPE, WLAN_TX_PWR_LIMIT_FILE_BUF_SIZE);
 
 	return bRet;
 }
+
+
 
 u_int8_t rlmDomainGetTxPwrLegacyLimit(
 	uint32_t country_code,
@@ -5166,7 +5242,7 @@ void rlmDomainSendPwrLimitCmd_V2(struct ADAPTER *prAdapter)
 	/*
 	 * Get Max Tx Power from MT_TxPwrLimit_6G.dat
 	 */
-	prAdapter->chip_info->prTxPwrLimitFile = "TxPwrLimit6G_MT79x1.dat";
+	prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit6G_MT79x1.dat";
 	if (!rlmDomainGetTxPwrLimit(rlmDomainGetCountryCode(),
 		&ucVersion,
 		prAdapter->prGlueInfo,
@@ -5198,7 +5274,7 @@ void rlmDomainSendPwrLimitCmd_V2(struct ADAPTER *prAdapter)
 	}
 
 	/* restore back to default value */
-	prAdapter->chip_info->prTxPwrLimitFile = "TxPwrLimit_MT79x1.dat";
+	prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit_MT79x1.dat";
 #endif /* #if (CFG_SUPPORT_SINGLE_SKU_6G == 1) */
 
 error:
@@ -5223,7 +5299,7 @@ error:
 			sizeof(struct TX_PWR_LEGACY_LIMIT_DATA));
 
         /* restore back to default value */
-        prAdapter->chip_info->prTxPwrLimitFile = "TxPwrLimit_MT79x1.dat";
+        prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit_MT79x1.dat";
 #endif
 }
 
