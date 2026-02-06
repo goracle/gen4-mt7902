@@ -467,6 +467,9 @@ kalDevPortWrite(IN struct GLUE_INFO *prGlueInfo,
 	pTxCell->pPacket = NULL;
 	pTxCell->pBuffer = pucDst;
 
+	/* * The copyCmd call handles the DMA mapping and stores the 
+	 * resulting dma_addr_t into pTxCell->PacketPa.
+	 */
 	if (prMemOps->copyCmd &&
 	    !prMemOps->copyCmd(prHifInfo, pTxCell, pucDst,
 			       pucBuf, u4Len, NULL, 0)) {
@@ -476,24 +479,27 @@ kalDevPortWrite(IN struct GLUE_INFO *prGlueInfo,
 		return FALSE;
 	}
 
+	/* Initialize Hardware Descriptor */
 	pTxD->LastSec0 = 1;
 	pTxD->LastSec1 = 0;
 	pTxD->SDLen0 = u4Len;
 	pTxD->SDLen1 = 0;
+
+	/* * FIX: Removed #ifdef CONFIG_PHYS_ADDR_T_64BIT.
+	 * We now treat PacketPa as a 64-bit dma_addr_t unconditionally.
+	 * This ensures the high bits (the 'Ext' register) are populated 
+	 * for 13th Gen Intel IOMMU addressing.
+	 */
 	pTxD->SDPtr0 = (uint64_t)pTxCell->PacketPa & DMA_LOWER_32BITS_MASK;
-#ifdef CONFIG_PHYS_ADDR_T_64BIT
 	pTxD->SDPtr0Ext = ((uint64_t)pTxCell->PacketPa >> DMA_BITS_OFFSET) &
 		DMA_HIGHER_4BITS_MASK;
-#else
-	pTxD->SDPtr0Ext = 0;
-#endif
+
 	pTxD->SDPtr1 = 0;
 	pTxD->Burst = 0;
 	pTxD->DMADONE = 0;
 
-	/* Increase TX_CTX_IDX, but write to register later. */
+	/* Increase TX_CTX_IDX and sync with hardware. */
 	INC_RING_INDEX(prTxRing->TxCpuIdx, TX_RING_SIZE);
-
 	prTxRing->u4UsedCnt++;
 
 	kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr, prTxRing->TxCpuIdx);
