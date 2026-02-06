@@ -362,7 +362,7 @@ struct RXD_STRUCT {
 struct RTMP_DMABUF {
 	unsigned long AllocSize;
 	void *AllocVa;		/* TxBuf virtual address */
-	phys_addr_t AllocPa;		/* TxBuf physical address */
+	dma_addr_t AllocPa;		/* TxBuf physical address */
 };
 
 /*
@@ -378,10 +378,10 @@ struct RTMP_DMABUF {
 struct RTMP_DMACB {
 	unsigned long AllocSize;	/* Control block size */
 	void *AllocVa;			/* Control block virtual address */
-	phys_addr_t AllocPa;	        /* Control block physical address */
+	dma_addr_t AllocPa;	        /* Control block physical address */
 	void *pPacket;
 	void *pBuffer;
-	phys_addr_t PacketPa;
+	dma_addr_t PacketPa;
 	struct RTMP_DMABUF DmaBuf;	/* Associated DMA buffer structure */
 	struct MSDU_TOKEN_ENTRY *prToken;
 };
