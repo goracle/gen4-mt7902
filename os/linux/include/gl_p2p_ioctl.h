@@ -479,26 +479,45 @@ int mtk_p2p_cfg80211_set_power_mgmt(struct wiphy *wiphy,
 		bool enabled,
 		int timeout);
 
-#if (CFG_SUPPORT_DFS_MASTER == 1)
 
+
+
+
+#if (CFG_SUPPORT_DFS_MASTER == 1)
 #if KERNEL_VERSION(3, 15, 0) <= CFG80211_VERSION_CODE
+#if KERNEL_VERSION(6, 11, 0) <= CFG80211_VERSION_CODE
+int mtk_p2p_cfg80211_start_radar_detection(struct wiphy *wiphy,
+		struct net_device *dev,
+		struct cfg80211_chan_def *chandef,
+		unsigned int cac_time_ms,
+		int chain_mask);
+#else //KERNEL_VERSION(6, 11, 0) > CFG80211_VERSION_CODE
 int mtk_p2p_cfg80211_start_radar_detection(struct wiphy *wiphy,
 		struct net_device *dev,
 		struct cfg80211_chan_def *chandef,
 		unsigned int cac_time_ms);
-#else
+#endif //KERNEL_VERSION(6, 11, 0) <= CFG80211_VERSION_CODE
+#else //KERNEL_VERSION(3, 15, 0) > CFG80211_VERSION_CODE
+#if KERNEL_VERSION(6, 11, 0) <= CFG80211_VERSION_CODE
+int mtk_p2p_cfg80211_start_radar_detection(struct wiphy *wiphy,
+		struct net_device *dev,
+		struct cfg80211_chan_def *chandef,
+		int chain_mask);
+#else //KERNEL_VERSION(6, 11, 0) > CFG80211_VERSION_CODE
 int mtk_p2p_cfg80211_start_radar_detection(struct wiphy *wiphy,
 		struct net_device *dev,
 		struct cfg80211_chan_def *chandef);
-#endif
-
-
+#endif //KERNEL_VERSION(6, 11, 0) <= CFG80211_VERSION_CODE
+#endif //KERNEL_VERSION(3, 15, 0) <= CFG80211_VERSION_CODE
 #if KERNEL_VERSION(3, 13, 0) <= CFG80211_VERSION_CODE
 int mtk_p2p_cfg80211_channel_switch(struct wiphy *wiphy,
 		struct net_device *dev,
 		struct cfg80211_csa_settings *params);
 #endif
 #endif
+
+
+
 
 int mtk_p2p_cfg80211_change_bss(struct wiphy *wiphy,
 		struct net_device *dev,
