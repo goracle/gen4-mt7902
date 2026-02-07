@@ -1,26 +1,68 @@
 # /etc/systemd/system/mt7902-late.service
+#
+# MT7902 WiFi Driver Early Initialization
+# Loads before network services to ensure WiFi is available at boot
+
 [Unit]
-Description=Late Load MT7902 WiFi Driver
-# We wait until the Display Manager (Login Screen) is ready.
-# This is usually when PCIe power management is "finalized" for user interaction.
-After=graphical.target systemd-user-sessions.service
+Description=MT7902 WiFi Driver Initialization
+Documentation=https://github.com/your-repo/gen4-mt7902
+# Start BEFORE network services try to come up
+Before=network-pre.target
+Wants=network-pre.target
+# Wait for basic system initialization
+After=systemd-udev-settle.service
+After=systemd-modules-load.service
+# Don't pull in standard dependencies
+DefaultDependencies=no
 
 [Service]
 Type=oneshot
-User=root
-# CRITICAL: Set this to the folder containing your load.sh and .ko file
-WorkingDirectory=/home/<your username>/builds/gen4-mt7902
-
-# The "Magic" Delay:
-# Waits 15 seconds after the GUI starts before trying to load.
-# This mimics "after login" timing without needing user interaction.
-ExecStartPre=/usr/bin/sleep 15
-
-# Run the script
-ExecStart=/bin/bash ./load.sh
-
-# Consider the service "active" after it runs, so it doesn't try to restart oddly
 RemainAfterExit=yes
+# Run as root (required for insmod)
+User=root
+# Set working directory to driver location
+WorkingDirectory=/home/dan/builds/gen4-mt7902
+# Allow time for driver initialization
+TimeoutStartSec=60
+# Small delay for PCIe stability
+ExecStartPre=/usr/bin/sleep 3
+# Load the driver
+ExecStart=/usr/bin/bash /home/dan/builds/gen4-mt7902/load.sh
+# Verify the interface appeared
+ExecStartPost=/bin/bash -c '\
+  echo "Verifying WiFi interface appeared..."; \
+  for i in {1..20}; do \
+    if ip link show 2>/dev/null | grep -q wlan; then \
+      WLAN_IF=$(ip link show | grep -oP "wlan\\d+" | head -1); \
+      echo "✓ WiFi interface ready: $WLAN_IF"; \
+      exit 0; \
+    fi; \
+    sleep 0.5; \
+  done; \
+  echo "ERROR: WiFi interface did not appear within 10 seconds" >&2; \
+  exit 1'
+# Give NetworkManager a moment to detect the new interface
+ExecStartPost=/bin/bash -c '\
+  echo "Waiting for NetworkManager..."; \
+  sleep 2; \
+  if command -v nmcli >/dev/null 2>&1; then \
+    nmcli general reload 2>/dev/null || true; \
+  fi; \
+  echo "✓ Driver initialization complete"'
+# On stop, unload the module cleanly
+ExecStop=/bin/bash -c '\
+  if lsmod | grep -q "^mt7902\\b"; then \
+    echo "Unloading mt7902 module..."; \
+    rmmod mt7902 || rmmod -f mt7902 || true; \
+  fi'
+# Restart policy
+Restart=no
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mt7902-wifi
 
 [Install]
-WantedBy=graphical.target
+# Start during early boot
+WantedBy=network-pre.target
+WantedBy=multi-user.target

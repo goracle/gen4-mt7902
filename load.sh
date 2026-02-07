@@ -1,35 +1,119 @@
 #!/bin/bash
 
-set -euo pipefail
+# MT7902 WiFi Driver Loading Script with PCI wait
+# Handles dependency loading and status reporting
 
-if [ "$EUID" -ne 0 ]; then
-    echo "Run this script as root (sudo -i or su -)"
+set -e
+
+MODULE_NAME="mt7902"
+MODULE_PATH="$(dirname "$0")/${MODULE_NAME}.ko"
+LOG_FILE="$(dirname "$0")/${MODULE_NAME}_dmesg.log"
+
+log() {
+    echo "[${MODULE_NAME}] $1"
+}
+
+log "Starting WiFi driver initialization"
+
+# Check if module file exists
+if [ ! -f "$MODULE_PATH" ]; then
+    log "ERROR: Module not found at $MODULE_PATH"
     exit 1
 fi
 
-MODULE="./mt7902.ko"
-LOGFILE="mt7902_dmesg.log"
+log "Module path: $MODULE_PATH"
 
-echo "--- Using module: $(realpath "$MODULE") ---"
-
-# Load dependencies
-DEPS=$(modinfo -F depends "$MODULE" | tr ',' ' ')
-for dep in $DEPS; do
-    modprobe "$dep" || true
+# Wait for PCI device to be enumerated
+log "Waiting for PCI device to be ready..."
+PCI_READY=0
+for i in {1..30}; do
+    if lspci -d 14c3:7902 >/dev/null 2>&1; then
+        log "✓ PCI device found after $i seconds"
+        PCI_READY=1
+        break
+    fi
+    sleep 1
 done
 
-# Unload old module
-if lsmod | grep -q "^mt7902"; then
-    rmmod -f mt7902 || true
+if [ $PCI_READY -eq 0 ]; then
+    log "ERROR: PCI device not found after 30 seconds!"
+    lspci | grep -i mediatek || log "No MediaTek devices found at all"
+    exit 1
 fi
 
-# Clear logs
-dmesg -C
+# Wait for firmware to be available
+log "Checking firmware availability..."
+FIRMWARE_READY=0
+for i in {1..30}; do
+    if [ -f /lib/firmware/mediatek/mt7902/wifi.cfg ]; then
+        log "✓ Firmware found after $i attempts"
+        FIRMWARE_READY=1
+        break
+    fi
+    sleep 1
+done
 
-# Insert module
-insmod "$MODULE"
+if [ $FIRMWARE_READY -eq 0 ]; then
+    log "ERROR: Firmware not found!"
+    exit 1
+fi
 
-# Capture logs (NO pipes to sudo)
-dmesg > "$LOGFILE"
+# Load dependencies
+log "Loading module dependencies..."
+if ! lsmod | grep -q cfg80211; then
+    log "  Loading dependency: cfg80211"
+    modprobe cfg80211
+fi
 
-echo "--- Done. Logs saved to $LOGFILE ---"
+# Wait for PCI bus to stabilize
+log "Waiting for PCI bus to stabilize..."
+sleep 2
+
+# Insert the module
+log "Inserting ${MODULE_NAME}.ko..."
+insmod "$MODULE_PATH"
+
+# Wait for driver to initialize
+log "Waiting for driver to initialize..."
+sleep 5
+
+# Verify firmware actually loaded
+log "Verifying firmware load..."
+FIRMWARE_LOADED=0
+for i in {1..10}; do
+    if dmesg | tail -100 | grep -q "kalRequestFirmware.*wifi.cfg OK"; then
+        log "✓ Firmware loaded successfully"
+        FIRMWARE_LOADED=1
+        break
+    fi
+    sleep 1
+done
+
+if [ $FIRMWARE_LOADED -eq 0 ]; then
+    log "ERROR: Firmware did not load! Retrying..."
+    rmmod mt7902 2>/dev/null || true
+    sleep 2
+    log "Retry: Inserting ${MODULE_NAME}.ko..."
+    insmod "$MODULE_PATH"
+    sleep 5
+    
+    if ! dmesg | tail -100 | grep -q "kalRequestFirmware.*wifi.cfg OK"; then
+        log "ERROR: Firmware load failed on retry!"
+        exit 1
+    fi
+    log "✓ Firmware loaded on retry"
+fi
+
+# Check for WiFi interface
+log "Checking for WiFi interface..."
+if ip link show | grep -q "wlan"; then
+    IFACE=$(ip link show | grep -oP 'wlan\d+' | head -1)
+    log "✓ WiFi interface detected: $IFACE"
+else
+    log "WARNING: No WiFi interface detected yet"
+fi
+
+# Save dmesg
+dmesg > "$LOG_FILE"
+log "✓ Driver initialization complete"
+log "Logs saved to: $LOG_FILE"

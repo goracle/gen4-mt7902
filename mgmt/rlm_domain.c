@@ -2249,6 +2249,7 @@ rlmDomainSetCountry(struct ADAPTER *prAdapter)
 
 uint8_t rlmDomainTxPwrLimitGetTableVersion(
 	uint8_t *pucBuf, uint32_t u4BufLen)
+
 {
 #define TX_PWR_LIMIT_MAX_VERSION 2
 	uint32_t i = 0;
@@ -2289,7 +2290,47 @@ uint8_t rlmDomainTxPwrLimitGetTableVersion(
 	return ucVersion;
 }/*----------------------------------------------------------------------------*/
 
+void rlmDomainReplayPendingRegdom(struct ADAPTER *prAdapter)
+{
+	struct GLUE_INFO *prGlueInfo;
+	struct wiphy *pWiphy;
+	
+	if (!prAdapter) {
+		DBGLOG(RLM, ERROR, "Cannot replay: adapter is NULL\n");
+		return;
+	}
+	
+	prGlueInfo = prAdapter->prGlueInfo;
+	if (!prGlueInfo) {
+		DBGLOG(RLM, ERROR, "Cannot replay: glue is NULL\n");
+		return;
+	}
+	
+	pWiphy = wlanGetWiphy();
+	if (!pWiphy) {
+		DBGLOG(RLM, ERROR, "Cannot replay: wiphy is NULL\n");
+		return;
+	}
+	
+	if (g_mtk_regd_control.pending_regdom_update) {
+		char acCountryCodeStr[MAX_COUNTRY_CODE_LEN + 1] = {0};
+		
+		rlmDomainU32ToAlpha(g_mtk_regd_control.cached_alpha2, acCountryCodeStr);
+		
+		DBGLOG(RLM, STATE, "Replaying cached regdom: %s\n", acCountryCodeStr);
+		
+		rlmDomainCountryCodeUpdate(prAdapter, pWiphy, g_mtk_regd_control.cached_alpha2);
+		
+		g_mtk_regd_control.pending_regdom_update = FALSE;
+	} else {
+		DBGLOG(RLM, TRACE, "No pending regdom to replay\n");
+	}
+}
+
 /*!
+
+
+
  * \brief Search the tx power limit setting range of the specified in the text
  *        file
  *

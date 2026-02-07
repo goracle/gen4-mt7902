@@ -132,58 +132,94 @@ void rrmProcessNeighborReportResonse(struct ADAPTER *prAdapter,
 #endif
 }
 
+/* Defined based on IEEE 802.11-2020 Max Management Frame Body */
+#define RRM_NEIGHBOR_REPORT_MAX_PAYLOAD  2304 
+
 void rrmTxNeighborReportRequest(struct ADAPTER *prAdapter,
 				struct STA_RECORD *prStaRec,
 				struct SUB_ELEMENT_LIST *prSubIEs)
 {
-	static uint8_t ucDialogToken = 1;
+	/* Use atomic to survive SMP concurrency and prevent token collisions */
+	static atomic_t u4DialogToken = ATOMIC_INIT(1);
+	
 	struct MSDU_INFO *prMsduInfo = NULL;
 	struct BSS_INFO *prBssInfo = NULL;
 	uint8_t *pucPayload = NULL;
 	struct ACTION_NEIGHBOR_REPORT_FRAME *prTxFrame = NULL;
-	uint16_t u2TxFrameLen = 500;
+	
+	uint16_t u2MaxPayloadLen = RRM_NEIGHBOR_REPORT_MAX_PAYLOAD;
 	uint16_t u2FrameLen = 0;
+	int32_t i4RemainingSpace;
 
-	if (!prStaRec)
+	/* 1. Primary Invariant Check */
+	if (!prAdapter || !prStaRec)
 		return;
 
+	/* 2. BSS Info Validation: Prevent the WARN downstream */
 	prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, prStaRec->ucBssIndex);
-	ASSERT(prBssInfo);
-	/* 1 Allocate MSDU Info */
+	if (!prBssInfo) {
+		DBGLOG(RSN, INFO, "RRM: BSS info not ready (Index %u). Dropping request.\n", 
+			prStaRec->ucBssIndex);
+		return; 
+	}
+
+	/* 3. Memory Allocation with boundary awareness */
 	prMsduInfo = (struct MSDU_INFO *)cnmMgtPktAlloc(
-		prAdapter, MAC_TX_RESERVED_FIELD + u2TxFrameLen);
-	if (!prMsduInfo)
+		prAdapter, MAC_TX_RESERVED_FIELD + u2MaxPayloadLen);
+	if (!prMsduInfo) {
+		DBGLOG(RSN, ERROR, "RRM: Failed to allocate MSDU for Neighbor Report\n");
 		return;
+	}
+
 	prTxFrame = (struct ACTION_NEIGHBOR_REPORT_FRAME
-			     *)((unsigned long)(prMsduInfo->prPacket) +
+			 *)((unsigned long)(prMsduInfo->prPacket) +
 				MAC_TX_RESERVED_FIELD);
 
-	/* 2 Compose The Mac Header. */
+	/* 4. Header Composition: Safe from NULL dereference now */
 	prTxFrame->u2FrameCtrl = MAC_FRAME_ACTION;
 	COPY_MAC_ADDR(prTxFrame->aucDestAddr, prStaRec->aucMacAddr);
 	COPY_MAC_ADDR(prTxFrame->aucSrcAddr, prBssInfo->aucOwnMacAddr);
 	COPY_MAC_ADDR(prTxFrame->aucBSSID, prBssInfo->aucBSSID);
 	prTxFrame->ucCategory = CATEGORY_RM_ACTION;
 	prTxFrame->ucAction = RM_ACTION_NEIGHBOR_REQUEST;
-	u2FrameLen =
-		OFFSET_OF(struct ACTION_NEIGHBOR_REPORT_FRAME, aucInfoElem);
-	/* 3 Compose the frame body's frame. */
-	prTxFrame->ucDialogToken = ucDialogToken++;
-	u2TxFrameLen -= sizeof(*prTxFrame) - 1;
+	
+	u2FrameLen = OFFSET_OF(struct ACTION_NEIGHBOR_REPORT_FRAME, aucInfoElem);
+	prTxFrame->ucDialogToken = (uint8_t)atomic_inc_return(&u4DialogToken);
+	
+	/* 5. Hardened Payload Loop */
 	pucPayload = &prTxFrame->aucInfoElem[0];
-	while (prSubIEs && u2TxFrameLen >= (prSubIEs->rSubIE.ucLength + 2)) {
-		kalMemCopy(pucPayload, &prSubIEs->rSubIE,
-			   prSubIEs->rSubIE.ucLength + 2);
-		pucPayload += prSubIEs->rSubIE.ucLength + 2;
-		u2FrameLen += prSubIEs->rSubIE.ucLength + 2;
-		prSubIEs = prSubIEs->prNext;
+	i4RemainingSpace = (int32_t)u2MaxPayloadLen - (int32_t)u2FrameLen;
+
+	struct SUB_ELEMENT_LIST *prNext;
+	while (prSubIEs != NULL) {
+		uint16_t u2IELen = (uint16_t)prSubIEs->rSubIE.ucLength + 2;
+
+		if (i4RemainingSpace < (int32_t)u2IELen) {
+			DBGLOG(RSN, WARN, "RRM: SubIE too large (%u) for remaining space (%d)\n", 
+				u2IELen, i4RemainingSpace);
+			break;
+		}
+
+		kalMemCopy(pucPayload, &prSubIEs->rSubIE, u2IELen);
+
+		pucPayload += u2IELen;
+		u2FrameLen += u2IELen;
+		i4RemainingSpace -= (int32_t)u2IELen;
+
+		/* Save next pointer before freeing current node */
+		prNext = prSubIEs->prNext;
+		kalMemFree(prSubIEs, VIR_MEM_TYPE, sizeof(*prSubIEs) + 31);
+		prSubIEs = prNext;
 	}
+
+	/* 6. Transmission Enqueue */
 	nicTxSetMngPacket(prAdapter, prMsduInfo, prStaRec->ucBssIndex,
 			  prStaRec->ucIndex, WLAN_MAC_MGMT_HEADER_LEN,
 			  u2FrameLen, NULL, MSDU_RATE_MODE_AUTO);
 
-	/* 5 Enqueue the frame to send this action frame. */
 	nicTxEnqueueMsdu(prAdapter, prMsduInfo);
+	
+	DBGLOG(RSN, LOUD, "RRM: Neighbor Report Request enqueued successfully (Len: %u)\n", u2FrameLen);
 }
 
 void rrmFreeMeasurementResources(struct ADAPTER *prAdapter,

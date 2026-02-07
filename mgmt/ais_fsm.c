@@ -6932,18 +6932,31 @@ void aisSendNeighborRequest(struct ADAPTER *prAdapter,
 	uint8_t ucBssIndex)
 {
 	struct SUB_ELEMENT_LIST *prSSIDIE;
-	uint8_t aucBuffer[sizeof(*prSSIDIE) + 31];
 	struct BSS_INFO *prBssInfo
 		= aisGetAisBssInfo(prAdapter, ucBssIndex);
-
-	kalMemZero(aucBuffer, sizeof(aucBuffer));
-	prSSIDIE = (struct SUB_ELEMENT_LIST *)&aucBuffer[0];
+	
+	if (!prBssInfo) {
+		DBGLOG(AIS, WARN, "aisSendNeighborRequest: BSS info not found\n");
+		return;
+	}
+	
+	/* Allocate on heap to survive beyond function return */
+	prSSIDIE = kalMemAlloc(sizeof(*prSSIDIE) + 31, VIR_MEM_TYPE);
+	if (!prSSIDIE) {
+		DBGLOG(AIS, ERROR, "aisSendNeighborRequest: Failed to allocate SubIE\n");
+		return;
+	}
+	
+	kalMemZero(prSSIDIE, sizeof(*prSSIDIE) + 31);
 	prSSIDIE->rSubIE.ucSubID = ELEM_ID_SSID;
 	COPY_SSID(&prSSIDIE->rSubIE.aucOptInfo[0], prSSIDIE->rSubIE.ucLength,
 		  prBssInfo->aucSSID, prBssInfo->ucSSIDLen);
+	
+	/* Note: rrmTxNeighborReportRequest now owns this memory and must free it */
 	rrmTxNeighborReportRequest(prAdapter, prBssInfo->prStaRecOfAP,
 				   prSSIDIE);
 }
+
 
 static u_int8_t aisCandPrefIEIsExist(uint8_t *pucSubIe, uint8_t ucLength)
 {
