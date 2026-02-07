@@ -1,119 +1,70 @@
 #!/bin/bash
 
-# MT7902 WiFi Driver Loading Script with PCI wait
-# Handles dependency loading and status reporting
-
+# MT7902 WiFi Driver Loading Script - Refactored
 set -e
 
 MODULE_NAME="mt7902"
-MODULE_PATH="$(dirname "$0")/${MODULE_NAME}.ko"
-LOG_FILE="$(dirname "$0")/${MODULE_NAME}_dmesg.log"
+# Use absolute path to ensure sudo doesn't lose the location
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+MODULE_PATH="$SCRIPT_DIR/${MODULE_NAME}.ko"
 
 log() {
-    echo "[${MODULE_NAME}] $1"
+    echo -e "[\e[34m${MODULE_NAME}\e[0m] $1"
 }
 
-log "Starting WiFi driver initialization"
+# 1. Clean up existing state
+log "Cleaning up old module instances..."
+rmmod $MODULE_NAME 2>/dev/null || true
 
-# Check if module file exists
-if [ ! -f "$MODULE_PATH" ]; then
-    log "ERROR: Module not found at $MODULE_PATH"
-    exit 1
-fi
-
-log "Module path: $MODULE_PATH"
-
-# Wait for PCI device to be enumerated
-log "Waiting for PCI device to be ready..."
-PCI_READY=0
-for i in {1..30}; do
-    if lspci -d 14c3:7902 >/dev/null 2>&1; then
-        log "✓ PCI device found after $i seconds"
-        PCI_READY=1
-        break
+# 2. Check dependencies
+log "Ensuring kernel dependencies are loaded..."
+for dep in cfg80211 mac80211 mt76-connac-lib; do
+    if ! lsmod | grep -q "$dep"; then
+        log "  Loading $dep..."
+        modprobe "$dep" || log "  Warning: could not modprobe $dep"
     fi
-    sleep 1
 done
 
-if [ $PCI_READY -eq 0 ]; then
-    log "ERROR: PCI device not found after 30 seconds!"
-    lspci | grep -i mediatek || log "No MediaTek devices found at all"
+# 3. PCI Check
+if ! lspci -d 14c3:7902 >/dev/null 2>&1; then
+    log "\e[31mERROR: MT7902 PCI device not visible.\e[0m"
     exit 1
 fi
 
-# Wait for firmware to be available
-log "Checking firmware availability..."
-FIRMWARE_READY=0
-for i in {1..30}; do
-    if [ -f /lib/firmware/mediatek/mt7902/wifi.cfg ]; then
-        log "✓ Firmware found after $i attempts"
-        FIRMWARE_READY=1
-        break
-    fi
-    sleep 1
-done
-
-if [ $FIRMWARE_READY -eq 0 ]; then
-    log "ERROR: Firmware not found!"
-    exit 1
-fi
-
-# Load dependencies
-log "Loading module dependencies..."
-if ! lsmod | grep -q cfg80211; then
-    log "  Loading dependency: cfg80211"
-    modprobe cfg80211
-fi
-
-# Wait for PCI bus to stabilize
-log "Waiting for PCI bus to stabilize..."
-sleep 2
-
-# Insert the module
-log "Inserting ${MODULE_NAME}.ko..."
+# 4. Insert Module
+log "Inserting module from $MODULE_PATH..."
+# Clear dmesg so we only see NEW logs
+dmesg -C 
 insmod "$MODULE_PATH"
 
-# Wait for driver to initialize
-log "Waiting for driver to initialize..."
-sleep 5
-
-# Verify firmware actually loaded
-log "Verifying firmware load..."
-FIRMWARE_LOADED=0
-for i in {1..10}; do
-    if dmesg | tail -100 | grep -q "kalRequestFirmware.*wifi.cfg OK"; then
-        log "✓ Firmware loaded successfully"
-        FIRMWARE_LOADED=1
+# 5. Validation with more flexibility
+log "Waiting for hardware initialization..."
+MAX_RETRIES=10
+for i in $(seq 1 $MAX_RETRIES); do
+    # Check for ANY mt7902 related success in dmesg
+    if dmesg | grep -Ei "mt7902|kalRequestFirmware.*OK|ready" > /dev/null; then
+        log "\e[32m✓ Driver reports success in dmesg\e[0m"
         break
+    fi
+    
+    # Also check if the interface actually appeared
+    if ip link show | grep -q "wlan"; then
+        log "\e[32m✓ WiFi interface appeared!\e[0m"
+        break
+    fi
+
+    if [ $i -eq $MAX_RETRIES ]; then
+        log "\e[31mERROR: Driver loaded but hardware not responding.\e[0m"
+        dmesg | tail -n 20
+        exit 1
     fi
     sleep 1
 done
 
-if [ $FIRMWARE_LOADED -eq 0 ]; then
-    log "ERROR: Firmware did not load! Retrying..."
-    rmmod mt7902 2>/dev/null || true
-    sleep 2
-    log "Retry: Inserting ${MODULE_NAME}.ko..."
-    insmod "$MODULE_PATH"
-    sleep 5
-    
-    if ! dmesg | tail -100 | grep -q "kalRequestFirmware.*wifi.cfg OK"; then
-        log "ERROR: Firmware load failed on retry!"
-        exit 1
-    fi
-    log "✓ Firmware loaded on retry"
+log "Finalizing..."
+# Trigger a scan to wake it up
+IFACE=$(ip link show | grep -oP 'wlan\d+' | head -1)
+if [ -n "$IFACE" ]; then
+    ip link set "$IFACE" up || true
+    log "Device $IFACE is UP."
 fi
-
-# Check for WiFi interface
-log "Checking for WiFi interface..."
-if ip link show | grep -q "wlan"; then
-    IFACE=$(ip link show | grep -oP 'wlan\d+' | head -1)
-    log "✓ WiFi interface detected: $IFACE"
-else
-    log "WARNING: No WiFi interface detected yet"
-fi
-
-# Save dmesg
-dmesg > "$LOG_FILE"
-log "✓ Driver initialization complete"
-log "Logs saved to: $LOG_FILE"
