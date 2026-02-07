@@ -6100,7 +6100,9 @@ mtk_reg_notify(IN struct wiphy *pWiphy,
 			DBGLOG(RLM, WARN, "prGlueInfo not ready, caching alpha2=%s for later\n",
 				pRequest->alpha2);
 		} else {
-			DBGLOG(RLM, INFO, "prGlueInfo not ready, ignoring world regdom (00)\n");
+			g_mtk_regd_control.cached_alpha2 = rlmDomainAlpha2ToU32(pRequest->alpha2, 2);
+			g_mtk_regd_control.pending_regdom_update = TRUE;
+			DBGLOG(RLM, INFO, "Caching world regdom (00) for replay\n");
 		}
 		return;
 	}

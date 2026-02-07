@@ -4860,7 +4860,7 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 		acAlpha2[0] = (g_mtk_regd_control.cached_alpha2 & 0xFF);
 		acAlpha2[1] = ((g_mtk_regd_control.cached_alpha2 >> 8) & 0xFF);
 		/* Only replay if it's not "00" */
-		if (acAlpha2[0] != '0' || acAlpha2[1] != '0') {
+		if (1) { /* Force replay even if 00 */
 			DBGLOG(INIT, INFO, "Replaying cached regdom update: %s\n", acAlpha2);
 			rlmDomainSetCountryCode(acAlpha2, 2);
 			rlmDomainCountryCodeUpdate(prAdapter, wlanGetWiphy(), 
@@ -6329,12 +6329,16 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		i4Status = sysCreateFsEntry(prGlueInfo);
 		if (i4Status < 0) {
 			DBGLOG(INIT, ERROR, "wlanProbe: init sysfs failed\n");
-			eFailReason = PROC_INIT_FAIL;
 			break;
 		}
 #endif /* WLAN_INCLUDE_SYS */
 
+		/* Replay any regulatory domain cached during early boot */
+		rlmDomainReplayPendingRegdom(prAdapter);
+
 #if (CFG_SUPPORT_SNIFFER_RADIOTAP == 1)
+
+
 		prGlueInfo->fgIsEnableMon = FALSE;
 		sysCreateMonDbgFs(prGlueInfo);
 #endif
@@ -6599,6 +6603,9 @@ static void wlanRemove(void)
 #if WLAN_INCLUDE_SYS
 	sysRemoveSysfs();
 #endif /* WLAN_INCLUDE_SYS */
+
+		/* Replay any regulatory domain cached during early boot */
+		rlmDomainReplayPendingRegdom(prAdapter);
 #if (CFG_SUPPORT_SNIFFER_RADIOTAP == 1)
 	sysRemoveMonDbgFs();
 #endif

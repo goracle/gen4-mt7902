@@ -1114,6 +1114,7 @@ void rlmDomainSetDefaultCountryCode(void);
 enum regd_state rlmDomainGetCtrlState(void);
 bool rlmDomainIsSameCountryCode(char *alpha2,
 				u8 size_of_alpha2);
+void rlmDomainReplayPendingRegdom(struct ADAPTER *prAdapter);
 const struct ieee80211_regdomain
 *rlmDomainSearchRegdomainFromLocalDataBase(char *alpha2);
 struct GLUE_INFO *rlmDomainGetGlueInfo(void);
