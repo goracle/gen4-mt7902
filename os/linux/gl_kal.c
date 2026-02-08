@@ -8783,6 +8783,7 @@ void kalPerfIndReset(IN struct ADAPTER *prAdapter)
 
 void kalSetPerfReport(IN struct ADAPTER *prAdapter)
 {
+	return; /* DESKTOP_MODE: Mute Tput logs */
 	struct CMD_PERF_IND *prCmdPerfReport;
 	uint8_t i;
 	uint32_t u4CurrentTp = 0;
@@ -9029,6 +9030,7 @@ inline int32_t kalPerMonDestroy(IN struct GLUE_INFO
 void kalPerMonHandler(IN struct ADAPTER *prAdapter,
 		      unsigned long ulParam)
 {
+	return; /* DESKTOP_MODE: Mute Tput logs */
 	/*Calculate current throughput*/
 	struct PERF_MONITOR_T *prPerMonitor;
 	uint32_t u4Idx = 0;

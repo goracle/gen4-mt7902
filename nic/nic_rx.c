@@ -3083,6 +3083,12 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
 void nicRxProcessMgmtPacket(IN struct ADAPTER *prAdapter,
 	IN OUT struct SW_RFB *prSwRfb)
 {
+
+	/* DESKTOP_MODE: Mute PS/QoS chatter (SubType 0x0d) */
+	{
+		uint16_t u2SubType = (uint16_t)(prSwRfb->u2FrameCtrl & MASK_FC_SUBTYPE) >> 4;
+		if (u2SubType == 0x0d) return;
+	}
 	struct GLUE_INFO *prGlueInfo;
 	uint8_t ucSubtype;
 	uint16_t u2TxFrameCtrl;
