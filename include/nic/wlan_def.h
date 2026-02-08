@@ -198,7 +198,7 @@
 #define CHNL_LIST_SZ_5G         14
 
 /*! CNM(STA_RECORD_T) related definition */
-#define CFG_STA_REC_NUM         27
+#define CFG_STA_REC_NUM          255
 
 /* PHY TYPE bit definitions */
 /* HR/DSSS PHY (clause 18) */

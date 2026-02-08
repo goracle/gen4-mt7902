@@ -3436,6 +3436,11 @@ kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
 	 OUT uint32_t *pu4QryInfoLen,
 	 IN uint8_t ucBssIndex)
 {
+	GLUE_SPIN_LOCK_DECLARATION();
+	(void)__ulFlags;
+	(void)__ulFlags;
+	(void)__ulFlags;
+	(void)__ulFlags;
 	struct GL_IO_REQ *prIoReq = NULL;
 	struct KAL_THREAD_SCHEDSTATS schedstats;
 	uint32_t ret = WLAN_STATUS_SUCCESS;
@@ -3450,7 +3455,6 @@ kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
 	if (wlanIsChipAssert(prGlueInfo->prAdapter))
 		return WLAN_STATUS_SUCCESS;
 
-	/* GLUE_SPIN_LOCK_DECLARATION(); */
 
 	/* Due to dead lock issue in WPA3 flow,
 	*  just direct function call if already in main_thread.
@@ -3458,6 +3462,8 @@ kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
 #if CFG_SUPPORT_MULTITHREAD
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 	if (prGlueInfo->u4TxThreadPid == KAL_GET_CURRENT_THREAD_ID()) {
+	(void)__ulFlags;
+	(void)__ulFlags;
 #if CFG_REDIRECT_OID_SUPPORT
 		if (pfnOidHandler)
 			kalRedirectsMainTreadOid(prGlueInfo,
@@ -3480,6 +3486,8 @@ kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
 
 	/* <1> Check if driver is halt */
 	/* if (prGlueInfo->u4Flag & GLUE_FLAG_HALT) { */
+	(void)__ulFlags;
+	(void)__ulFlags;
 	/* return WLAN_STATUS_ADAPTER_NOT_READY; */
 	/* } */
 
@@ -3487,16 +3495,22 @@ kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
 		return WLAN_STATUS_FAILURE;
 
 	if (g_u4HaltFlag) {
+	(void)__ulFlags;
+	(void)__ulFlags;
 		up(&g_halt_sem);
 		return WLAN_STATUS_ADAPTER_NOT_READY;
 	}
 
 	if (down_interruptible(&prGlueInfo->ioctl_sem)) {
+	(void)__ulFlags;
+	(void)__ulFlags;
 		up(&g_halt_sem);
 		return WLAN_STATUS_FAILURE;
 	}
 
 	if (prGlueInfo->main_thread == NULL) {
+	(void)__ulFlags;
+	(void)__ulFlags;
 		dump_stack();
 		DBGLOG(OID, WARN, "skip executing request.\n");
 		up(&prGlueInfo->ioctl_sem);
@@ -3560,6 +3574,8 @@ kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
 				MSEC_TO_JIFFIES(30*1000));
 	kalThreadSchedUnmark(prGlueInfo->main_thread, &schedstats);
 	if (waitRet > 0) {
+	(void)__ulFlags;
+	(void)__ulFlags;
 		/* Case 1: No timeout. */
 		/* if return WLAN_STATUS_PENDING, the status of cmd is stored
 		 * in prGlueInfo
@@ -3571,9 +3587,13 @@ kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
 		if (ret != WLAN_STATUS_SUCCESS)
 			DBGLOG(OID, WARN, "kalIoctl: ret ErrCode: %x\n", ret);
 	} else {
+	(void)__ulFlags;
+	(void)__ulFlags;
 		/* Case 2: timeout */
 		/* clear pending OID's cmd in CMD queue */
 		if (fgCmd) {
+	(void)__ulFlags;
+	(void)__ulFlags;
 			/* prGlueInfo->u4TimeoutFlag = 1; */
 			wlanReleasePendingOid(prGlueInfo->prAdapter, 0);
 		}
@@ -6404,9 +6424,9 @@ void kalSchedScanResults(IN struct GLUE_INFO *prGlueInfo)
 void kalSchedScanStopped(IN struct GLUE_INFO *prGlueInfo,
 			 u_int8_t fgDriverTriggerd)
 {
+	GLUE_SPIN_LOCK_DECLARATION();
 	/* DBGLOG(SCN, INFO, ("-->kalSchedScanStopped\n" )); */
 
-	GLUE_SPIN_LOCK_DECLARATION();
 
 	ASSERT(prGlueInfo);
 
@@ -6466,9 +6486,9 @@ void kalRedirectsMainTreadOid(IN struct GLUE_INFO *prGlueInfo,
 	 IN uint32_t u4InfoBufLen, IN bool fgRead, IN bool fgWaitResp, IN bool fgCmd,
 	 OUT uint32_t *pu4QryInfoLen)
 {
+	GLUE_SPIN_LOCK_DECLARATION();
 	struct PARAM_OID_REQ *prOidReq = NULL;
 	void *pvBuf = NULL;
-	GLUE_SPIN_LOCK_DECLARATION();
 
 	ASSERT(prGlueInfo);
 
