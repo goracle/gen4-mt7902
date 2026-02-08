@@ -496,17 +496,15 @@ void aisFsmInit(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 		prAisBssInfo->wepkeyUsed[i] = FALSE;
 	}
 #if 0
-	prAisBssInfo->rPmProfSetupInfo.ucBmpDeliveryAC = PM_UAPSD_ALL;
-	prAisBssInfo->rPmProfSetupInfo.ucBmpTriggerAC = PM_UAPSD_ALL;
+	prAisBssInfo->rPmProfSetupInfo.ucBmpDeliveryAC = PM_UAPSD_NONE;
+	prAisBssInfo->rPmProfSetupInfo.ucBmpTriggerAC = PM_UAPSD_NONE;
 	prAisBssInfo->rPmProfSetupInfo.ucUapsdSp = WMM_MAX_SP_LENGTH_2;
 #else
 	if (prAdapter->u4UapsdAcBmp == 0) {
 		prAdapter->u4UapsdAcBmp = CFG_INIT_UAPSD_AC_BMP;
 	}
-	prAisBssInfo->rPmProfSetupInfo.ucBmpDeliveryAC =
-	    (uint8_t) prAdapter->u4UapsdAcBmp;
-	prAisBssInfo->rPmProfSetupInfo.ucBmpTriggerAC =
-	    (uint8_t) prAdapter->u4UapsdAcBmp;
+	prAisBssInfo->rPmProfSetupInfo.ucBmpDeliveryAC = PM_UAPSD_NONE;
+	prAisBssInfo->rPmProfSetupInfo.ucBmpTriggerAC = PM_UAPSD_NONE;
 	prAisBssInfo->rPmProfSetupInfo.ucUapsdSp =
 	    (uint8_t) prAdapter->u4MaxSpLen;
 #endif

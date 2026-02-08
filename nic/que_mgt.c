@@ -5856,8 +5856,7 @@ void mqmParseAssocReqWmmIe(IN struct ADAPTER *prAdapter,
 
 			if (ucQosInfoAC & WMM_QOS_INFO_BK_UAPSD)
 				ucBmpAC |= BIT(ACI_BK);
-			prStaRec->ucBmpTriggerAC = prStaRec->ucBmpDeliveryAC =
-				ucBmpAC;
+			prStaRec->ucBmpTriggerAC = PM_UAPSD_NONE; prStaRec->ucBmpDeliveryAC = PM_UAPSD_NONE; // Fixed CAM
 			prStaRec->ucUapsdSp = (ucQosInfo &
 				WMM_QOS_INFO_MAX_SP_LEN_MASK) >> 5;
 			break;
