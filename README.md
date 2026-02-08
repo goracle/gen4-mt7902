@@ -20,7 +20,32 @@ sudo make install_fw
 ```
 *Note: This usually installs to `/usr/lib/firmware/mediatek/mt7902/`.*
 
-### 3) Configure Systemd Services
+### 3) Blacklist Stock Drivers
+The kernel's built-in MT792x drivers will conflict with this custom module. Create a blacklist file:
+
+```bash
+sudo tee /etc/modprobe.d/blacklist-mt7921.conf > /dev/null << 'EOF'
+# Blacklist stock MediaTek WiFi drivers - using custom mt7902.ko instead
+blacklist mt7921e
+blacklist mt7902
+blacklist mt7902e
+blacklist mt7921_common
+blacklist mt76_connac_lib
+blacklist mt7921s
+blacklist mt7921u
+EOF
+```
+
+**Regenerate initramfs:**
+```bash
+# Ubuntu/Debian
+sudo update-initramfs -u
+
+# Arch/Manjaro
+sudo mkinitcpio -P
+```
+
+### 4) Configure Systemd Services
 To handle the sensitive timing of the MT7902, use the provided "Late Load" service.
 
 1. **Update Username:**
@@ -37,7 +62,7 @@ To handle the sensitive timing of the MT7902, use the provided "Late Load" servi
    sudo systemctl enable mt7902-reset.service
    ```
 
-### 4) DKMS Installation (Auto-rebuild on Update)
+### 5) DKMS Installation (Auto-rebuild on Update)
 Since Arch updates the kernel frequently, DKMS is recommended. The directory name must match the version in `dkms.conf`.
 
 ```bash
@@ -49,7 +74,7 @@ sudo dkms add -m gen4-mt7902 -v 0.1
 sudo dkms install -m gen4-mt7902 -v 0.1
 ```
 
-### 5) Manual Load
+### 6) Manual Load
 To start the interface immediately without rebooting:
 ```bash
 sudo ./load.sh
@@ -68,6 +93,30 @@ If the driver crashes, the hardware often latches into an unresponsive state whe
 1. Shut down the laptop and unplug the AC adapter.
 2. Hold the **Power Button** for 40 seconds.
 3. Plug back in and boot.
+
+---
+
+## Known Issues
+
+### Early Boot Race Conditions
+The driver has unresolved timing bugs during early system initialization. **The late-load systemd service is required** to avoid crashes. Loading via DKMS auto-load or early boot will likely fail.
+
+- **Symptom:** Module loads but interface doesn't come up, or kernel panic during boot
+- **Workaround:** Use `mt7902-late.service` to defer module loading until after system stabilization
+- **Status:** ⚠️ Arch users report the late-load service is unreliable; manual `./load.sh` after boot may be necessary
+
+### NetworkManager vs. wpa_supplicant
+For best stability, use **wpa_supplicant** directly instead of NetworkManager-based tools:
+
+```bash
+# Disable NetworkManager for wlan0
+sudo nmcli device set wlan0 managed no
+
+# Use wpa_supplicant manually
+sudo wpa_supplicant -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf
+```
+
+**iwd** (iNet Wireless Daemon) is **not recommended** — it triggers firmware state machine bugs. Stick with wpa_supplicant for now.
 
 ---
 
