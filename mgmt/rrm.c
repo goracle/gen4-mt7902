@@ -133,8 +133,16 @@ void rrmProcessNeighborReportResonse(struct ADAPTER *prAdapter,
 }
 
 
+/* 
+ * Fixed version of rrmTxNeighborReportRequest
+ * Addresses: buffer overflows, memory corruption, race conditions
+ */
+
 /* Defined based on IEEE 802.11-2020 Max Management Frame Body */
 #define RRM_NEIGHBOR_REPORT_MAX_PAYLOAD  2304 
+
+/* Maximum size for sub-elements to prevent unbounded growth */
+#define RRM_MAX_SUBIE_SIZE 255
 
 void rrmTxNeighborReportRequest(struct ADAPTER *prAdapter,
 				struct STA_RECORD *prStaRec,
@@ -147,89 +155,200 @@ void rrmTxNeighborReportRequest(struct ADAPTER *prAdapter,
 	struct BSS_INFO *prBssInfo = NULL;
 	uint8_t *pucPayload = NULL;
 	struct ACTION_NEIGHBOR_REPORT_FRAME *prTxFrame = NULL;
+	struct SUB_ELEMENT_LIST *prCurrentIE = NULL;
+	struct SUB_ELEMENT_LIST *prNextIE = NULL;
 	
+	uint16_t u2FrameHeaderLen = 0;
+	uint16_t u2TotalFrameLen = 0;
+	uint16_t u2PayloadBytesUsed = 0;
 	uint16_t u2MaxPayloadLen = RRM_NEIGHBOR_REPORT_MAX_PAYLOAD;
-	uint16_t u2FrameLen = 0;
-	int32_t i4RemainingSpace;
-
-	/* 1. Primary Invariant Check */
-	if (!prAdapter || !prStaRec)
-		goto free_list;
-
-	/* 2. BSS Info Validation */
+	uint16_t u2AllocSize = 0;
+	
+	/* ====================================================================
+	 * 1. PRIMARY VALIDATION
+	 * ==================================================================== */
+	if (!prAdapter) {
+		DBGLOG(RSN, ERROR, "RRM: NULL adapter pointer\n");
+		goto cleanup_list;
+	}
+	
+	if (!prStaRec) {
+		DBGLOG(RSN, ERROR, "RRM: NULL STA record pointer\n");
+		goto cleanup_list;
+	}
+	
+	/* ====================================================================
+	 * 2. BSS INFO VALIDATION
+	 * ==================================================================== */
+	if (prStaRec->ucBssIndex >= prAdapter->ucHwBssIdNum) {
+		DBGLOG(RSN, ERROR, "RRM: Invalid BSS index %u (max %u)\n",
+		       prStaRec->ucBssIndex, prAdapter->ucHwBssIdNum);
+		goto cleanup_list;
+	}
+	
 	prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, prStaRec->ucBssIndex);
 	if (!prBssInfo) {
-		DBGLOG(RSN, INFO, "RRM: BSS info not ready (Index %u). Dropping request.\n", 
-			prStaRec->ucBssIndex);
-		goto free_list; 
+		DBGLOG(RSN, INFO, "RRM: BSS info not ready (Index %u)\n", 
+		       prStaRec->ucBssIndex);
+		goto cleanup_list; 
 	}
-
-	/* 3. Memory Allocation */
-	prMsduInfo = (struct MSDU_INFO *)cnmMgtPktAlloc(
-		prAdapter, MAC_TX_RESERVED_FIELD + u2MaxPayloadLen);
+	
+	/* ====================================================================
+	 * 3. CALCULATE REQUIRED BUFFER SIZE
+	 * ==================================================================== */
+	u2FrameHeaderLen = OFFSET_OF(struct ACTION_NEIGHBOR_REPORT_FRAME, aucInfoElem);
+	
+	/* Calculate total size needed: header + payload space */
+	u2AllocSize = MAC_TX_RESERVED_FIELD + u2FrameHeaderLen + u2MaxPayloadLen;
+	
+	/* Check for integer overflow in allocation size */
+	if (u2AllocSize < u2FrameHeaderLen) {
+		DBGLOG(RSN, ERROR, "RRM: Integer overflow in size calculation\n");
+		goto cleanup_list;
+	}
+	
+	/* ====================================================================
+	 * 4. ALLOCATE BUFFER WITH CORRECT SIZE
+	 * ==================================================================== */
+	prMsduInfo = (struct MSDU_INFO *)cnmMgtPktAlloc(prAdapter, u2AllocSize);
 	if (!prMsduInfo) {
-		DBGLOG(RSN, ERROR, "RRM: Failed to allocate MSDU for Neighbor Report\n");
-		goto free_list;
+		DBGLOG(RSN, ERROR, "RRM: Failed to allocate MSDU (%u bytes)\n", 
+		       u2AllocSize);
+		goto cleanup_list;
 	}
-
+	
+	/* Get pointer to frame within the allocated buffer */
 	prTxFrame = (struct ACTION_NEIGHBOR_REPORT_FRAME *)
 			((unsigned long)(prMsduInfo->prPacket) + MAC_TX_RESERVED_FIELD);
-
-	/* 4. Header Composition */
+	
+	/* Zero the entire frame to prevent information leaks */
+	kalMemZero(prTxFrame, u2FrameHeaderLen + u2MaxPayloadLen);
+	
+	/* ====================================================================
+	 * 5. BUILD FRAME HEADER
+	 * ==================================================================== */
 	prTxFrame->u2FrameCtrl = MAC_FRAME_ACTION;
 	COPY_MAC_ADDR(prTxFrame->aucDestAddr, prStaRec->aucMacAddr);
 	COPY_MAC_ADDR(prTxFrame->aucSrcAddr, prBssInfo->aucOwnMacAddr);
 	COPY_MAC_ADDR(prTxFrame->aucBSSID, prBssInfo->aucBSSID);
 	prTxFrame->ucCategory = CATEGORY_RM_ACTION;
 	prTxFrame->ucAction = RM_ACTION_NEIGHBOR_REQUEST;
-	
-	u2FrameLen = OFFSET_OF(struct ACTION_NEIGHBOR_REPORT_FRAME, aucInfoElem);
 	prTxFrame->ucDialogToken = (uint8_t)atomic_inc_return(&u4DialogToken);
 	
-	/* * 5. Hardened Payload Loop
-	 * We cast through uintptr_t to break pointer provenance. 
-	 * This prevents KASAN/Fortify from seeing this as a 'field-spanning write'.
+	u2TotalFrameLen = u2FrameHeaderLen;
+	
+	/* ====================================================================
+	 * 6. APPEND SUB-ELEMENTS WITH PROPER BOUNDS CHECKING
+	 * ==================================================================== */
+	/* 
+	 * Get pointer to payload area. We know this is safe because:
+	 * - We allocated u2FrameHeaderLen + u2MaxPayloadLen bytes
+	 * - aucInfoElem is at offset u2FrameHeaderLen
 	 */
-	pucPayload = (uint8_t *)(uintptr_t)&prTxFrame->aucInfoElem[0];
-	i4RemainingSpace = (int32_t)u2MaxPayloadLen - (int32_t)u2FrameLen;
-
-	while (prSubIEs != NULL) {
-		struct SUB_ELEMENT_LIST *prNext = prSubIEs->prNext;
-		uint16_t u2IELen = (uint16_t)prSubIEs->rSubIE.ucLength + 2;
-
-		if (i4RemainingSpace >= (int32_t)u2IELen) {
-			/* Use unsafe_memcpy or raw memmove to further evade fortify if needed, 
-			   but a clean pointer should suffice here */
-			kalMemCopy(pucPayload, &prSubIEs->rSubIE, u2IELen);
-
-			pucPayload += u2IELen;
-			u2FrameLen += u2IELen;
-			i4RemainingSpace -= (int32_t)u2IELen;
-		} else {
-			DBGLOG(RSN, WARN, "RRM: SubIE too large for remaining space\n");
+	pucPayload = (uint8_t *)prTxFrame + u2FrameHeaderLen;
+	u2PayloadBytesUsed = 0;
+	
+	prCurrentIE = prSubIEs;
+	while (prCurrentIE != NULL) {
+		uint16_t u2IELen;
+		uint16_t u2IETotalLen;
+		
+		/* Save next pointer before we potentially free current node */
+		prNextIE = prCurrentIE->prNext;
+		
+		/* Validate sub-element structure */
+		if (prCurrentIE->rSubIE.ucLength > RRM_MAX_SUBIE_SIZE) {
+			DBGLOG(RSN, WARN, 
+			       "RRM: SubIE length %u exceeds maximum %u, skipping\n",
+			       prCurrentIE->rSubIE.ucLength, RRM_MAX_SUBIE_SIZE);
+			goto free_current_ie;
 		}
-
-		/* Free current node and move to next */
-		kalMemFree(prSubIEs, VIR_MEM_TYPE, sizeof(*prSubIEs) + 31);
-		prSubIEs = prNext;
+		
+		/* Calculate total IE size: ID (1 byte) + Length (1 byte) + Data */
+		u2IELen = prCurrentIE->rSubIE.ucLength;
+		u2IETotalLen = 2 + u2IELen;  /* 2 = sizeof(ID) + sizeof(Length) */
+		
+		/* Check if IE fits in remaining space */
+		if (u2PayloadBytesUsed + u2IETotalLen > u2MaxPayloadLen) {
+			DBGLOG(RSN, WARN, 
+			       "RRM: SubIE size %u exceeds remaining space %u, truncating\n",
+			       u2IETotalLen, u2MaxPayloadLen - u2PayloadBytesUsed);
+			goto free_current_ie;
+		}
+		
+		/* Safe to copy - we've validated bounds */
+		kalMemCopy(pucPayload + u2PayloadBytesUsed, 
+		           &prCurrentIE->rSubIE, 
+		           u2IETotalLen);
+		
+		u2PayloadBytesUsed += u2IETotalLen;
+		u2TotalFrameLen += u2IETotalLen;
+		
+free_current_ie:
+		/* Free current node with proper size calculation
+		 * Size = base struct + actual IE data length */
+		{
+		  //uint16_t u2FreeSize = sizeof(struct SUB_ELEMENT_LIST) + 
+		  //                      prCurrentIE->rSubIE.ucLength;
+		  kalMemFree(prCurrentIE, VIR_MEM_TYPE, 
+			     sizeof(struct SUB_ELEMENT_LIST) + prCurrentIE->rSubIE.ucLength);
+		  //kalMemFree(prCurrentIE, VIR_MEM_TYPE, u2FreeSize);
+		}
+		
+		prCurrentIE = prNextIE;
 	}
-
-	/* 6. Transmission Enqueue */
-	nicTxSetMngPacket(prAdapter, prMsduInfo, prStaRec->ucBssIndex,
-			  prStaRec->ucIndex, WLAN_MAC_MGMT_HEADER_LEN,
-			  u2FrameLen, NULL, MSDU_RATE_MODE_AUTO);
-
+	
+	/* ====================================================================
+	 * 7. VALIDATE FINAL FRAME SIZE
+	 * ==================================================================== */
+	if (u2TotalFrameLen > (u2FrameHeaderLen + u2MaxPayloadLen)) {
+		DBGLOG(RSN, ERROR, 
+		       "RRM: Frame length %u exceeds allocated size %u\n",
+		       u2TotalFrameLen, u2FrameHeaderLen + u2MaxPayloadLen);
+		/* Free the MSDU and abort */
+		cnmMgtPktFree(prAdapter, prMsduInfo);
+		return;
+	}
+	
+	/* ====================================================================
+	 * 8. ENQUEUE FOR TRANSMISSION
+	 * ==================================================================== */
+	nicTxSetMngPacket(prAdapter, prMsduInfo, 
+	                  prStaRec->ucBssIndex,
+	                  prStaRec->ucIndex, 
+	                  WLAN_MAC_MGMT_HEADER_LEN,
+	                  u2TotalFrameLen, 
+	                  NULL, 
+	                  MSDU_RATE_MODE_AUTO);
+	
 	nicTxEnqueueMsdu(prAdapter, prMsduInfo);
+	
+	DBGLOG(RSN, INFO, 
+	       "RRM: Neighbor Report Request sent (token=%u, len=%u)\n",
+	       prTxFrame->ucDialogToken, u2TotalFrameLen);
+	
 	return;
 
-free_list:
-	/* Handle list cleanup for early-exit scenarios to prevent memory leaks */
-	while (prSubIEs != NULL) {
-		struct SUB_ELEMENT_LIST *prNext = prSubIEs->prNext;
-		kalMemFree(prSubIEs, VIR_MEM_TYPE, sizeof(*prSubIEs) + 31);
-		prSubIEs = prNext;
+cleanup_list:
+	/* ====================================================================
+	 * CLEANUP: Free any remaining sub-elements on error paths
+	 * ==================================================================== */
+	prCurrentIE = prSubIEs;
+	while (prCurrentIE != NULL) {
+		uint16_t u2FreeSize;
+		
+		prNextIE = prCurrentIE->prNext;
+		
+		u2FreeSize = sizeof(struct SUB_ELEMENT_LIST) + 
+		             prCurrentIE->rSubIE.ucLength;
+		kalMemFree(prCurrentIE, VIR_MEM_TYPE, u2FreeSize);
+		
+		prCurrentIE = prNextIE;
 	}
 }
+
+
+
 
 
 void rrmFreeMeasurementResources(struct ADAPTER *prAdapter,
