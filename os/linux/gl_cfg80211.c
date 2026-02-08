@@ -6085,35 +6085,28 @@ mtk_reg_notify(IN struct wiphy *pWiphy,
 	struct ADAPTER *prAdapter;
 	struct wiphy *pBaseWiphy = wlanGetWiphy();
 	u_int32_t u4CountryCode = 0;
-
 	if (g_u4HaltFlag) {
 		DBGLOG(RLM, ERROR, "wlan is halt, skip reg callback\n");
 		return;
 	}
 	if (!rlmDomainCountryCodeUpdateSanity(
 		prGlueInfo, pBaseWiphy, &prAdapter)) {
-		/* Cache regdom for later replay, but only if it's not "00" */
 		extern struct mtk_regd_control g_mtk_regd_control;
 		if (pRequest->alpha2[0] != '0' || pRequest->alpha2[1] != '0') {
 			g_mtk_regd_control.cached_alpha2 = rlmDomainAlpha2ToU32(pRequest->alpha2, 2);
 			g_mtk_regd_control.pending_regdom_update = TRUE;
-			DBGLOG(RLM, WARN, "prGlueInfo not ready, caching alpha2=%s for later\n",
+			DBGLOG(RLM, INFO, "prGlueInfo not ready, caching alpha2=%s for later\n",
 				pRequest->alpha2);
 		} else {
-			g_mtk_regd_control.cached_alpha2 = rlmDomainAlpha2ToU32(pRequest->alpha2, 2);
-			g_mtk_regd_control.pending_regdom_update = TRUE;
-			DBGLOG(RLM, INFO, "Caching world regdom (00) for replay\n");
+			DBGLOG(RLM, INFO, "prGlueInfo not ready, ignoring world regdom (00)\n");
 		}
 		return;
 	}
-
 	DBGLOG(RLM, INFO,
 		"request->alpha2=%s, initiator=%x, intersect=%d\n",
 		pRequest->alpha2, pRequest->initiator, pRequest->intersect);
-
 	if (rlmDomainIsSameCountryCode(pRequest->alpha2, 2)) {
 		char acCountryCodeStr[MAX_COUNTRY_CODE_LEN + 1] = {0};
-
 		rlmDomainU32ToAlpha(
 			rlmDomainGetCountryCode(), acCountryCodeStr);
 		DBGLOG(RLM, WARN,
@@ -6121,14 +6114,12 @@ mtk_reg_notify(IN struct wiphy *pWiphy,
 			acCountryCodeStr);
 		return;
 	}
-
 	rlmDomainSetCountryCode(pRequest->alpha2, 2);
-
 	u4CountryCode = rlmDomainAlpha2ToU32(pRequest->alpha2, 2);
 	rlmDomainCountryCodeUpdate(prAdapter, pBaseWiphy, u4CountryCode);
-
 	rlmDomainSetDfsRegion(pRequest->dfs_region);
 }
+
 
 void
 cfg80211_regd_set_wiphy(IN struct wiphy *prWiphy)

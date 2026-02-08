@@ -2557,6 +2557,9 @@ static int32_t wlanNetRegister(struct wireless_dev *prWdev)
 #if CFG_SUPPORT_PERSIST_NETDEV
 			if (gprNetdev[u4Idx]->reg_state == NETREG_REGISTERED)
 				continue;
+			/* Ensure carrier is off before registration to prevent NetworkManager interference */
+			netif_carrier_off(gprWdev[u4Idx]->netdev);
+			netif_tx_stop_all_queues(gprWdev[u4Idx]->netdev);
 #endif
 			if (register_netdev(gprWdev[u4Idx]->netdev)
 				< 0) {
@@ -4860,7 +4863,7 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 		acAlpha2[0] = (g_mtk_regd_control.cached_alpha2 & 0xFF);
 		acAlpha2[1] = ((g_mtk_regd_control.cached_alpha2 >> 8) & 0xFF);
 		/* Only replay if it's not "00" */
-		if (1) { /* Force replay even if 00 */
+		if (acAlpha2[0] != '0' || acAlpha2[1] != '0') { /* Only replay if not 00 */
 			DBGLOG(INIT, INFO, "Replaying cached regdom update: %s\n", acAlpha2);
 			rlmDomainSetCountryCode(acAlpha2, 2);
 			rlmDomainCountryCodeUpdate(prAdapter, wlanGetWiphy(), 

@@ -262,10 +262,11 @@ void scnSendScanReqV2(IN struct ADAPTER *prAdapter)
 	prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
 
 	OS_SYSTIME now = kalGetTimeTick();
-	if (!CHECK_FOR_TIMEOUT(now, prScanInfo->rLastScanCompletedTime,
+	log_dbg(SCN, INFO, "Scan cooldown check: now=%u last=%u timeout=%u\n", now, prScanInfo->rLastScanCompletedTime, SCAN_COOLDOWN_MS);
+	if (prScanInfo->rLastScanCompletedTime != 0 &&
+	    !CHECK_FOR_TIMEOUT(now, prScanInfo->rLastScanCompletedTime,
 			       MSEC_TO_SYSTIME(SCAN_COOLDOWN_MS))) {
 		log_dbg(SCN, INFO, "Scan suppressed (cooldown active)\n");
-		prScanInfo->rLastScanCompletedTime = now;  // ← ADD THIS LINE
 		return;
 	}
 	
