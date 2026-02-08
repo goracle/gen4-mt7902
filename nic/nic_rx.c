@@ -3081,122 +3081,116 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
  */
 /*----------------------------------------------------------------------------*/
 void nicRxProcessMgmtPacket(IN struct ADAPTER *prAdapter,
-	IN OUT struct SW_RFB *prSwRfb)
+                            IN OUT struct SW_RFB *prSwRfb)
 {
-
-	/* DESKTOP_MODE: Mute PS/QoS chatter (SubType 0x0d) */
-	{
-		uint16_t u2SubType = (uint16_t)(prSwRfb->u2FrameCtrl & MASK_FC_SUBTYPE) >> 4;
-		if (u2SubType == 0x0d) return;
-	}
-	struct GLUE_INFO *prGlueInfo;
-	uint8_t ucSubtype;
-	uint16_t u2TxFrameCtrl;
+    struct GLUE_INFO *prGlueInfo;
+    uint8_t ucSubtype;
+    uint16_t u2TxFrameCtrl;
 #if CFG_SUPPORT_802_11W
-	/* BOOL   fgMfgDrop = FALSE; */
+    /* BOOL   fgMfgDrop = FALSE; */
 #endif
-	ASSERT(prAdapter);
-	ASSERT(prSwRfb);
 
-	nicRxFillRFB(prAdapter, prSwRfb);
+    ASSERT(prAdapter);
+    ASSERT(prSwRfb);
 
-	ucSubtype = (*(uint8_t *) (prSwRfb->pvHeader) &
-		     MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
+    /* Fill RFB first — required for later processing & safe cleanup. */
+    nicRxFillRFB(prAdapter, prSwRfb);
 
-	u2TxFrameCtrl = (*(uint8_t *) (prSwRfb->pvHeader) &
-			 MASK_FRAME_TYPE);
+    /* Extract management subtype from the 802.11 header */
+    ucSubtype = (*(uint8_t *)(prSwRfb->pvHeader) & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
 
-	if ((u2TxFrameCtrl != MAC_FRAME_BEACON) &&
-		(u2TxFrameCtrl != MAC_FRAME_PROBE_RSP))
-		DBGLOG(RSN, INFO,
-		       "[Rx]Mgmt SubType:0x0%x WIdx:0x%x SecMode:0x%x\n",
-		       ucSubtype, prSwRfb->ucWlanIdx, prSwRfb->ucSecMode);
+    /* Extract the frame type (beacon/probe vs other mgmt) */
+    u2TxFrameCtrl = (*(uint8_t *)(prSwRfb->pvHeader) & MASK_FRAME_TYPE);
+
+    /*
+     * Log management frames only when associated (WIdx != 0xff).
+     * This eliminates pre-association noise from background scans,
+     * regulatory frames, vendor action frames, etc.
+     * Beacons and probe responses are still suppressed regardless.
+     */
+    if (prSwRfb->ucWlanIdx != 0xff &&
+        u2TxFrameCtrl != MAC_FRAME_BEACON &&
+        u2TxFrameCtrl != MAC_FRAME_PROBE_RSP) {
+        DBGLOG(RSN, INFO,
+               "[Rx]Mgmt SubType:0x%02x WIdx:0x%x SecMode:0x%x\n",
+               ucSubtype, prSwRfb->ucWlanIdx, prSwRfb->ucSecMode);
+    }
 
 #if CFG_RX_PKTS_DUMP
-	{
-		struct WLAN_MAC_MGMT_HEADER *prWlanMgmtHeader;
-
+    {
+        struct WLAN_MAC_MGMT_HEADER *prWlanMgmtHeader;
 
 #if ((CFG_SUPPORT_802_11AX == 1) && (CFG_SUPPORT_WIFI_SYSDVT == 1))
-	if (RXM_IS_TRIGGER_FRAME(u2TxFrameCtrl)) {
-		if (prAdapter->fgEnShowHETrigger) {
-			DBGLOG(NIC, STATE,
-					"HE Trigger --------------\n");
-			dumpMemory8((uint8_t *)prSwRfb->prRxStatus,
-				prSwRfb->u2RxByteCount);
-			DBGLOG(NIC, STATE,
-					"HE Trigger end --------------\n");
-		}
-		nicRxReturnRFB(prAdapter, prSwRfb);
-		return;
-	}
+        if (RXM_IS_TRIGGER_FRAME(u2TxFrameCtrl)) {
+            if (prAdapter->fgEnShowHETrigger) {
+                DBGLOG(NIC, STATE, "HE Trigger --------------\n");
+                dumpMemory8((uint8_t *)prSwRfb->prRxStatus,
+                            prSwRfb->u2RxByteCount);
+                DBGLOG(NIC, STATE, "HE Trigger end --------------\n");
+            }
+            nicRxReturnRFB(prAdapter, prSwRfb);
+            return;
+        }
 #endif /* CFG_SUPPORT_802_11AX == 1 */
 
-		if (prAdapter->rRxCtrl.u4RxPktsDumpTypeMask & BIT(
-			    HIF_RX_PKT_TYPE_MANAGEMENT)) {
-			if (u2TxFrameCtrl == MAC_FRAME_BEACON
-			    || u2TxFrameCtrl == MAC_FRAME_PROBE_RSP) {
+        if (prAdapter->rRxCtrl.u4RxPktsDumpTypeMask & BIT(HIF_RX_PKT_TYPE_MANAGEMENT)) {
+            if (u2TxFrameCtrl == MAC_FRAME_BEACON || u2TxFrameCtrl == MAC_FRAME_PROBE_RSP) {
+                prWlanMgmtHeader = (struct WLAN_MAC_MGMT_HEADER *)(prSwRfb->pvHeader);
 
-				prWlanMgmtHeader =
-					(struct WLAN_MAC_MGMT_HEADER *) (
-							   prSwRfb->pvHeader);
+                DBGLOG(SW4, INFO,
+                       "QM RX MGT: net %u sta idx %u wlan idx %u ssn %u ptype %u subtype %u 11 %u\n",
+                       prSwRfb->prStaRec ? prSwRfb->prStaRec->ucBssIndex : 0,
+                       prSwRfb->ucStaRecIdx,
+                       prSwRfb->ucWlanIdx,
+                       prWlanMgmtHeader->u2SeqCtrl,
+                       prSwRfb->ucPacketType, ucSubtype);
 
-				DBGLOG(SW4, INFO,
-					"QM RX MGT: net %u sta idx %u wlan idx %u ssn %u ptype %u subtype %u 11 %u\n",
-				  prSwRfb->prStaRec->ucBssIndex,
-				  prSwRfb->ucStaRecIdx,
-				  prSwRfb->ucWlanIdx,
-				  prWlanMgmtHeader->u2SeqCtrl,
-				  /* The new SN of the frame */
-				  prSwRfb->ucPacketType, ucSubtype);
-				/* HIF_RX_HDR_GET_80211_FLAG(prHifRxHdr))); */
+                DBGLOG_MEM8(SW4, TRACE,
+                            (uint8_t *) prSwRfb->pvHeader,
+                            prSwRfb->u2PacketLen);
+            }
+        }
+    }
+#endif /* CFG_RX_PKTS_DUMP */
 
-				DBGLOG_MEM8(SW4, TRACE,
-					(uint8_t *) prSwRfb->pvHeader,
-					prSwRfb->u2PacketLen);
-			}
-		}
-	}
-#endif
 #if CFG_SUPPORT_802_11W
-	if (prSwRfb->fgIcvErr) {
-		if (prSwRfb->ucSecMode == CIPHER_SUITE_BIP)
-			DBGLOG(RSN, INFO, "[MFP] RX with BIP ICV ERROR\n");
-		else
-			DBGLOG(RSN, INFO, "[MFP] RX with ICV ERROR\n");
+    if (prSwRfb->fgIcvErr) {
+        if (prSwRfb->ucSecMode == CIPHER_SUITE_BIP)
+            DBGLOG(RSN, INFO, "[MFP] RX with BIP ICV ERROR\n");
+        else
+            DBGLOG(RSN, INFO, "[MFP] RX with ICV ERROR\n");
 
-		nicRxReturnRFB(prAdapter, prSwRfb);
-		RX_INC_CNT(&prAdapter->rRxCtrl, RX_DROP_TOTAL_COUNT);
-		return;
-	}
-#endif
+        nicRxReturnRFB(prAdapter, prSwRfb);
+        RX_INC_CNT(&prAdapter->rRxCtrl, RX_DROP_TOTAL_COUNT);
+        return;
+    }
+#endif /* CFG_SUPPORT_802_11W */
 
-	if (prAdapter->fgTestMode == FALSE) {
+    if (prAdapter->fgTestMode == FALSE) {
 #if CFG_MGMT_FRAME_HANDLING
-		prGlueInfo = prAdapter->prGlueInfo;
-		if ((prGlueInfo == NULL) || (prGlueInfo->u4ReadyFlag == 0)) {
+        prGlueInfo = prAdapter->prGlueInfo;
+        if ((prGlueInfo == NULL) || (prGlueInfo->u4ReadyFlag == 0)) {
+            /* glue not ready, fall through to return RFB */
+        } else if (apfnProcessRxMgtFrame[ucSubtype]) {
+            switch (apfnProcessRxMgtFrame[ucSubtype](prAdapter, prSwRfb)) {
+            case WLAN_STATUS_PENDING:
+                return;
+            case WLAN_STATUS_SUCCESS:
+            case WLAN_STATUS_FAILURE:
+                break;
+            default:
+                DBGLOG(RX, WARN,
+                       "Unexpected MMPDU(0x%02X) returned with abnormal status\n",
+                       ucSubtype);
+                break;
+            }
+        }
+#endif /* CFG_MGMT_FRAME_HANDLING */
+    }
 
-		} else if (apfnProcessRxMgtFrame[ucSubtype]) {
-			switch (apfnProcessRxMgtFrame[ucSubtype] (prAdapter,
-					prSwRfb)) {
-			case WLAN_STATUS_PENDING:
-				return;
-			case WLAN_STATUS_SUCCESS:
-			case WLAN_STATUS_FAILURE:
-				break;
-
-			default:
-				DBGLOG(RX, WARN,
-				       "Unexpected MMPDU(0x%02X) returned with abnormal status\n",
-				       ucSubtype);
-				break;
-			}
-		}
-#endif
-	}
-
-	nicRxReturnRFB(prAdapter, prSwRfb);
+    nicRxReturnRFB(prAdapter, prSwRfb);
 }
+
 
 void nicRxProcessMsduReport(IN struct ADAPTER *prAdapter,
 	IN OUT struct SW_RFB *prSwRfb)
