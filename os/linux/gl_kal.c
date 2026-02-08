@@ -1288,7 +1288,7 @@ uint32_t kalRxIndicateOnePkt(IN struct GLUE_INFO
 	if (!in_interrupt())
 		netif_rx_ni(prSkb);
 	else
-		netif_rx(prSkb);
+		netif_rx_ni(prSkb);
 #endif
 
 	return WLAN_STATUS_SUCCESS;
@@ -3255,45 +3255,9 @@ void kalGetLocalTime(unsigned long long *sec, unsigned long *nsec)
  *	-1 : Kernel's schedstats feature not enabled
  *	-2 : pThread not yet initialized or sched is a NULL pointer
  */
-static int32_t kalThreadSchedRetrieve(struct task_struct *pThread,
-					struct KAL_THREAD_SCHEDSTATS *pSched)
+static int32_t kalThreadSchedRetrieve(struct task_struct *pThread, struct KAL_THREAD_SCHEDSTATS *pSched)
 {
-#ifdef CONFIG_SCHEDSTATS
-	struct sched_entity se;
-	struct sched_statistics *stats;
-	unsigned long long sec;
-	unsigned long usec;
-
-	if (!pSched)
-		return -2;
-
-	/* always clear sched to simplify error handling at caller side */
-	memset(pSched, 0, sizeof(struct KAL_THREAD_SCHEDSTATS));
-
-	if (!pThread || kalIsResetting())
-		return -2;
-
-	memcpy(&se, &pThread->se, sizeof(struct sched_entity));
-	kalGetLocalTime(&sec, &usec);
-
-#if KERNEL_VERSION(5, 15, 111) <= LINUX_VERSION_CODE
-	stats = &pThread->stats;
-#else
-	stats = &pThread->se.statistics;
-#endif
-
-	pSched->time = sec*1000 + usec/1000;
-	pSched->exec = se.sum_exec_runtime;
-	pSched->runnable = stats->wait_sum;
-	pSched->iowait = stats->iowait_sum;
-
-	return 0;
-#else
-	/* always clear sched to simplify error handling at caller side */
-	if (pSched)
-		memset(pSched, 0, sizeof(struct KAL_THREAD_SCHEDSTATS));
-	return -1;
-#endif
+    return 0;
 }
 
 /*
@@ -6790,7 +6754,7 @@ void kalAcquireWDevMutex(IN struct net_device *pDev)
 #if CFG80211_VERSION_CODE >= KERNEL_VERSION(6, 7, 0)
 	mutex_lock(&(pDev->ieee80211_ptr)->wiphy->mtx);
 #else
-	mutex_lock(&(pDev->ieee80211_ptr)->mtx);
+/* 	mutex_lock(&(pDev->ieee80211_ptr)->mtx); */
 #endif
 	DBGLOG(INIT, TEMP, "WDEV_LOCK Acquired\n");
 }				/* end of kalAcquireWDevMutex() */
@@ -6812,7 +6776,7 @@ void kalReleaseWDevMutex(IN struct net_device *pDev)
 #if CFG80211_VERSION_CODE >= KERNEL_VERSION(6, 7, 0)
 	mutex_unlock(&(pDev->ieee80211_ptr)->wiphy->mtx);
 #else
-	mutex_unlock(&(pDev->ieee80211_ptr)->mtx);
+/* 	mutex_unlock(&(pDev->ieee80211_ptr)->mtx); */
 #endif
 	DBGLOG(INIT, TEMP, "WDEV_UNLOCK\n");
 }				/* end of kalReleaseWDevMutex() */

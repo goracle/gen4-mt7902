@@ -773,11 +773,11 @@ static struct cfg80211_ops mtk_cfg_ops = {
 	.add_virtual_intf = mtk_cfg_add_iface,
 	.del_virtual_intf = mtk_cfg_del_iface,
 	.change_virtual_intf = mtk_cfg_change_iface,
-	.add_key = mtk_cfg_add_key,
-	.get_key = mtk_cfg_get_key,
-	.del_key = mtk_cfg_del_key,
-	.set_default_mgmt_key = mtk_cfg_set_default_mgmt_key,
-	.set_default_key = mtk_cfg_set_default_key,
+	.add_key = (void *)mtk_cfg_add_key,
+	.get_key = (void *)mtk_cfg_get_key,
+	.del_key = (void *)mtk_cfg_del_key,
+	.set_default_mgmt_key = (void *)mtk_cfg_set_default_mgmt_key,
+	.set_default_key = (void *)mtk_cfg_set_default_key,
 	.get_station = mtk_cfg_get_station,
 #if CFG_SUPPORT_TDLS
 	.change_station = mtk_cfg_change_station,
@@ -831,7 +831,7 @@ static struct cfg80211_ops mtk_cfg_ops = {
 #endif
 
 #if (CFG_SUPPORT_DFS_MASTER == 1)
-	.start_radar_detection = mtk_cfg_start_radar_detection,
+	.start_radar_detection = (void *)mtk_cfg_start_radar_detection,
 #if KERNEL_VERSION(3, 13, 0) <= CFG80211_VERSION_CODE
 	.channel_switch = mtk_cfg_channel_switch,
 #endif
@@ -842,12 +842,12 @@ static struct cfg80211_ops mtk_cfg_ops = {
 	.mgmt_tx_cancel_wait = mtk_cfg_mgmt_tx_cancel_wait,
 	.disassoc = mtk_cfg_disassoc,
 	.start_ap = mtk_cfg_start_ap,
-	.change_beacon = mtk_cfg_change_beacon,
-	.stop_ap = mtk_cfg_stop_ap,
+	.change_beacon = (void *)mtk_cfg_change_beacon,
+	.stop_ap = (void *)mtk_cfg_stop_ap,
 	.set_wiphy_params = mtk_cfg_set_wiphy_params,
 	.set_bitrate_mask = mtk_cfg_set_bitrate_mask,
 	.set_tx_power = mtk_cfg_set_txpower,
-	.get_tx_power = mtk_cfg_get_txpower,
+	.get_tx_power = (void *)mtk_cfg_get_txpower,
 #endif
 	.update_ft_ies = mtk_cfg80211_update_ft_ies,
 #if CFG_SUPPORT_ROAMING
