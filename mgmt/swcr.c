@@ -952,8 +952,8 @@ void testPsSetupBss(IN struct ADAPTER *prAdapter,
 	}
 
 #if 0
-	prBssInfo->rPmProfSetupInfo.ucBmpDeliveryAC = PM_UAPSD_ALL;
-	prBssInfo->rPmProfSetupInfo.ucBmpTriggerAC = PM_UAPSD_ALL;
+	prBssInfo->rPmProfSetupInfo.ucBmpDeliveryAC = PM_UAPSD_NONE;
+	prBssInfo->rPmProfSetupInfo.ucBmpTriggerAC = PM_UAPSD_NONE;
 	prBssInfo->rPmProfSetupInfo.ucUapsdSp = WMM_MAX_SP_LENGTH_2;
 #else
 	prBssInfo->rPmProfSetupInfo.ucBmpDeliveryAC =

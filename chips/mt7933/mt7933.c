@@ -1375,7 +1375,7 @@ struct WIFI_CFG_NVRAM_STRUCT mt7933_cfg_data  = {
 	.u4WakeLockThreadWakeup = WAKE_LOCK_THREAD_WAKEUP_TIMEOUT,
 
 	.ucSmartRTS = 0,
-	.ePowerMode = Param_PowerModeMax,
+	.ePowerMode = Param_PowerModeCAM,
 
 #if 1
 	/* add more cfg from RegInfo */

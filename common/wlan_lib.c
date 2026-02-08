@@ -7661,9 +7661,7 @@ void wlanInitFeatureOption(IN struct ADAPTER *prAdapter)
 
 	prWifiVar->ucSmartRTS = (uint8_t) wlanCfgGetUint32(
 					prAdapter, "SmartRTS", 0);
-	prWifiVar->ePowerMode = (enum PARAM_POWER_MODE) wlanCfgGetUint32(
-					prAdapter, "PowerSave",
-					Param_PowerModeMax);
+	prWifiVar->ePowerMode = Param_PowerModeCAM;
 
 #if 1
 	/* add more cfg from RegInfo */
