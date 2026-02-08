@@ -6140,8 +6140,7 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 	u_int8_t i = 0;
 	struct REG_INFO *prRegInfo;
 	struct mt66xx_chip_info *prChipInfo;
-	/* ---- 1) Declare a local hif pointer near other locals in wlanProbe() ---- */
-	struct GL_HIF_INFO *prHifInfo = NULL; /* <-- add this near prGlueInfo/prAdapter declarations */
+	//struct GL_HIF_INFO *prHifInfo = NULL;
 	struct WIFI_VAR *prWifiVar;
 #if (MTK_WCN_HIF_SDIO && CFG_WMT_WIFI_PATH_SUPPORT)
 	int32_t i4RetVal = 0;
@@ -6153,173 +6152,151 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		return wlanOnAtReset();
 #endif
 
-#if 0
-	uint8_t *pucConfigBuf = NULL, pucCfgBuf = NULL;
-	uint32_t u4ConfigReadLen = 0;
-#endif
 	eFailReason = FAIL_REASON_NUM;
 	do {
-		/* 4 <1> Initialize the IO port of the interface */
-		/*  GeorgeKuo: pData has different meaning for _HIF_XXX:
-		 * _HIF_EHPI: pointer to memory base variable, which will be
-		 *      initialized by glBusInit().
-		 * _HIF_SDIO: bus driver handle
-		 */
+		/* 1. Bus Init */
 #ifdef CFG_CHIP_RESET_KO_SUPPORT
 		rstNotifyWholeChipRstStatus(RST_MODULE_WIFI,
 			RST_MODULE_STATE_PROBE_START, NULL);
 #endif
-
 		DBGLOG(INIT, INFO, "enter wlanProbe\n");
-
 		bRet = glBusInit(pvData);
 
 #if (CFG_SUPPORT_TRACE_TC4 == 1)
 		wlanDebugTC4Init();
 #endif
-		/* Cannot get IO address from interface */
 		if (bRet == FALSE) {
 			DBGLOG(INIT, ERROR, "wlanProbe: glBusInit() fail\n");
 			i4Status = -EIO;
 			eFailReason = BUS_INIT_FAIL;
 			break;
 		}
-		/* 4 <2> Create network device, Adapter, KalInfo,
-		 *       prDevHandler(netdev)
-		 */
+
+		/* 2. Create Net Device (Alloc only, no register yet) */
 		prWdev = wlanNetCreate(pvData, pvDriverData);
 		if (prWdev == NULL) {
-			DBGLOG(INIT, ERROR,
-			       "wlanProbe: No memory for dev and its private\n");
+			DBGLOG(INIT, ERROR, "wlanProbe: No memory for dev\n");
 			i4Status = -ENOMEM;
 			eFailReason = NET_CREATE_FAIL;
 			break;
 		}
-		/* 4 <2.5> Set the ioaddr to HIF Info */
+
+		/* 3. Glue/Adapter Setup */
 		prGlueInfo = (struct GLUE_INFO *) wiphy_priv(prWdev->wiphy);
 		gPrDev = prGlueInfo->prDevHandler;
-
-		/* 4 <4> Setup IRQ */
 		prWlandevInfo = &arWlanDevInfo[i4DevIdx];
 
 		i4Status = glBusSetIrq(prWdev->netdev, NULL, prGlueInfo);
-
 		if (i4Status != WLAN_STATUS_SUCCESS) {
 			DBGLOG(INIT, ERROR, "wlanProbe: Set IRQ error\n");
 			eFailReason = BUS_SET_IRQ_FAIL;
 			break;
 		}
-
 		prGlueInfo->i4DevIdx = i4DevIdx;
-
 		prAdapter = prGlueInfo->prAdapter;
 		prWifiVar = &prAdapter->rWifiVar;
 
-		wlanOnPreAdapterStart(prGlueInfo,
-			prAdapter,
-			&prRegInfo,
-			&prChipInfo);
+		wlanOnPreAdapterStart(prGlueInfo, prAdapter, &prRegInfo, &prChipInfo);
 
-		/* Try to cold-boot WFSYS MCU and wait for it */
+		/* 4. Boot MCU */
 		if (mt79xx_wfsys_cold_boot_and_wait(prAdapter) != 0) {
-		    DBGLOG(INIT, ERROR,
-			"WFSYS init failed: MCU did not come alive\n");
-		    return -ENODEV;
+			DBGLOG(INIT, ERROR, "WFSYS init failed: MCU did not come alive\n");
+			return -ENODEV;
 		}
-
-		/* At this point MCU is alive */
 		DBGLOG(INIT, INFO, "WFSYS MCU is alive, continuing adapter start\n");
 
-		/* --- SANITY: ensure host arbitration domain (CONNINFRA) is responsive --- */
-		/* Insert after: "WFSYS MCU is alive, continuing adapter start" */
-
-		{
-		    int poll = 0;
-		    int max_poll = 50; /* 50 * 10ms = 500ms total wait; tuneable */
-		    uint32_t sample = 0;
-		    void __iomem *bar = NULL;
-
-		    /* defensive wiring: prGlueInfo should have been set earlier */
-		    if (prGlueInfo)
-			prHifInfo = &prGlueInfo->rHifInfo;
-
-		    if (prHifInfo)
-			bar = prHifInfo->CSRBaseAddress;
-
-		    if (bar) {
-			for (poll = 0; poll < max_poll; poll++) {
-			    /* Use a host-status CSR (fallback offset 0x710c used in logs).
-			    * Replace with a symbolic offset if available.
-			    */
-		#ifdef HOST_STATUS_OFFSET
-			    sample = readl_relaxed(bar + HOST_STATUS_OFFSET);
-		#else
-			    sample = readl_relaxed(bar + 0x710c);
-		#endif
-			    /* Consider the host live if we don't get the blind or dead patterns */
-			    if (sample != 0xFFFFFFFF && ((sample & 0xFFFF0000) != 0xDEAD0000)) {
-				break;
-			    }
-			    mdelay(10);
-			}
-		    }
-
-		    if (poll == max_poll) {
-			DBGLOG(INIT, ERROR,
-			    "CONNINFRA sanity-check failed after MCU boot: host status=0x%08x\n",
-			    sample);
-			/* safe-guarded dumps (only call if pointers valid) */
-			if (prHifInfo && prHifInfo->pdev)
-			    dump_pci_state(prHifInfo->pdev);
-			if (prAdapter)
-			    dump_mailbox(prAdapter);
-			if (prAdapter)
-			    dump_pdma_state(prAdapter);
-
-			/* Fail fast - driver cannot proceed to LP-OWN if arbitration domain hung */
-			i4Status = -EIO;
-			eFailReason = ADAPTER_START_FAIL;
-			goto probe_done_cleanup;
-		    }
-
-		    DBGLOG(INIT, INFO,
-			"CONNINFRA host arbitration sane after MCU boot (status=0x%08x) after %d loops\n",
-			sample, poll);
-		}
-
-		if (wlanAdapterStart(prAdapter,
-				     prRegInfo, FALSE) != WLAN_STATUS_SUCCESS)
+		/* 5. Adapter Start (FW Download, HW Init) */
+		if (wlanAdapterStart(prAdapter, prRegInfo, FALSE) != WLAN_STATUS_SUCCESS)
 			i4Status = -EIO;
 
 		wlanOnPostAdapterStart(prAdapter, prGlueInfo);
-
-		/* kfree(prRegInfo); */
 
 		if (i4Status < 0) {
 			eFailReason = ADAPTER_START_FAIL;
 			break;
 		}
 
-		if (wlanOnPreNetRegister(prGlueInfo, prAdapter, prChipInfo,
-					 prWifiVar, FALSE)) {
+		if (wlanOnPreNetRegister(prGlueInfo, prAdapter, prChipInfo, prWifiVar, FALSE)) {
 			i4Status = -EIO;
 			eFailReason = NET_REGISTER_FAIL;
 			break;
 		}
 
-		/* 4 <3> Register the card */
+		/* ---------------------------------------------------------
+		 * CRITICAL FIX: Initialize Bands and Capabilities BEFORE Register
+		 * This ensures wiphy has correct bands when userspace sees it.
+		 * --------------------------------------------------------- */
+		
+		/* Configure 5G band */
+		if (prAdapter->fgEnable5GBand)
+			prWdev->wiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
+		else
+			prWdev->wiphy->bands[KAL_BAND_5GHZ] = NULL;
+
+		for (i = 0 ; i < KAL_P2P_NUM; i++) {
+			if (gprP2pRoleWdev[i] == NULL) continue;
+			if (prAdapter->fgEnable5GBand)
+				gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
+			else
+				gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_5GHZ] = NULL;
+		}
+
+#if (CFG_SUPPORT_WIFI_6G == 1)
+		/* Configure 6G band */
+		if (prAdapter->fgIsHwSupport6G)
+			prWdev->wiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
+		else
+			prWdev->wiphy->bands[KAL_BAND_6GHZ] = NULL;
+
+		for (i = 0 ; i < KAL_P2P_NUM; i++) {
+			if (gprP2pRoleWdev[i] == NULL) continue;
+			if (prAdapter->fgIsHwSupport6G)
+				gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
+			else
+				gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_6GHZ] = NULL;
+		}
+#endif
+
+		/* Initialize Helper Services */
+#if CFG_MET_PACKET_TRACE_SUPPORT
+		kalMetInit(prGlueInfo);
+#endif
+#if CFG_ENABLE_BT_OVER_WIFI
+		prGlueInfo->rBowInfo.fgIsNetRegistered = FALSE;
+		prGlueInfo->rBowInfo.fgIsRegistered = FALSE;
+		glRegisterAmpc(prGlueInfo);
+#endif
+#if (CONFIG_WLAN_SERVICE == 1)
+		wlanServiceInit(prGlueInfo);
+#endif
+		for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
+			struct FT_IES *prFtIEs = aisGetFtIe(prAdapter, u4Idx);
+			kalMemZero(prFtIEs, sizeof(*prFtIEs));
+		}
+
+		/* ---------------------------------------------------------
+		 * CRITICAL FIX: Mark Driver READY before Register
+		 * This ensures wlanIsDriverReady() returns TRUE when
+		 * NetworkManager queries TX Power immediately after Register.
+		 * --------------------------------------------------------- */
+		wlanOnWhenProbeSuccess(prGlueInfo, prAdapter, FALSE);
+#if CFG_SUPPORT_TPENHANCE_MODE
+		wlanTpeInit(prGlueInfo);
+#endif
+
+		/* 6. Register Net Device (GO LIVE) */
+		/* Userspace sees the interface HERE. It is now safe because we are Ready. */
 		i4DevIdx = wlanNetRegister(prWdev);
 		if (i4DevIdx < 0) {
 			i4Status = -ENXIO;
-			DBGLOG(INIT, ERROR,
-			       "wlanProbe: Cannot register the net_device context to the kernel\n");
+			DBGLOG(INIT, ERROR, "wlanProbe: Net register failed\n");
 			eFailReason = NET_REGISTER_FAIL;
 			break;
 		}
 
 		wlanOnPostNetRegister();
 
-		/* 4 <6> Initialize /proc filesystem */
+		/* 7. Post-Register Init (Proc/Sysfs need registered name) */
 #if WLAN_INCLUDE_PROC
 		i4Status = procCreateFsEntry(prGlueInfo);
 		if (i4Status < 0) {
@@ -6327,144 +6304,67 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 			eFailReason = PROC_INIT_FAIL;
 			break;
 		}
-#endif /* WLAN_INCLUDE_PROC */
+#endif
 #if WLAN_INCLUDE_SYS
 		i4Status = sysCreateFsEntry(prGlueInfo);
 		if (i4Status < 0) {
 			DBGLOG(INIT, ERROR, "wlanProbe: init sysfs failed\n");
 			break;
 		}
-#endif /* WLAN_INCLUDE_SYS */
+#endif
 
-		/* Replay any regulatory domain cached during early boot */
 		rlmDomainReplayPendingRegdom(prAdapter);
 
 #if (CFG_SUPPORT_SNIFFER_RADIOTAP == 1)
-
-
 		prGlueInfo->fgIsEnableMon = FALSE;
 		sysCreateMonDbgFs(prGlueInfo);
 #endif
 
-#if CFG_MET_PACKET_TRACE_SUPPORT
-	kalMetInit(prGlueInfo);
-#endif
-
-#if CFG_ENABLE_BT_OVER_WIFI
-	prGlueInfo->rBowInfo.fgIsNetRegistered = FALSE;
-	prGlueInfo->rBowInfo.fgIsRegistered = FALSE;
-	glRegisterAmpc(prGlueInfo);
-#endif
-
-#if (CONFIG_WLAN_SERVICE == 1)
-	wlanServiceInit(prGlueInfo);
-#endif
-
 #if (CFG_MET_PACKET_TRACE_SUPPORT == 1)
-		DBGLOG(INIT, TRACE, "init MET procfs...\n");
 		i4Status = kalMetInitProcfs(prGlueInfo);
 		if (i4Status < 0) {
-			DBGLOG(INIT, ERROR,
-			       "wlanProbe: init MET procfs failed\n");
 			eFailReason = FAIL_MET_INIT_PROCFS;
 			break;
 		}
 #endif
+		
+		/* Register P2P if needed (was in cleanup block) */
+		wlanOnP2pRegistration(prGlueInfo, prAdapter, prWdev);
 
-		for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
-			struct FT_IES *prFtIEs =
-				aisGetFtIe(prAdapter, u4Idx);
+		DBGLOG(INIT, INFO,
+		       "wlanProbe: probe success, feature set: 0x%llx\n",
+		       wlanGetSupportedFeatureSet(prGlueInfo));
 
-			kalMemZero(prFtIEs,
-				sizeof(*prFtIEs));
-		}
-
-		/* Configure 5G band for registered wiphy */
-		if (prAdapter->fgEnable5GBand)
-			prWdev->wiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
-		else
-			prWdev->wiphy->bands[KAL_BAND_5GHZ] = NULL;
-
-		for (i = 0 ; i < KAL_P2P_NUM; i++) {
-			if (gprP2pRoleWdev[i] == NULL)
-				continue;
-
-			if (prAdapter->fgEnable5GBand)
-				gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_5GHZ] =
-				&mtk_band_5ghz;
-			else
-				gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_5GHZ] =
-				NULL;
-		}
-
-#if (CFG_SUPPORT_WIFI_6G == 1)
-		/* Configure 6G band for registered wiphy */
-		if (prAdapter->fgIsHwSupport6G)
-			prWdev->wiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
-		else
-			prWdev->wiphy->bands[KAL_BAND_6GHZ] = NULL;
-
-		for (i = 0 ; i < KAL_P2P_NUM; i++) {
-			if (gprP2pRoleWdev[i] == NULL)
-				continue;
-
-			if (prAdapter->fgIsHwSupport6G)
-				gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_6GHZ] =
-				&mtk_band_6ghz;
-			else
-				gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_6GHZ] =
-				NULL;
-		}
-#endif
 	} while (FALSE);
 
-probe_done_cleanup:
-
-	if (i4Status == 0) {
-		wlanOnWhenProbeSuccess(prGlueInfo, prAdapter, FALSE);
-		DBGLOG(INIT, INFO,
-		       "wlanProbe: probe success, feature set: 0x%llx, persistNetdev: %d\n",
-		       wlanGetSupportedFeatureSet(prGlueInfo),
-		       CFG_SUPPORT_PERSIST_NETDEV);
-		wlanOnP2pRegistration(prGlueInfo, prAdapter, prWdev);
-#if CFG_SUPPORT_TPENHANCE_MODE
-		wlanTpeInit(prGlueInfo);
-#endif /* CFG_SUPPORT_TPENHANCE_MODE */
-	} else {
-		DBGLOG(INIT, ERROR, "wlanProbe: probe failed, reason:%d\n",
-		       eFailReason);
+	/* Error Handling / Cleanup */
+	if (i4Status != 0) {
+		DBGLOG(INIT, ERROR, "wlanProbe: probe failed, reason:%d\n", eFailReason);
 		switch (eFailReason) {
 #if CFG_MET_PACKET_TRACE_SUPPORT
 		case FAIL_MET_INIT_PROCFS:
 			kalMetRemoveProcfs();
-#endif
 			kal_fallthrough;
+#endif
 		case PROC_INIT_FAIL:
-			wlanNetUnregister(prWdev);
+			/* If we failed AFTER register, we must unregister */
+			if (i4DevIdx >= 0) wlanNetUnregister(prWdev);
 			kal_fallthrough;
 		case NET_REGISTER_FAIL:
+			/* If we marked ready (Success flow) but failed later, we must stop */
 			set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
-			/* wake up main thread */
 			wake_up_interruptible(&prGlueInfo->waitq);
-			/* wait main thread stops */
-			wait_for_completion_interruptible(
-							&prGlueInfo->rHaltComp);
+			wait_for_completion_interruptible(&prGlueInfo->rHaltComp);
 			wlanAdapterStop(prAdapter);
 			kal_fallthrough;
 		case ADAPTER_START_FAIL:
-			glBusFreeIrq(prWdev->netdev,
-				*((struct GLUE_INFO **)
-						netdev_priv(prWdev->netdev)));
+			glBusFreeIrq(prWdev->netdev, *((struct GLUE_INFO **)netdev_priv(prWdev->netdev)));
 			kal_fallthrough;
 		case BUS_SET_IRQ_FAIL:
 			wlanWakeLockUninit(prGlueInfo);
 			wlanNetDestroy(prWdev);
-			/* prGlueInfo->prAdapter is released in
-			 * wlanNetDestroy
-			 */
 			break;
 		case NET_CREATE_FAIL:
-			break;
 		case BUS_INIT_FAIL:
 			break;
 		default:
@@ -6473,12 +6373,13 @@ probe_done_cleanup:
 	}
 
 #ifdef CFG_CHIP_RESET_KO_SUPPORT
-	rstNotifyWholeChipRstStatus(RST_MODULE_WIFI,
-		RST_MODULE_STATE_PROBE_DONE, NULL);
+	rstNotifyWholeChipRstStatus(RST_MODULE_WIFI, RST_MODULE_STATE_PROBE_DONE, NULL);
 #endif
 
 	return i4Status;
-}				/* end of wlanProbe() */
+}
+
+
 
 void
 wlanOffNotifyCfg80211Disconnect(IN struct GLUE_INFO *prGlueInfo)

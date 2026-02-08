@@ -68,3 +68,4 @@ if [ -n "$IFACE" ]; then
     ip link set "$IFACE" up || true
     log "Device $IFACE is UP."
 fi
+sudo dmesg > /home/dan/builds/gen4-mt7902/mt7902_dmesg.log

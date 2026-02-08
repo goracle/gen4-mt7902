@@ -1,68 +1,66 @@
 # /etc/systemd/system/mt7902-late.service
-#
-# MT7902 WiFi Driver Early Initialization
-# Loads before network services to ensure WiFi is available at boot
-
 [Unit]
-Description=MT7902 WiFi Driver Initialization
+Description=MT7902 WiFi Driver — Late load (Arch-friendly, insmod)
 Documentation=https://github.com/your-repo/gen4-mt7902
-# Start BEFORE network services try to come up
-Before=network-pre.target
-Wants=network-pre.target
-# Wait for basic system initialization
-After=systemd-udev-settle.service
-After=systemd-modules-load.service
-# Don't pull in standard dependencies
-DefaultDependencies=no
+# Late timing similar to Ubuntu's "after graphical"
+After=graphical.target systemd-user-sessions.service
+Wants=NetworkManager.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Run as root (required for insmod)
 User=root
-# Set working directory to driver location
 WorkingDirectory=/home/dan/builds/gen4-mt7902
-# Allow time for driver initialization
-TimeoutStartSec=60
-# Small delay for PCIe stability
-ExecStartPre=/usr/bin/sleep 3
-# Load the driver
-ExecStart=/usr/bin/bash /home/dan/builds/gen4-mt7902/load.sh
-# Verify the interface appeared
-ExecStartPost=/bin/bash -c '\
-  echo "Verifying WiFi interface appeared..."; \
-  for i in {1..20}; do \
-    if ip link show 2>/dev/null | grep -q wlan; then \
-      WLAN_IF=$(ip link show | grep -oP "wlan\\d+" | head -1); \
-      echo "✓ WiFi interface ready: $WLAN_IF"; \
-      exit 0; \
-    fi; \
-    sleep 0.5; \
-  done; \
-  echo "ERROR: WiFi interface did not appear within 10 seconds" >&2; \
-  exit 1'
-# Give NetworkManager a moment to detect the new interface
-ExecStartPost=/bin/bash -c '\
-  echo "Waiting for NetworkManager..."; \
-  sleep 2; \
-  if command -v nmcli >/dev/null 2>&1; then \
-    nmcli general reload 2>/dev/null || true; \
-  fi; \
-  echo "✓ Driver initialization complete"'
-# On stop, unload the module cleanly
-ExecStop=/bin/bash -c '\
-  if lsmod | grep -q "^mt7902\\b"; then \
-    echo "Unloading mt7902 module..."; \
-    rmmod mt7902 || rmmod -f mt7902 || true; \
-  fi'
-# Restart policy
+TimeoutStartSec=180
+
+# Small "magic" delay to mimic Ubuntu timing and stabilize PCI/ASPM
+ExecStartPre=/usr/bin/sleep 15
+ExecStartPre=/bin/echo "[mt7902] starting late-load service" | /usr/bin/systemd-cat -t mt7902 -p info
+
+# MAIN start: insmod (explicit), then udev settle, detect iface, ensure NM manages it, force DHCP if needed
+ExecStart=/bin/bash -c '\
+set -euo pipefail; \
+MODULE="mt7902"; KO="$(pwd)/${MODULE}.ko"; \
+/bin/echo "[mt7902] attempt insmod (prefers local .ko)"; \
+if [ -f "$KO" ]; then \
+  /sbin/insmod "$KO" 2>&1 | /usr/bin/systemd-cat -t mt7902 -p info || { /bin/echo "[mt7902] insmod failed" | /usr/bin/systemd-cat -t mt7902 -p err; exit 1; }; \
+else \
+  /bin/echo "[mt7902] ERROR: $KO not found; abort" | /usr/bin/systemd-cat -t mt7902 -p err; exit 1; \
+fi; \
+/bin/echo "[mt7902] insmod done, settling udev events" | /usr/bin/systemd-cat -t mt7902 -p info; \
+/usr/bin/udevadm settle --timeout=10; \
+# wait for interface to appear (30s) matching common wireless names
+IFACE=""; \
+for i in $(seq 1 30); do \
+  IFACE=$(/usr/bin/ip -o link show | /usr/bin/awk -F\": \" '\''{print $2}'\'' | /bin/grep -E \"^(wlan|wlp|wlx|wl)\" | /usr/bin/head -n1 || true); \
+  if [ -n \"$IFACE\" ]; then break; fi; \
+  /bin/sleep 1; \
+done; \
+if [ -z \"$IFACE\" ]; then \
+  /bin/echo \"[mt7902] ERROR: no wireless interface appeared after insmod\" | /usr/bin/systemd-cat -t mt7902 -p err; exit 1; \
+fi; \
+/bin/echo \"[mt7902] detected iface: $IFACE\" | /usr/bin/systemd-cat -t mt7902 -p info; \
+# Make sure NM manages the iface
+/usr/bin/nmcli device set \"$IFACE\" managed yes 2>/dev/null || true; \
+# If NM thinks it's connected but no IPv4/IPv6, force a reconnect cycle to retrigger DHCP/routes
+# Wait a moment for NM to do initial handling
+/bin/sleep 1; \
+IP4=$(/usr/bin/nmcli -g IP4.ADDRESS device show \"$IFACE\" 2>/dev/null || true); \
+if [ -z \"$IP4\" ]; then \
+  /bin/echo \"[mt7902] no IP yet for $IFACE; forcing disconnect/connect\" | /usr/bin/systemd-cat -t mt7902 -p info; \
+  /usr/bin/nmcli device disconnect \"$IFACE\" 2>/dev/null || true; \
+  /bin/sleep 1; \
+  /usr/bin/nmcli device connect \"$IFACE\" 2>/dev/null || true; \
+fi; \
+# final reapply to ensure NM applies settings (passive if not needed)
+ /usr/bin/nmcli device reapply \"$IFACE\" 2>/dev/null || true; \
+/bin/echo \"[mt7902] done\" | /usr/bin/systemd-cat -t mt7902 -p info; \
+exit 0'
+
+# Best-effort cleanup on stop
+ExecStop=/bin/bash -c '/sbin/rmmod mt7902 2>/dev/null || true; /bin/echo \"[mt7902] rmmod attempted\" | /usr/bin/systemd-cat -t mt7902 -p info'
+
 Restart=no
-# Logging
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=mt7902-wifi
 
 [Install]
-# Start during early boot
-WantedBy=network-pre.target
-WantedBy=multi-user.target
+WantedBy=graphical.target
