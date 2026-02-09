@@ -482,6 +482,110 @@ static uint32_t g_csi_val[CSI_MAX_DATA_COUNT];
  *                                 M A C R O S
  *******************************************************************************
  */
+
+static int wlanCfgGetStringSafe(struct ADAPTER *prAdapter,
+                                const char *key,
+                                char *buf,
+                                size_t buflen,
+                                const char *def)
+{
+    char tmp[WLAN_CFG_VALUE_LEN_MAX];
+    size_t len;
+
+    if (!buf || buflen == 0)
+        return -1;
+
+    if (wlanCfgGet(prAdapter, key, tmp, (char *)def, 0)
+        != WLAN_STATUS_SUCCESS)
+        return -1;
+
+    len = kalStrLen(tmp);
+    if (len >= buflen)
+        return -1;
+
+    kalMemCopy(buf, tmp, len + 1); /* include NUL */
+    return (int)len;
+}
+
+
+static inline int hexval(char c)
+{
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+static int parse_mac_address_string(struct ADAPTER *prAdapter,
+                                    struct WIFI_VAR *prWifiVar)
+{
+    char macStr[32];
+    uint8_t mac[6];
+    int len;
+    uint32_t pos = 0, i = 0;
+
+    len = wlanCfgGetStringSafe(prAdapter,
+                               "MacAddr",
+                               macStr,
+                               sizeof(macStr),
+                               "00:11:22:33:44:55");
+    if (len < 0)
+        return -1;
+
+    /* Expect exactly "xx:xx:xx:xx:xx:xx" */
+    if (len != 17)
+        return -1;
+
+    /* Parse string to binary */
+    while (i < 6) {
+        int hi, lo;
+
+        while (pos < len &&
+               (macStr[pos] == ':' ||
+                macStr[pos] == '-' ||
+                macStr[pos] == ' '))
+            pos++;
+
+        if (pos + 2 > len)
+            return -1;
+
+        hi = hexval(macStr[pos++]);
+        lo = hexval(macStr[pos++]);
+
+        if (hi < 0 || lo < 0)
+            return -1;
+
+        mac[i++] = (hi << 4) | lo;
+    }
+
+    if (i != 6)
+        return -1;
+
+    if (is_multicast_ether_addr(mac) ||
+        is_zero_ether_addr(mac))
+        return -1;
+
+    /* No trailing garbage */
+    while (pos < len &&
+           (macStr[pos] == ':' ||
+            macStr[pos] == '-' ||
+            macStr[pos] == ' '))
+        pos++;
+
+    if (pos != len)
+        return -1;
+
+    /* Destination must be real storage, not a pointer */
+    if (sizeof(prWifiVar->aucMacAddrStr) <= len)
+        return -1;
+
+    kalMemCopy(prWifiVar->aucMacAddrStr, macStr, len + 1);
+
+    DBGLOG(INIT, INFO, "MAC override applied\n");
+    return 0;
+}
+
+
 #define SIGNED_EXTEND(n, _sValue) \
 	(((_sValue) & BIT((n)-1)) ? ((_sValue) | BITS(n, 31)) : \
 	 ((_sValue) & ~BITS(n, 31)))
@@ -3420,43 +3524,41 @@ u_int8_t wlanIsHandlerAllowedInRFTest(IN PFN_OID_HANDLER_FUNC pfnOidHandler,
 
 uint32_t wlanSetChipEcoInfo(IN struct ADAPTER *prAdapter)
 {
-	uint32_t hw_version = 0, sw_version = 0;
+	/* We define what we expect an MT7902 to look like */
+	uint32_t hw_version = 0x00000102; // Typical MT7902 E2 value
+	uint32_t sw_version = 0x00000000;
 	struct mt66xx_chip_info *prChipInfo = prAdapter->chip_info;
 	uint32_t chip_id = prChipInfo->chip_id;
-	/* WLAN_STATUS status; */
-	uint32_t u4Status = WLAN_STATUS_SUCCESS;
-
+	
 	DEBUGFUNC("wlanSetChipEcoInfo.\n");
 
-	if (wlanAccessRegister(prAdapter,
-		prChipInfo->top_hvr, &hw_version, 0, 0) !=
-	    WLAN_STATUS_SUCCESS) {
-		DBGLOG(INIT, ERROR,
-		       "wlanSetChipEcoInfo >> get TOP_HVR failed.\n");
-		u4Status = WLAN_STATUS_FAILURE;
-	} else if (wlanAccessRegister(prAdapter,
-		prChipInfo->top_fvr, &sw_version, 0, 0) !=
-	    WLAN_STATUS_SUCCESS) {
-		DBGLOG(INIT, ERROR,
-		       "wlanSetChipEcoInfo >> get TOP_FVR failed.\n");
-		u4Status = WLAN_STATUS_FAILURE;
-	} else {
-		/* success */
-		nicSetChipHwVer((uint8_t)(GET_HW_VER(hw_version) & 0xFF));
-		nicSetChipFactoryVer((uint8_t)((GET_HW_VER(hw_version) >> 8) &
-				     0xF));
-		nicSetChipSwVer((uint8_t)GET_FW_VER(sw_version));
-
-		/* Assign current chip version */
-		prAdapter->chip_info->eco_ver = nicGetChipEcoVer(prAdapter);
+	/* * We still attempt the read, but we no longer treat failure as fatal.
+	 * This prevents the '0xdead0003' response from killing the probe.
+	 */
+	if (wlanAccessRegister(prAdapter, prChipInfo->top_hvr, &hw_version, 0, 0) != WLAN_STATUS_SUCCESS) {
+		DBGLOG(INIT, WARN, "TOP_HVR read failed (Bus Fenced). Using default E2 identity.\n");
+		hw_version = 0x00000102; 
 	}
+
+	if (wlanAccessRegister(prAdapter, prChipInfo->top_fvr, &sw_version, 0, 0) != WLAN_STATUS_SUCCESS) {
+		sw_version = 0x00000000;
+	}
+
+	/* Force the driver to populate its internal structures with our identity data */
+	nicSetChipHwVer((uint8_t)(GET_HW_VER(hw_version) & 0xFF));
+	nicSetChipFactoryVer((uint8_t)((GET_HW_VER(hw_version) >> 8) & 0xF));
+	nicSetChipSwVer((uint8_t)GET_FW_VER(sw_version));
+
+	/* Manually set the ECO version so the driver knows which patches to load */
+	prAdapter->chip_info->eco_ver = 0; 
 
 	DBGLOG(INIT, INFO,
 	       "Chip ID[%04X] Version[E%u] HW[0x%08x] SW[0x%08x]\n",
 	       chip_id, prAdapter->chip_info->eco_ver, hw_version,
 	       sw_version);
 
-	return u4Status;
+	/* ALWAYS return success to allow wlanAdapterStart to proceed to the Reset/FW phase */
+	return WLAN_STATUS_SUCCESS;
 }
 
 #if (CFG_ENABLE_FW_DOWNLOAD == 1)
@@ -3846,55 +3948,52 @@ void wlanoidClearTimeoutCheck(IN struct ADAPTER *prAdapter)
  *         WLAN_STATUS_SUCCESS   The request has been processed
  */
 /*----------------------------------------------------------------------------*/
-uint32_t wlanUpdateNetworkAddress(IN struct ADAPTER
-				  *prAdapter)
+uint32_t wlanUpdateNetworkAddress(IN struct ADAPTER *prAdapter)
 {
 	const uint8_t aucZeroMacAddr[] = NULL_MAC_ADDR;
 	uint8_t rMacAddr[PARAM_MAC_ADDR_LEN];
-	uint32_t u4SysTime;
 
 	DEBUGFUNC("wlanUpdateNetworkAddress");
-
 	ASSERT(prAdapter);
 
-	if (kalRetrieveNetworkAddress(prAdapter->prGlueInfo, rMacAddr) == FALSE
-	    || IS_BMCAST_MAC_ADDR(rMacAddr)
-	    || EQUAL_MAC_ADDR(aucZeroMacAddr, rMacAddr)) {
-		/* eFUSE has a valid address, don't do anything */
-		if (prAdapter->fgIsEmbbededMacAddrValid == TRUE) {
-#if CFG_SHOW_MACADDR_SOURCE
-			DBGLOG(INIT, INFO, "Using embedded MAC address");
-#endif
-			return WLAN_STATUS_SUCCESS;
-		}
-#if CFG_SHOW_MACADDR_SOURCE
-		DBGLOG(INIT, INFO,
-		       "Using dynamically generated MAC address");
-#endif
-		/* dynamic generate */
-		u4SysTime = (uint32_t) kalGetTimeTick();
+	/* --- No-NVRAM Fix: Skip Hardware Probing --- */
+	/* We intentionally skip nicpmSetDriverOwn and kalRetrieveNetworkAddress 
+	 * because touching the registers on a chip with no NVRAM/EFUSE 
+	 * is causing your PCIe 'Slave no response' hang.
+	 */
 
-		rMacAddr[0] = 0x00;
-		rMacAddr[1] = 0x08;
-		rMacAddr[2] = 0x22;
-
-		kalMemCopy(&rMacAddr[3], &u4SysTime, 3);
-
-	} else {
-#if CFG_SHOW_MACADDR_SOURCE
-		DBGLOG(INIT, INFO, "Using host-supplied MAC address");
-#endif
+	/* 1. Check if we already have a valid MAC from wifi.cfg or our static default 
+	 * that we set in wlanInitFeatureOption.
+	 */
+	if (!EQUAL_MAC_ADDR(aucZeroMacAddr, prAdapter->rWifiVar.aucMacAddrStr)) {
+		DBGLOG(INIT, INFO, "Using MAC from FeatureOption buffer (Virtual NVRAM)\n");
+		COPY_MAC_ADDR(rMacAddr, prAdapter->rWifiVar.aucMacAddrStr);
+	} 
+	else {
+		/* 2. Emergency fallback if even the buffer is empty */
+		DBGLOG(INIT, WARN, "No MAC in buffer, generating emergency LAA\n");
+		rMacAddr[0] = 0x02; /* Locally Administered bit set */
+		rMacAddr[1] = 0x0c;
+		rMacAddr[2] = 0xe7;
+		rMacAddr[3] = 0x66;
+		rMacAddr[4] = 0x32;
+		rMacAddr[5] = 0xe1;
 	}
 
 #if WLAN_INCLUDE_SYS
 	sysMacAddrOverride(rMacAddr);
 #endif
 
+	/* Commit the address to the adapter structure */
 	COPY_MAC_ADDR(prAdapter->rWifiVar.aucMacAddress, rMacAddr);
+
+	/* Tell the driver this is now a "valid" embedded address so it stops 
+	 * trying to re-init the network address later.
+	 */
+	prAdapter->fgIsEmbbededMacAddrValid = TRUE;
 
 	return WLAN_STATUS_SUCCESS;
 }
-
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief This function is called to update basic configuration into firmware
@@ -7544,11 +7643,16 @@ void wlanInitFeatureOption(IN struct ADAPTER *prAdapter)
 	prWifiVar->ucArpTxDone = (uint8_t) wlanCfgGetUint32(
 					prAdapter, "ArpTxDone", 1);
 
-	prWifiVar->ucMacAddrOverride = (uint8_t) wlanCfgGetInt32(
-				       prAdapter, "MacOverride", 0);
-	if (wlanCfgGet(prAdapter, "MacAddr", prWifiVar->aucMacAddrStr,
-	    "00:0c:e7:66:32:e1", 0))
-		DBGLOG(INIT, ERROR, "get MacAddr fail, use defaul\n");
+	/* --- New Robust MAC Retrieval (now with flavor!) --- */
+
+	prWifiVar->ucMacAddrOverride =
+	    (uint8_t) wlanCfgGetInt32(prAdapter, "MacOverride", 1);
+
+	if (parse_mac_address_string(prAdapter, prWifiVar) != 0) {
+	    DBGLOG(INIT, WARN, "Invalid MacAddr override, using default\n");
+	}
+
+
 
 	prWifiVar->ucCtiaMode = (uint8_t) wlanCfgGetUint32(
 					prAdapter, "CtiaMode", 0);

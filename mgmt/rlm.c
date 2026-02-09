@@ -5262,9 +5262,9 @@ void rlmProcessBcn(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb,
 	struct BSS_INFO *prBssInfo;
 	u_int8_t fgNewParameter;
 	u_int8_t fgNewSRParam = FALSE; // Move it out of the #if guard here
-#if (CFG_SUPPORT_802_11AX == 1)
-	u_int8_t fgNewSRParam = FALSE;
-#endif
+	//#if (CFG_SUPPORT_802_11AX == 1)
+	//u_int8_t fgNewSRParam = FALSE;
+	//#endif
 	uint8_t i;
 
 	ASSERT(prAdapter);

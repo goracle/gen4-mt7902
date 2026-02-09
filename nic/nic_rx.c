@@ -4266,39 +4266,59 @@ uint32_t nicRxProcessNanPubActionFrame(IN struct ADAPTER *prAdapter,
 
 uint8_t nicIsActionFrameValid(IN struct SW_RFB *prSwRfb)
 {
-	struct WLAN_ACTION_FRAME *prActFrame;
-	uint16_t u2ActionIndex = 0, u2ExpectedLen = 0;
-	uint32_t u4Idx, u4Size;
+    struct WLAN_ACTION_FRAME *prActFrame;
+    uint16_t u2ActionIndex = 0, u2ExpectedLen = 0;
+    uint32_t u4Idx, u4Size;
 
-	if (prSwRfb->u2PacketLen < sizeof(struct WLAN_ACTION_FRAME) - 1)
-		return FALSE;
-	prActFrame = (struct WLAN_ACTION_FRAME *) prSwRfb->pvHeader;
+    /* Basic sanity check: is the frame at least long enough to have a category/action? */
+    if (prSwRfb->u2PacketLen < sizeof(struct WLAN_ACTION_FRAME) - 1)
+        return FALSE;
 
-	DBGLOG(RSN, TRACE, "Action frame category=%d action=%d\n",
-	       prActFrame->ucCategory, prActFrame->ucAction);
+    prActFrame = (struct WLAN_ACTION_FRAME *) prSwRfb->pvHeader;
 
-	u2ActionIndex = prActFrame->ucCategory | prActFrame->ucAction << 8;
-	u4Size = sizeof(arActionFrameReservedLen) /
-		 sizeof(struct ACTION_FRAME_SIZE_MAP);
-	for (u4Idx = 0; u4Idx < u4Size; u4Idx++) {
-		if (u2ActionIndex == arActionFrameReservedLen[u4Idx].u2Index) {
-			u2ExpectedLen = (uint16_t)
-				arActionFrameReservedLen[u4Idx].len;
-			DBGLOG(RSN, LOUD,
-				"Found expected len of incoming action frame:%d\n",
-				u2ExpectedLen);
-			break;
-		}
-	}
-	if (u2ExpectedLen != 0 && prSwRfb->u2PacketLen < u2ExpectedLen) {
-		DBGLOG(RSN, INFO,
-			"Received an abnormal action frame: packet len/expected len:%d/%d\n",
-			prSwRfb->u2PacketLen, u2ExpectedLen);
-		return FALSE;
-	}
-	return TRUE;
+    /* Explicit casting and grouping to avoid precedence ambiguity */
+    u2ActionIndex = ((uint16_t)prActFrame->ucCategory) | 
+                    ((uint16_t)prActFrame->ucAction << 8);
+
+    DBGLOG(RSN, TRACE, "Action frame category=%d action=%d (Index: 0x%04x)\n",
+           prActFrame->ucCategory, prActFrame->ucAction, u2ActionIndex);
+
+    u4Size = sizeof(arActionFrameReservedLen) / sizeof(struct ACTION_FRAME_SIZE_MAP);
+    
+    for (u4Idx = 0; u4Idx < u4Size; u4Idx++) {
+        if (u2ActionIndex == arActionFrameReservedLen[u4Idx].u2Index) {
+            u2ExpectedLen = (uint16_t)arActionFrameReservedLen[u4Idx].len;
+            break;
+        }
+    }
+
+    /* * Forensic Check: If the packet is shorter than the table's "tribal knowledge" 
+     */
+    if (u2ExpectedLen != 0 && prSwRfb->u2PacketLen < u2ExpectedLen) {
+        uint8_t *pucRaw = (uint8_t *)prSwRfb->pvHeader;
+        
+        /* * LOG LEVEL ERROR: We need to see this even in standard production builds.
+         * We dump the first 28 bytes (the size of a standard SA Query frame).
+         */
+        DBGLOG(RSN, ERROR, "DROP: ID 0x%04x | Wire: %u | Table: %u\n", 
+               u2ActionIndex, prSwRfb->u2PacketLen, u2ExpectedLen);
+
+        /* Only dump hex if we actually have data to read to avoid OOB access */
+        if (prSwRfb->u2PacketLen >= 8) {
+            DBGLOG(RSN, ERROR, "HEX DUMP: %02x %02x %02x %02x %02x %02x %02x %02x ...\n",
+                   pucRaw[0], pucRaw[1], pucRaw[2], pucRaw[3], 
+                   pucRaw[4], pucRaw[5], pucRaw[6], pucRaw[7]);
+        }
+
+        /* * FUTURE: If forensics show the missing byte is always a trailing zero 
+         * or alignment padding, we can insert a 'return TRUE' exception here 
+         * specifically for u2ActionIndex == 0x0008 (SA Query).
+         */
+        return FALSE;
+    }
+
+    return TRUE;
 }
-
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief

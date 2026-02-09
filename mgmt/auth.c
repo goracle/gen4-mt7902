@@ -1123,6 +1123,25 @@ authSendDeauthFrame(IN struct ADAPTER *prAdapter,
 	uint8_t ucStaRecIdx = STA_REC_INDEX_NOT_FOUND;
 	uint8_t ucBssIndex = prAdapter->ucHwBssIdNum;
 	uint8_t aucBMC[] = BC_MAC_ADDR;
+	static OS_SYSTIME last_deauth_time[KAL_AIS_NUM] = {0};
+	static uint16_t deauth_count[KAL_AIS_NUM] = {0};
+	OS_SYSTIME current_time = kalGetTimeTick();
+	
+	/* Rate limit deauth frames: max 5 per second per BSS */
+	if (ucBssIndex < KAL_AIS_NUM) {
+		if (CHECK_FOR_TIMEOUT(current_time, last_deauth_time[ucBssIndex], SEC_TO_SYSTIME(1))) {
+			deauth_count[ucBssIndex] = 0;
+		}
+		last_deauth_time[ucBssIndex] = current_time;
+		
+		if (++deauth_count[ucBssIndex] > 5) {
+			DBGLOG(SAA, WARN, 
+			       "BSS[%u] Deauth rate limit hit (%u/sec), dropping\n",
+			       ucBssIndex, deauth_count[ucBssIndex]);
+			return WLAN_STATUS_FAILURE;
+		}
+	}
+
 
 	DBGLOG(RSN, INFO, "authSendDeauthFrame\n");
 

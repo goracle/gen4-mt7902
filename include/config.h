@@ -748,6 +748,7 @@
  * Auto Channel Selection maximun channel number
  *------------------------------------------------------------------------------
  */
+
 /* ARRAY_SIZE(mtk_5ghz_channels) + ARRAY_SIZE(mtk_2ghz_channels) */
 #if (CFG_SUPPORT_WIFI_6G == 1)
 #define MAX_CHN_NUM			(MAX_2G_BAND_CHN_NUM + \

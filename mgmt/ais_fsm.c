@@ -2977,6 +2977,25 @@ void aisFsmStateAbort(IN struct ADAPTER *prAdapter,
 		uint8_t ucReasonOfDisconnect, u_int8_t fgDelayIndication,
 		uint8_t ucBssIndex)
 {
+	static OS_SYSTIME last_abort_time[KAL_AIS_NUM] = {0};
+	OS_SYSTIME current_time = kalGetTimeTick();
+
+	/* * FIX: Allow the first abort unconditionally (last_abort_time == 0).
+	 * If we've aborted before, enforce the 100ms rate-limit to prevent storms.
+	 */
+	if (last_abort_time[ucBssIndex] != 0) {
+		if (!CHECK_FOR_TIMEOUT(current_time, last_abort_time[ucBssIndex], 
+					MSEC_TO_SYSTIME(100))) {
+			
+			/* Stripped math to avoid undeclared macro errors */
+			DBGLOG(AIS, WARN, "BSS[%u] Ignoring rapid abort request\n", 
+				ucBssIndex);
+			return;
+		}
+	}
+	
+	last_abort_time[ucBssIndex] = current_time;
+	
 	struct AIS_FSM_INFO *prAisFsmInfo;
 	struct BSS_INFO *prAisBssInfo;
 	struct CONNECTION_SETTINGS *prConnSettings;

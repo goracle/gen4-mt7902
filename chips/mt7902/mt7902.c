@@ -225,6 +225,7 @@ void mt7902DisableInterrupt(
 	DBGLOG(HAL, TRACE, "%s\n", __func__);
 }
 
+
 uint8_t mt7902SetRxRingHwAddr(
 	struct RTMP_RX_RING *prRxRing,
 	struct BUS_INFO *prBusInfo,
@@ -233,27 +234,42 @@ uint8_t mt7902SetRxRingHwAddr(
 	uint32_t offset = 0;
 	uint32_t val = 0;
 
-	/*
-	 * RX_RING_EVT_IDX_1     (RX_Ring0) - Rx Event
-	 *  - include Band0 Tx Free Done Event
-	 * WFDMA0_RX_RING_IDX_3  (RX_Ring1) - Band1 Tx Free Done Event
-	 * RX_RING_DATA_IDX_0    (RX_Ring2) - Band0 Rx Data
-	 * WFDMA0_RX_RING_IDX_2  (RX_Ring3) - Band1 Rx Data
-	 */
-	/* halWpdmaInitRxRing() expect the ENUM_RX_RING_IDX is used in order */
-
-	if (u4SwRingIdx == RX_RING_EVT_IDX_1) {
-		/* RX RING 0 for Band0 Tx Free Done Event + Rx Event */
-		val = 0;
-	} else if (u4SwRingIdx == WFDMA0_RX_RING_IDX_3)
-		val = 1;
-	else if (u4SwRingIdx == RX_RING_DATA_IDX_0)
-		val = 2;
-	else if (u4SwRingIdx == WFDMA0_RX_RING_IDX_2)
-		val = 3;
-	else {
-		DBGLOG(HAL, ERROR, "not supported ring idx %d\n", u4SwRingIdx);
+	if (!prRxRing) {
+		DBGLOG(HAL, ERROR, "prRxRing is NULL for idx %d\n", u4SwRingIdx);
 		return FALSE;
+	}
+
+	switch (u4SwRingIdx) {
+	case RX_RING_EVT_IDX_1:      /* Sw Ring 0 -> HW Ring 0 */
+		val = 0;
+		break;
+	case WFDMA0_RX_RING_IDX_3:   /* Sw Ring 1 -> HW Ring 1 */
+		val = 1;
+		break;
+	case RX_RING_DATA_IDX_0:     /* Sw Ring 2 -> HW Ring 2 */
+		val = 2;
+		break;
+	case WFDMA0_RX_RING_IDX_2:   /* Sw Ring 3 -> HW Ring 3 */
+		val = 3;
+		break;
+	case 4:                      /* Sw Ring 4 -> HW Ring 4 (Data 1) */
+		val = 4;
+		break;
+	case 5:                      /* Sw Ring 5 -> HW Ring 5 (WFDMA0 4) */
+		val = 5;
+		break;
+	case 6:                      /* Sw Ring 6 -> HW Ring 6 (WFDMA0 5) */
+		val = 6;
+		break;
+	default:
+		/* Safety for any other rings reported by HW */
+		if (u4SwRingIdx < 16) {
+			val = u4SwRingIdx;
+		} else {
+			DBGLOG(HAL, ERROR, "not supported ring idx %d\n", u4SwRingIdx);
+			return FALSE;
+		}
+		break;
 	}
 
 	offset = val * MT_RINGREG_DIFF;
@@ -265,6 +281,9 @@ uint8_t mt7902SetRxRingHwAddr(
 
 	return TRUE;
 }
+
+
+
 
 bool mt7902LiteWfdmaAllocRxRing(
 	struct GLUE_INFO *prGlueInfo,

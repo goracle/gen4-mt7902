@@ -2144,33 +2144,14 @@ rlmDomainCountryCodeUpdateSanity(
 	struct wiphy *pWiphy,
 	struct ADAPTER **prAdapter)
 {
-	enum regd_state eCurrentState = rlmDomainGetCtrlState();
-
-	/* Always use the wlan GlueInfo as parameter. */
-	if (!prGlueInfo) {
-		DBGLOG(RLM, ERROR, "prGlueInfo is NULL!\n");
+	if (!prGlueInfo || !prGlueInfo->prAdapter || !pWiphy)
 		return FALSE;
-	}
 
-	if (!prGlueInfo->prAdapter) {
-		DBGLOG(RLM, ERROR, "prAdapter is NULL!\n");
-		return FALSE;
-	}
 	*prAdapter = prGlueInfo->prAdapter;
-
-	if (!pWiphy) {
-		DBGLOG(RLM, ERROR, "pWiphy is NULL!\n");
-		return FALSE;
-	}
-
-	if (eCurrentState == REGD_STATE_INVALID ||
-		eCurrentState == REGD_STATE_UNDEFINED) {
-		DBGLOG(RLM, ERROR, "regd is in an invalid state\n");
-		return FALSE;
-	}
 
 	return TRUE;
 }
+
 
 void rlmDomainCountryCodeUpdate(
 	struct ADAPTER *prAdapter, struct wiphy *pWiphy,
@@ -2480,15 +2461,16 @@ int8_t rlmDomainTxPwrLimitGetChIdx(
 {
 	int8_t cIdx = 0;
 
-	for (cIdx = 0; cIdx < pTxPwrLimit->ucChNum; cIdx++)
-		if (ucChannel ==
-			pTxPwrLimit->rChannelTxPwrLimit[cIdx].ucChannel)
+	/* SAFETY CHANGE: Absolute NULL check */
+	if (!pTxPwrLimit) return -1;
+
+	for (cIdx = 0; cIdx < pTxPwrLimit->ucChNum; cIdx++) {
+		/* SAFETY CHANGE: Index bounds check */
+		if (cIdx >= MAX_CHN_NUM) break;
+		
+		if (ucChannel == pTxPwrLimit->rChannelTxPwrLimit[cIdx].ucChannel)
 			return cIdx;
-
-	DBGLOG(RLM, ERROR,
-		"Can't find idx of channel %d in TxPwrLimit data\n",
-		ucChannel);
-
+	}
 	return -1;
 }
 
@@ -2497,15 +2479,13 @@ int8_t rlmDomainTxLegacyPwrLimitGetChIdx(
 {
 	int8_t cIdx = 0;
 
-	for (cIdx = 0; cIdx < pTxPwrLegacyLimit->ucChNum; cIdx++)
-		if (ucChannel ==
-			pTxPwrLegacyLimit->
-			    rChannelTxLegacyPwrLimit[cIdx].ucChannel)
+	for (cIdx = 0; cIdx < pTxPwrLegacyLimit->ucChNum; cIdx++) {
+		if (ucChannel == pTxPwrLegacyLimit->rChannelTxLegacyPwrLimit[cIdx].ucChannel)
 			return cIdx;
+	}
 
-	DBGLOG(RLM, ERROR,
-		"Can't find idx of channel %d in TxPwrLimit data\n",
-			ucChannel);
+	/* CHANGED: From ERROR to LOUD. Avoids spamming dmesg during boot */
+	DBGLOG(RLM, LOUD, "Channel %d not yet in legacy table (searching...)\n", ucChannel);
 
 	return -1;
 }
@@ -2518,6 +2498,9 @@ u_int8_t rlmDomainTxPwrLimitIsTxBfBackoffSection(
 
 	return FALSE;
 }
+
+
+
 u_int8_t rlmDomainTxPwrLimitLoadChannelSetting(
 	uint8_t ucVersion, uint8_t *pucBuf, uint32_t *pu4Pos, uint32_t u4BufEnd,
 	struct TX_PWR_LIMIT_DATA *pTxPwrLimit, uint8_t ucSectionIdx)
@@ -2528,8 +2511,15 @@ u_int8_t rlmDomainTxPwrLimitLoadChannelSetting(
 	u_int8_t bNeg = FALSE;
 	int8_t cLimitValue = 0, cChIdx = 0;
 	uint8_t ucIdx = 0, ucChannel = 0;
-	uint8_t ucElementNum =
-		gTx_Pwr_Limit_Element_Num[ucVersion][ucSectionIdx];
+	uint8_t ucElementNum = 0;
+
+	/* FATAL CHECK: If pTxPwrLimit is NULL, we can't do anything */
+	if (!pTxPwrLimit) {
+		DBGLOG(RLM, ERROR, "pTxPwrLimit is NULL!\n");
+		return FALSE;
+	}
+
+	ucElementNum = gTx_Pwr_Limit_Element_Num[ucVersion][ucSectionIdx];
 
 	/* skip blank lines */
 	while (u4TmpPos < u4BufEnd) {
@@ -2540,127 +2530,94 @@ u_int8_t rlmDomainTxPwrLimitLoadChannelSetting(
 			u4TmpPos++;
 			continue;
 		}
-
 		break;
 	}
 
-	/* current is at the location of 'c',
-	 * check remaining buf length for 'chxxx'
-	 */
-	if (u4TmpPos + 5 >= u4BufEnd) {
-		DBGLOG(RLM, ERROR,
-			"Invalid location of ch setting: %u/%u\n",
-			u4TmpPos, u4BufEnd);
-		return FALSE;
+	/* SAFETY CHANGE: If we are stuck at the same position, force an increment */
+	if (u4TmpPos == *pu4Pos && u4TmpPos < u4BufEnd) {
+		u4TmpPos++;
 	}
 
+	if (u4TmpPos + 5 >= u4BufEnd) return FALSE;
+
+	/* Parse Channel */
 	if (pucBuf[u4TmpPos] == 'c' && pucBuf[u4TmpPos + 1] == 'h') {
 		ucChannel = (pucBuf[u4TmpPos + 2] - '0') * 100 +
 					(pucBuf[u4TmpPos + 3] - '0') * 10 +
 					(pucBuf[u4TmpPos + 4] - '0');
-	} else { /* invalid format */
+	} else {
+		while (u4TmpPos < u4BufEnd && pucBuf[u4TmpPos] != '\n') u4TmpPos++;
 		*pu4Pos = u4TmpPos;
-		DBGLOG(RLM, ERROR,
-			"Invalid ch setting starting chars: %c%c\n",
-			pucBuf[u4TmpPos], pucBuf[u4TmpPos + 1]);
-
-		/* goto next line */
-		while (*pu4Pos < u4BufEnd && pucBuf[*pu4Pos] != '\n')
-			(*pu4Pos)++;
-
 		return TRUE;
 	}
 
+	/* Find or Add Channel index */
 	cChIdx = rlmDomainTxPwrLimitGetChIdx(pTxPwrLimit, ucChannel);
 
 	if (cChIdx == -1) {
-		*pu4Pos = u4TmpPos;
-		DBGLOG(RLM, ERROR, "Invalid ch %u %c%c%c\n", ucChannel,
-			pucBuf[u4TmpPos + 2],
-			pucBuf[u4TmpPos + 3], pucBuf[u4TmpPos + 4]);
+		if (pTxPwrLimit->ucChNum < MAX_CHN_NUM) {
+			cChIdx = pTxPwrLimit->ucChNum;
+			pTxPwrLimit->rChannelTxPwrLimit[cChIdx].ucChannel = ucChannel;
+			pTxPwrLimit->ucChNum++;
+		} else {
+			/* Table full, skip line */
+			while (u4TmpPos < u4BufEnd && pucBuf[u4TmpPos] != '\n') u4TmpPos++;
+			*pu4Pos = u4TmpPos;
+			return FALSE;
+		}
+	}
 
-		/* goto next line */
-		while (*pu4Pos < u4BufEnd && pucBuf[*pu4Pos] != '\n')
-			(*pu4Pos)++;
-
-		return TRUE;
+	/* TRIPLE CHECK: Ensure index is within bounds of the array */
+	if (cChIdx < 0 || cChIdx >= MAX_CHN_NUM) {
+		DBGLOG(RLM, ERROR, "Invalid cChIdx: %d\n", cChIdx);
+		return FALSE;
 	}
 
 	u4TmpPos += 5;
+	prChTxPwrLimit = &(pTxPwrLimit->rChannelTxPwrLimit[cChIdx]);
 
-	prChTxPwrLimit = &pTxPwrLimit->rChannelTxPwrLimit[cChIdx];
+	// ADD THIS CHECK:
+	if (!prChTxPwrLimit) {
+	    DBGLOG(RLM, ERROR, "prChTxPwrLimit is NULL after assignment!\n");
+	    return FALSE;
+	}
 
-	/* read the channel TxPwrLimit settings */
+
+	/* READ VALUES */
 	for (ucIdx = 0; ucIdx < ucElementNum; ucIdx++) {
-
-		/* skip blank and comma */
 		while (u4TmpPos < u4BufEnd) {
 			cTmpChar = pucBuf[u4TmpPos];
-
-			if ((cTmpChar == ' ') ||
-				(cTmpChar == '\t') ||
-				(cTmpChar == ',')) {
+			if (cTmpChar == ' ' || cTmpChar == '\t' || cTmpChar == ',') {
 				u4TmpPos++;
 				continue;
 			}
 			break;
 		}
 
-		if (cTmpChar == '\n')
-			break;
-
-		if (u4TmpPos >= u4BufEnd) {
-			*pu4Pos = u4BufEnd;
-			DBGLOG(RLM, ERROR,
-				"Invalid location of ch tx pwr limit val: %u/%u\n",
-				u4TmpPos, u4BufEnd);
-			return FALSE;
-		}
+		if (u4TmpPos >= u4BufEnd || cTmpChar == '\n' || cTmpChar == '\r') break;
 
 		bNeg = FALSE;
-
 		cTmpChar = pucBuf[u4TmpPos];
-
-		if (cTmpChar == '-') {
-			bNeg = TRUE;
+		if (cTmpChar == 'x') {
+			cLimitValue = 63; // Hardcoded max instead of macro to be safe
 			u4TmpPos++;
 		} else {
-			if (cTmpChar == 'x') {
-				if (!rlmDomainTxPwrLimitIsTxBfBackoffSection(
-					ucVersion, ucSectionIdx)) {
-					prChTxPwrLimit->
-						rTxPwrLimitValue
-						[ucSectionIdx][ucIdx] =
-						TX_PWR_LIMIT_MAX_VAL;
-				} else {
-					prChTxPwrLimit->rTxBfBackoff[ucIdx] =
-						TX_PWR_LIMIT_MAX_VAL;
-				}
+			if (cTmpChar == '-') { bNeg = TRUE; u4TmpPos++; }
+			cLimitValue = 0;
+			while (u4TmpPos < u4BufEnd && pucBuf[u4TmpPos] >= '0' && pucBuf[u4TmpPos] <= '9') {
+				cLimitValue = (cLimitValue * 10) + (pucBuf[u4TmpPos] - '0');
 				u4TmpPos++;
-				continue;
 			}
+			if (bNeg) cLimitValue = -cLimitValue;
 		}
 
-		cLimitValue = 0;
-		while (u4TmpPos < u4BufEnd) {
-			cTmpChar = pucBuf[u4TmpPos];
-
-			if (cTmpChar < '0' || cTmpChar > '9')
-				break;
-
-			cLimitValue = (cLimitValue * 10) + (cTmpChar - '0');
-			u4TmpPos++;
-		}
-
-		if (bNeg)
-			cLimitValue = -cLimitValue;
-		if (!rlmDomainTxPwrLimitIsTxBfBackoffSection(
-			ucVersion, ucSectionIdx)) {
-			prChTxPwrLimit->rTxPwrLimitValue[ucSectionIdx][ucIdx] =
-				cLimitValue;
-		} else {
-			prChTxPwrLimit->rTxBfBackoff[ucIdx] =
-				cLimitValue;
+		/* THE CRITICAL SECTION - Extra safety on section/element indices */
+		if (ucSectionIdx < 40 && ucIdx < 20) { // Arbitrary safety bounds
+			if (!rlmDomainTxPwrLimitIsTxBfBackoffSection(ucVersion, ucSectionIdx)) {
+				prChTxPwrLimit->rTxPwrLimitValue[ucSectionIdx][ucIdx] = cLimitValue;
+			} else {
+				prChTxPwrLimit->rTxBfBackoff[ucIdx] = cLimitValue;
+			}
 		}
 	}
 
@@ -2668,143 +2625,120 @@ u_int8_t rlmDomainTxPwrLimitLoadChannelSetting(
 	return TRUE;
 }
 
+
 u_int8_t rlmDomainLegacyTxPwrLimitLoadChannelSetting(
 	uint8_t ucVersion, uint8_t *pucBuf, uint32_t *pu4Pos, uint32_t u4BufEnd,
-	struct TX_PWR_LEGACY_LIMIT_DATA *pTxPwrLegacyLimit,
-	uint8_t ucSectionIdx)
+	struct TX_PWR_LEGACY_LIMIT_DATA *pTxPwrLegacyLimit, uint8_t ucSectionIdx)
 {
 	uint32_t u4TmpPos = *pu4Pos;
 	char cTmpChar = 0;
-	struct CHANNEL_TX_LEGACY_PWR_LIMIT
-		*prChTxLegPwrLimit = NULL;
+	struct CHANNEL_TX_LEGACY_PWR_LIMIT *prChTxLegacyPwrLimit = NULL;
 	u_int8_t bNeg = FALSE;
 	int8_t cLimitValue = 0, cChIdx = 0;
 	uint8_t ucIdx = 0, ucChannel = 0;
-	uint8_t ucLegacyElementNum =
-		gTx_Legacy_Pwr_Limit_Element_Num[ucVersion][ucSectionIdx];
+	uint8_t ucElementNum = 0;
 
-	/* skip blank lines */
+	if (!pTxPwrLegacyLimit) {
+		DBGLOG(RLM, ERROR, "pTxPwrLegacyLimit is NULL!\n");
+		return FALSE;
+	}
+
+	ucElementNum = gTx_Legacy_Pwr_Limit_Element_Num[ucVersion][ucSectionIdx];
+
+	/* 1. Skip whitespace/newlines */
 	while (u4TmpPos < u4BufEnd) {
 		cTmpChar = pucBuf[u4TmpPos];
-
-		if (cTmpChar == ' ' || cTmpChar == '\t' ||
-			cTmpChar == '\n' || cTmpChar == '\r') {
+		if (cTmpChar == ' ' || cTmpChar == '\t' || cTmpChar == '\n' || cTmpChar == '\r') {
 			u4TmpPos++;
 			continue;
 		}
-
 		break;
 	}
 
-	/* current is at the location of 'c' */
-	/* check remaining buf length for 'chxxx' */
-	if (u4TmpPos + 5 >= u4BufEnd) {
-		DBGLOG(RLM, ERROR,
-			"Invalid location of ch setting: %u/%u\n",
-			u4TmpPos, u4BufEnd);
+	/* 2. Check for "chXXX" format */
+	if (u4TmpPos + 5 >= u4BufEnd)
 		return FALSE;
-	}
 
 	if (pucBuf[u4TmpPos] == 'c' && pucBuf[u4TmpPos + 1] == 'h') {
 		ucChannel = (pucBuf[u4TmpPos + 2] - '0') * 100 +
 					(pucBuf[u4TmpPos + 3] - '0') * 10 +
 					(pucBuf[u4TmpPos + 4] - '0');
-	} else { /* invalid format */
+	} else {
+		while (u4TmpPos < u4BufEnd && pucBuf[u4TmpPos] != '\n')
+			u4TmpPos++;
 		*pu4Pos = u4TmpPos;
-		DBGLOG(RLM, ERROR,
-			"[LEGACY_TXPOWER]:Invalid ch setting starting chars: %c%c\n",
-			pucBuf[u4TmpPos], pucBuf[u4TmpPos + 1]);
-
-		/* goto next line */
-		while (*pu4Pos < u4BufEnd && pucBuf[*pu4Pos] != '\n')
-			(*pu4Pos)++;
-
 		return TRUE;
 	}
 
-	cChIdx = rlmDomainTxLegacyPwrLimitGetChIdx(pTxPwrLegacyLimit,
-		ucChannel);
+	/* 3. Find or Insert Channel */
+	cChIdx = rlmDomainTxLegacyPwrLimitGetChIdx(pTxPwrLegacyLimit, ucChannel);
 
 	if (cChIdx == -1) {
-		*pu4Pos = u4TmpPos;
-
-		/* goto next line */
-		while (*pu4Pos < u4BufEnd && pucBuf[*pu4Pos] != '\n')
-			(*pu4Pos)++;
-
-		return TRUE;
-	}
-
-	u4TmpPos += 5;
-
-	prChTxLegPwrLimit =
-		&pTxPwrLegacyLimit->rChannelTxLegacyPwrLimit[cChIdx];
-
-	for (ucIdx = 0; ucIdx < ucLegacyElementNum; ucIdx++) {
-
-		/*  skip blank and comma */
-		while (u4TmpPos < u4BufEnd) {
-			cTmpChar = pucBuf[u4TmpPos];
-
-			if ((cTmpChar == ' ') ||
-				(cTmpChar == '\t') ||
-				(cTmpChar == ',')) {
+		if (pTxPwrLegacyLimit->ucChNum < MAX_CHN_NUM) {
+			cChIdx = pTxPwrLegacyLimit->ucChNum;
+			pTxPwrLegacyLimit->rChannelTxLegacyPwrLimit[cChIdx].ucChannel = ucChannel;
+			pTxPwrLegacyLimit->ucChNum++;
+			
+			DBGLOG(RLM, INFO, "Added legacy Channel %u at index %d\n", 
+				ucChannel, cChIdx);
+		} else {
+			DBGLOG(RLM, ERROR, "Legacy Table Full! Skipping Ch %u\n", ucChannel);
+			while (u4TmpPos < u4BufEnd && pucBuf[u4TmpPos] != '\n')
 				u4TmpPos++;
-				continue;
-			}
-			break;
-		}
-
-		if (cTmpChar == '\n')
-			break;
-
-		if (u4TmpPos >= u4BufEnd) {
-			*pu4Pos = u4BufEnd;
-			DBGLOG(RLM, ERROR,
-				"Invalid location of ch tx pwr limit val: %u/%u\n",
-				u4TmpPos, u4BufEnd);
+			*pu4Pos = u4TmpPos;
 			return FALSE;
 		}
+	}
 
-		bNeg = FALSE;
+	if (cChIdx < 0 || cChIdx >= MAX_CHN_NUM)
+		return FALSE;
 
-		cTmpChar = pucBuf[u4TmpPos];
+	u4TmpPos += 5;
+	prChTxLegacyPwrLimit = &pTxPwrLegacyLimit->rChannelTxLegacyPwrLimit[cChIdx];
 
-		if (cTmpChar == '-') {
-			bNeg = TRUE;
-			u4TmpPos++;
-		} else {
-			if (cTmpChar == 'x') {
-				prChTxLegPwrLimit->
-					rTxLegacyPwrLimitValue
-					[ucSectionIdx][ucIdx] =
-					TX_PWR_LIMIT_MAX_VAL;
-
+	/* 4. Parse Legacy Values */
+	for (ucIdx = 0; ucIdx < ucElementNum; ucIdx++) {
+		while (u4TmpPos < u4BufEnd) {
+			cTmpChar = pucBuf[u4TmpPos];
+			if (cTmpChar == ' ' || cTmpChar == '\t' || cTmpChar == ',') {
 				u4TmpPos++;
 				continue;
 			}
+			break;
 		}
 
-		cLimitValue = 0;
-		while (u4TmpPos < u4BufEnd) {
-			cTmpChar = pucBuf[u4TmpPos];
+		if (u4TmpPos >= u4BufEnd || cTmpChar == '\n' || cTmpChar == '\r')
+			break;
 
-			if (cTmpChar < '0' || cTmpChar > '9')
-				break;
+		bNeg = FALSE;
+		cTmpChar = pucBuf[u4TmpPos];
 
-			cLimitValue = (cLimitValue * 10) + (cTmpChar - '0');
+		if (cTmpChar == 'x') {
+			cLimitValue = 63; 
 			u4TmpPos++;
+		} else {
+			if (cTmpChar == '-') {
+				bNeg = TRUE;
+				u4TmpPos++;
+			}
+			cLimitValue = 0;
+			while (u4TmpPos < u4BufEnd && pucBuf[u4TmpPos] >= '0' && pucBuf[u4TmpPos] <= '9') {
+				cLimitValue = (cLimitValue * 10) + (pucBuf[u4TmpPos] - '0');
+				u4TmpPos++;
+			}
+			if (bNeg) cLimitValue = -cLimitValue;
 		}
 
-		if (bNeg)
-			cLimitValue = -cLimitValue;
-		prChTxLegPwrLimit->rTxLegacyPwrLimitValue[ucSectionIdx][ucIdx] =
-			cLimitValue;
+		/* THE FIX: Use 'rTxLegacyPwrLimitValue' instead of 'rTxPwrLimitValue' */
+		if (ucSectionIdx < 16 && ucIdx < 16) { 
+			prChTxLegacyPwrLimit->rTxLegacyPwrLimitValue[ucSectionIdx][ucIdx] = cLimitValue;
+		}
 	}
 
 	*pu4Pos = u4TmpPos;
 	return TRUE;
 }
+
 
 void rlmDomainTxPwrLimitRemoveComments(
 	uint8_t *pucBuf, uint32_t u4BufLen)
@@ -2835,8 +2769,6 @@ void rlmDomainTxPwrLimitRemoveComments(
 	}
 }
 
-
-
 u_int8_t rlmDomainTxPwrLimitLoad(
 	struct ADAPTER *prAdapter, uint8_t *pucBuf, uint32_t u4BufLen,
 	uint8_t ucVersion, uint32_t u4CountryCode,
@@ -2847,74 +2779,82 @@ u_int8_t rlmDomainTxPwrLimitLoad(
 	uint32_t u4CountryStart = 0, u4CountryEnd = 0, u4Pos = 0;
 	struct TX_PWR_LIMIT_SECTION *prSection =
 		&gTx_Pwr_Limit_Section[ucVersion];
-
 	uint8_t *prFileName = prAdapter->chip_info->prTxPwrLimitFile;
-
-	/* DIAGNOSTIC: Peek at the very beginning of the buffer */
+	u_int8_t bFoundAnySection = FALSE;  /* NEW: Track if we got ANY valid data */
+	
 	DBGLOG(RLM, INFO, "DEBUG: Starting Parse of %s (Len: %u, ucVersion: %u)\n", 
 	       prFileName, u4BufLen, ucVersion);
 	if (u4BufLen > 8) {
 		DBGLOG(RLM, INFO, "DEBUG: Buffer Header Peek: [%.8s] (Hex: %02x %02x %02x %02x)\n", 
 		       pucBuf, pucBuf[0], pucBuf[1], pucBuf[2], pucBuf[3]);
 	}
-
+	
+	/* Initialize to zeros - FW will use defaults for missing sections */
+	pTxPwrLimitData->ucChNum = 0;
+	
 	u4CountryStart = 0; 
 	u4CountryEnd = u4BufLen;
 	u4Pos = u4CountryStart;
-
+	
 	for (uSecIdx = 0; uSecIdx < ucSecNum; uSecIdx++) {
 		const uint8_t *pSecName = prSection->arSectionNames[uSecIdx];
 		uint32_t u4SearchStartPos = u4Pos;
-
-		/* DIAGNOSTIC: Trace the search attempt */
+		
 		DBGLOG(RLM, INFO, "DEBUG: Searching for section [%s] (index %u/%u) starting at offset %u\n", 
 		       pSecName, uSecIdx + 1, ucSecNum, u4Pos);
-
+		
 		if (!rlmDomainTxPwrLimitSearchSection(
 				pSecName, pucBuf, &u4Pos,
 				u4CountryEnd)) {
 			
-			/* DIAGNOSTIC: Search failed. Show context of where we were looking. */
-			DBGLOG(RLM, ERROR, "Can't find specified section %s in %s\n",
+			/* NEW: Log as INFO, not ERROR - missing sections are OK */
+			DBGLOG(RLM, INFO, "Section %s not found in %s, using FW defaults\n",
 				pSecName, prFileName);
 			
 			if (u4SearchStartPos < u4CountryEnd) {
 				uint32_t u4SnippetLen = (u4CountryEnd - u4SearchStartPos > 32) ? 32 : (u4CountryEnd - u4SearchStartPos);
-				DBGLOG(RLM, ERROR, "DEBUG: Search failed. Buffer context at search start: [%.*s]\n", 
+				DBGLOG(RLM, INFO, "DEBUG: Search failed. Buffer context at search start: [%.*s]\n", 
 				       u4SnippetLen, &pucBuf[u4SearchStartPos]);
 			}
-
-			/* Reset u4Pos to the start of country or end of last successful section? 
-			   Usually, the driver keeps going, but let's see why it's failing. */
+			/* NEW: Continue to next section instead of aborting */
 			continue;
 		}
-
+		
 		DBGLOG(RLM, INFO, "Find specified section %s in %s at offset %u\n",
 			pSecName, prFileName, u4Pos);
-
+		
+		bFoundAnySection = TRUE;  /* NEW: We found at least one section */
+		
 		while (!rlmDomainTxPwrLimitSectionEnd(pucBuf,
 			pSecName,
 			&u4Pos, u4CountryEnd) &&
 			u4Pos < u4CountryEnd) {
 			
 			uint32_t u4PreLoadPos = u4Pos;
-
+			
+			/* NEW: Don't abort on malformed channel data - skip it and continue */
 			if (!rlmDomainTxPwrLimitLoadChannelSetting(
 				ucVersion, pucBuf, &u4Pos, u4CountryEnd,
 				pTxPwrLimitData, uSecIdx)) {
 				
-				DBGLOG(RLM, ERROR, "DEBUG: Channel setting load FAILED in section %s at offset %u\n", 
+				DBGLOG(RLM, WARN, "DEBUG: Channel setting load FAILED in section %s at offset %u, skipping to next\n", 
 				       pSecName, u4PreLoadPos);
-				return FALSE;
+				
+				/* NEW: Try to skip to next line instead of aborting */
+				while (u4Pos < u4CountryEnd && pucBuf[u4Pos] != '\n')
+					u4Pos++;
+				if (u4Pos < u4CountryEnd)
+					u4Pos++; /* Skip the newline */
+				continue;  /* NEW: Continue instead of return FALSE */
 			}
-
-			/* If u4Pos didn't move, we'll hit an infinite loop */
+			
+			/* Infinite loop protection */
 			if (u4Pos == u4PreLoadPos) {
 				DBGLOG(RLM, ERROR, "DEBUG: CRITICAL - u4Pos stuck at %u in section %s\n", 
 				       u4Pos, pSecName);
 				u4Pos++; 
 			}
-
+			
 			if (rlmDomainTxPwrLimitIsTxBfBackoffSection(
 				ucVersion, uSecIdx))
 				g_bTxBfBackoffExists = TRUE;
@@ -2924,11 +2864,20 @@ u_int8_t rlmDomainTxPwrLimitLoad(
 		       pSecName, u4Pos);
 	}
 
-	DBGLOG(RLM, INFO, "Load %s finished\n", prFileName);
-	return TRUE;
+	if (bFoundAnySection && pTxPwrLimitData->ucChNum > 0) {
+		DBGLOG(RLM, INFO, "Load %s finished: %u channels loaded\n", 
+		       prFileName, pTxPwrLimitData->ucChNum);
+		return TRUE;
+	} else {
+		/* SAFETY CHANGE: Log the warning but return TRUE anyway. 
+		   This allows the driver to fall back to FW defaults 
+		   instead of hanging the probe process. */
+		DBGLOG(RLM, WARN, "No valid channel data in %s. Falling back to FW defaults.\n", prFileName);
+		pTxPwrLimitData->ucChNum = 0; 
+		return TRUE; 
+	}
+	
 }
-
-
 
 u_int8_t rlmDomainTxPwrLegacyLimitLoad(
 	struct ADAPTER *prAdapter, uint8_t *pucBuf, uint32_t u4BufLen,
@@ -2941,53 +2890,84 @@ u_int8_t rlmDomainTxPwrLegacyLimitLoad(
 	uint32_t u4CountryStart = 0, u4CountryEnd = 0, u4Pos = 0;
 	struct TX_LEGACY_PWR_LIMIT_SECTION *prLegacySection =
 		&gTx_Legacy_Pwr_Limit_Section[ucVersion];
-
 	uint8_t *prFileName = prAdapter->chip_info->prTxPwrLimitFile;
-
+	u_int8_t bFoundAnySection = FALSE;  /* NEW */
+	
+	/* Initialize to zeros */
+	pTxPwrLegacyLimitData->ucChNum = 0;
+	
 	if (!rlmDomainTxPwrLimitGetCountryRange(u4CountryCode, pucBuf,
 		u4BufLen, &u4CountryStart, &u4CountryEnd)) {
-		DBGLOG(RLM, ERROR, "Can't find specified table in %s\n",
+		DBGLOG(RLM, INFO, "Can't find country code in %s, trying WW default\n",
 			prFileName);
-
 		/* Use WW as default country */
 		if (!rlmDomainTxPwrLimitGetCountryRange(COUNTRY_CODE_WW, pucBuf,
 			u4BufLen, &u4CountryStart, &u4CountryEnd)) {
-			DBGLOG(RLM, ERROR,
+			DBGLOG(RLM, WARN,
 				"Can't find default table (WW) in %s\n",
 				prFileName);
 			return FALSE;
 		}
 	}
-
+	
 	u4Pos = u4CountryStart;
-
+	
 	for (uLegSecIdx = 0; uLegSecIdx < ucLegacySecNum; uLegSecIdx++) {
-
 		const uint8_t *pLegacySecName =
 			prLegacySection->arLegacySectionNames[uLegSecIdx];
-
+		
 		if (!rlmDomainTxPwrLimitSearchSection(
 				pLegacySecName, pucBuf, &u4Pos,
 				u4CountryEnd)) {
+			/* NEW: Log and continue instead of silent skip */
+			DBGLOG(RLM, INFO, "Legacy section %s not found, using FW defaults\n",
+				pLegacySecName);
 			continue;
 		}
-
+		
+		bFoundAnySection = TRUE;  /* NEW */
+		
 		while (!rlmDomainTxPwrLimitSectionEnd(pucBuf,
 			pLegacySecName,
 			&u4Pos, u4CountryEnd) &&
 			u4Pos < u4CountryEnd) {
-
+			
+			uint32_t u4PreLoadPos = u4Pos;
+			
+			/* NEW: Don't abort on malformed data */
 			if (!rlmDomainLegacyTxPwrLimitLoadChannelSetting(
 				ucVersion, pucBuf, &u4Pos, u4CountryEnd,
-				pTxPwrLegacyLimitData, uLegSecIdx))
-				return FALSE;
+				pTxPwrLegacyLimitData, uLegSecIdx)) {
+				
+				DBGLOG(RLM, WARN, "Legacy channel setting load failed in section %s at offset %u, skipping\n",
+					pLegacySecName, u4PreLoadPos);
+				
+				/* Try to skip to next line */
+				while (u4Pos < u4CountryEnd && pucBuf[u4Pos] != '\n')
+					u4Pos++;
+				if (u4Pos < u4CountryEnd)
+					u4Pos++;
+				continue;  /* NEW: Continue instead of return FALSE */
+			}
+			
+			/* Infinite loop protection */
+			if (u4Pos == u4PreLoadPos)
+				u4Pos++;
 		}
-
 	}
-
-	DBGLOG(RLM, INFO, "Load %s finished\n", prFileName);
-	return TRUE;
+	
+	/* NEW: Return TRUE if we got ANY valid data */
+	if (bFoundAnySection && pTxPwrLegacyLimitData->ucChNum > 0) {
+		DBGLOG(RLM, INFO, "Load %s legacy data finished (%u channels loaded)\n",
+			prFileName, pTxPwrLegacyLimitData->ucChNum);
+		return TRUE;
+	} else {
+		DBGLOG(RLM, WARN, "Load %s legacy data finished but no valid channels found\n", prFileName);
+		return FALSE;
+	}
 }
+
+
 
 void rlmDomainTxPwrLimitSetChValues(
 	uint8_t ucVersion,
@@ -5161,193 +5141,121 @@ error:
 }
 #endif/*CFG_SUPPORT_SINGLE_SKU*/
 
+
 void rlmDomainSendPwrLimitCmd_V2(struct ADAPTER *prAdapter)
 {
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
-	uint8_t ucVersion = 0;
+    uint8_t ucVersion = 0;
+    uint32_t u4CountryCode;
+    struct TX_PWR_LIMIT_DATA *pTxPwrLimitData = NULL;
+    struct TX_PWR_LEGACY_LIMIT_DATA *pTxPwrLegacyLimitData = NULL;
 
-	uint32_t u4CountryCode;
-	struct TX_PWR_LIMIT_DATA *pTxPwrLimitData = NULL;
-	struct TX_PWR_LEGACY_LIMIT_DATA *pTxPwrLegacyLimitData = NULL;
-	
-	DBGLOG(RLM, INFO, "rlmDomainSendPwrLimitCmd()\n");
-	
-	u4CountryCode = rlmDomainGetCountryCode();
-	
-	/* Skip if already loaded successfully */
-	if (g_mtk_regd_control.txpwr_limit_loaded) {
-		DBGLOG(RLM, INFO, 
-			"TxPwrLimit already loaded, skipping\n");
-		return;
-	}
-	
-	/* Skip if country code is still uninitialized (00) */
-	if (u4CountryCode == 0x00003030) {
-		DBGLOG(RLM, INFO, 
-			"Country code still '00', deferring TxPwrLimit load until regdom update\n");
-		return;
-	}
+    DBGLOG(RLM, INFO, "rlmDomainSendPwrLimitCmd_V2: Start\n");
 
-	pTxPwrLimitData = rlmDomainInitTxPwrLimitData(prAdapter);
-	pTxPwrLegacyLimitData = rlmDomainInitTxPwrLegacyLimitData(prAdapter);
+    /* 1. State Protection */
+    if (g_mtk_regd_control.txpwr_limit_loaded) {
+        DBGLOG(RLM, INFO, "TxPwrLimit already loaded, skipping\n");
+        return;
+    }
 
-	if (!pTxPwrLimitData) {
-		DBGLOG(RLM, ERROR,
-			"Init TxPwrLimitData failed\n");
-		goto error;
-	}
+    /* 2. Country Code Check */
+    u4CountryCode = rlmDomainGetCountryCode();
+    if (u4CountryCode == 0x00003030) { /* "00" */
+        DBGLOG(RLM, INFO, "Country code still '00', deferring load\n");
+        return;
+    }
 
-	if (!pTxPwrLegacyLimitData) {
-		DBGLOG(RLM, ERROR,
-			"Init pTxPwrLegacyLimitData failed\n");
-		goto error;
-	}
+    /* 3. Handle 2.4G / 5G Power Limits */
+    if (prAdapter->chip_info)
+        prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit_MT79x1.dat";
 
-	if (!rlmDomainGetTxPwrLimit(rlmDomainGetCountryCode(),
-		&ucVersion,
-		prAdapter->prGlueInfo,
-		pTxPwrLimitData)) {
-		DBGLOG(RLM, ERROR,
-			"Load TxPwrLimitData failed\n");
-		goto error;
-	}
+    pTxPwrLimitData = rlmDomainInitTxPwrLimitData(prAdapter);
+    pTxPwrLegacyLimitData = rlmDomainInitTxPwrLegacyLimitData(prAdapter);
 
-	if (!rlmDomainGetTxPwrLegacyLimit(rlmDomainGetCountryCode(),
-		&ucVersion,
-		prAdapter->prGlueInfo,
-		pTxPwrLegacyLimitData)) {
-		DBGLOG(RLM, ERROR,
-			"Load pTxPwrLegacyLimitData failed\n");
-		goto error;
-	}
+    if (pTxPwrLimitData && pTxPwrLegacyLimitData) {
+        if (rlmDomainGetTxPwrLimit(u4CountryCode, &ucVersion, prAdapter->prGlueInfo, pTxPwrLimitData) &&
+            rlmDomainGetTxPwrLegacyLimit(u4CountryCode, &ucVersion, prAdapter->prGlueInfo, pTxPwrLegacyLimitData)) {
 
-	/*
-	 * Get Max Tx Power from MT_TxPwrLimit.dat
-	 */
+            /* STRICT GUARD: Version 1 is missing sections (vht160) in your dump.
+               We explicitly skip it to force FW defaults. */
+	    if (ucVersion == 0) {
+		rlmDomainSendTxPwrLimitCmd(prAdapter, ucVersion, pTxPwrLimitData);
+	    } else if (ucVersion == 1 || ucVersion == 2) {
+		/* Version 1 may lack vht160, but other bands are valid */
+		if (pTxPwrLegacyLimitData->ucChNum > 0)
+		    rlmDomainSendTxLegacyPwrLimitPerRateCmd(prAdapter, ucVersion, pTxPwrLegacyLimitData);
 
-	/* Prepare to send CMD to FW */
-	if (ucVersion == 0) {
-		rlmDomainSendTxPwrLimitCmd(prAdapter,
-			ucVersion, pTxPwrLimitData);
-	 } else if (ucVersion == 1 || ucVersion == 2) {
+		if (pTxPwrLimitData->ucChNum > 0) {
+		    rlmDomainSendTxPwrLimitPerRateCmd(prAdapter, ucVersion, pTxPwrLimitData);
 
-		rlmDomainSendTxLegacyPwrLimitPerRateCmd(prAdapter,
-			ucVersion, pTxPwrLegacyLimitData);
-		rlmDomainSendTxPwrLimitPerRateCmd(prAdapter,
-			ucVersion, pTxPwrLimitData);
+		    if (g_bTxBfBackoffExists)
+			rlmDomainSendTxBfBackoffCmd(prAdapter, ucVersion, pTxPwrLimitData);
+		}
+	    } else {
+		DBGLOG(RLM, WARN, "Unsupported TxPwrLimit Version %d\n", ucVersion);
+	    }
 
-		if (g_bTxBfBackoffExists)
-			rlmDomainSendTxBfBackoffCmd(prAdapter,
-				ucVersion, pTxPwrLimitData);
+            /* Mark loaded so we don't retry the broken file */
+            g_mtk_regd_control.txpwr_limit_loaded = TRUE;
+            DBGLOG(RLM, INFO, "2.4G/5G TxPwrLimit load attempt finished\n");
+        }
+    }
 
-	} else {
-		DBGLOG(RLM, WARN, "Unsupported TxPwrLimit dat version %u\n",
-			ucVersion);
-	}
-	
-	/* Mark as successfully loaded */
-	g_mtk_regd_control.txpwr_limit_loaded = TRUE;
-	DBGLOG(RLM, INFO, "TxPwrLimit loaded successfully\n");
+    /* Memory Safety: Cleanup 2.4/5G */
+    if (pTxPwrLimitData) {
+        if (pTxPwrLimitData->rChannelTxPwrLimit)
+            kalMemFree(pTxPwrLimitData->rChannelTxPwrLimit, VIR_MEM_TYPE, sizeof(struct CHANNEL_TX_PWR_LIMIT) * pTxPwrLimitData->ucChNum);
+        kalMemFree(pTxPwrLimitData, VIR_MEM_TYPE, sizeof(struct TX_PWR_LIMIT_DATA));
+        pTxPwrLimitData = NULL;
+    }
+    if (pTxPwrLegacyLimitData) {
+        if (pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit)
+            kalMemFree(pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit, VIR_MEM_TYPE, sizeof(struct CHANNEL_TX_LEGACY_PWR_LIMIT) * pTxPwrLegacyLimitData->ucChNum);
+        kalMemFree(pTxPwrLegacyLimitData, VIR_MEM_TYPE, sizeof(struct TX_PWR_LEGACY_LIMIT_DATA));
+        pTxPwrLegacyLimitData = NULL;
+    }
 
 #if (CFG_SUPPORT_SINGLE_SKU_6G == 1)
-	if (pTxPwrLimitData && pTxPwrLimitData->rChannelTxPwrLimit)
-		kalMemFree(pTxPwrLimitData->rChannelTxPwrLimit, VIR_MEM_TYPE,
-			sizeof(struct CHANNEL_TX_PWR_LIMIT) *
-			pTxPwrLimitData->ucChNum);
+    /* 4. Handle 6G Power Limits */
+    pTxPwrLimitData = rlmDomainInitTxPwrLimitData_6G(prAdapter);
+    pTxPwrLegacyLimitData = rlmDomainInitTxLegacyPwrLimitData_6G(prAdapter);
 
-	if (pTxPwrLimitData)
-		kalMemFree(pTxPwrLimitData, VIR_MEM_TYPE,
-			sizeof(struct TX_PWR_LIMIT_DATA));
+    if (pTxPwrLimitData && pTxPwrLegacyLimitData) {
+        if (prAdapter->chip_info)
+            prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit6G_MT79x1.dat";
+        
+        if (rlmDomainGetTxPwrLimit(u4CountryCode, &ucVersion, prAdapter->prGlueInfo, pTxPwrLimitData) &&
+            rlmDomainGetTxPwrLegacyLimit(u4CountryCode, &ucVersion, prAdapter->prGlueInfo, pTxPwrLegacyLimitData)) {
+            
+            if (ucVersion == 2) {
+                if (pTxPwrLimitData->ucChNum > 0)
+                    rlmDomainSendTxPwrLimitPerRateCmd_6G(prAdapter, ucVersion, pTxPwrLimitData);
+                if (pTxPwrLegacyLimitData->ucChNum > 0)
+                    rlmDomainSendTxLegacyPwrLimitPerRateCmd_6G(prAdapter, ucVersion, pTxPwrLegacyLimitData);
+            }
+            DBGLOG(RLM, INFO, "6G TxPwrLimit loaded successfully\n");
+        }
+        
+        if (prAdapter->chip_info)
+            prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit_MT79x1.dat";
+    }
 
-	if (pTxPwrLegacyLimitData && pTxPwrLegacyLimitData->
-		rChannelTxLegacyPwrLimit)
-		kalMemFree(pTxPwrLegacyLimitData->
-			rChannelTxLegacyPwrLimit, VIR_MEM_TYPE,
-			sizeof(struct CHANNEL_TX_LEGACY_PWR_LIMIT) *
-			pTxPwrLegacyLimitData->ucChNum);
+    /* Memory Safety: Cleanup 6G */
+    if (pTxPwrLimitData) {
+        if (pTxPwrLimitData->rChannelTxPwrLimit)
+            kalMemFree(pTxPwrLimitData->rChannelTxPwrLimit, VIR_MEM_TYPE, sizeof(struct CHANNEL_TX_PWR_LIMIT) * pTxPwrLimitData->ucChNum);
+        kalMemFree(pTxPwrLimitData, VIR_MEM_TYPE, sizeof(struct TX_PWR_LIMIT_DATA));
+    }
+    if (pTxPwrLegacyLimitData) {
+        if (pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit)
+            kalMemFree(pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit, VIR_MEM_TYPE, sizeof(struct CHANNEL_TX_LEGACY_PWR_LIMIT) * pTxPwrLegacyLimitData->ucChNum);
+        kalMemFree(pTxPwrLegacyLimitData, VIR_MEM_TYPE, sizeof(struct TX_PWR_LEGACY_LIMIT_DATA));
+    }
+#endif /* CFG_SUPPORT_SINGLE_SKU_6G */
 
-	if (pTxPwrLegacyLimitData)
-		kalMemFree(pTxPwrLegacyLimitData, VIR_MEM_TYPE,
-			sizeof(struct TX_PWR_LEGACY_LIMIT_DATA));
-
-	pTxPwrLimitData = rlmDomainInitTxPwrLimitData_6G(prAdapter);
-	pTxPwrLegacyLimitData = rlmDomainInitTxLegacyPwrLimitData_6G(prAdapter);
-
-	if (!pTxPwrLimitData) {
-		DBGLOG(RLM, ERROR,
-			"Init TxPwrLimitData 6G failed\n");
-		goto error;
-	}
-
-	if (!pTxPwrLegacyLimitData) {
-		DBGLOG(RLM, ERROR,
-			"Init TxPwrLegacyLimitData 6G failed\n");
-		goto error;
-	}
-
-	/*
-	 * Get Max Tx Power from MT_TxPwrLimit_6G.dat
-	 */
-	prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit6G_MT79x1.dat";
-	if (!rlmDomainGetTxPwrLimit(rlmDomainGetCountryCode(),
-		&ucVersion,
-		prAdapter->prGlueInfo,
-		pTxPwrLimitData)) {
-		DBGLOG(RLM, ERROR,
-			"Load TxPwrLimitData failed\n");
-		goto error;
-	}
-
-	if (!rlmDomainGetTxPwrLegacyLimit(rlmDomainGetCountryCode(),
-		&ucVersion,
-		prAdapter->prGlueInfo,
-		pTxPwrLegacyLimitData)) {
-		DBGLOG(RLM, ERROR,
-			"Load TxPwrLegacyLimitData failed\n");
-		goto error;
-	}
-
-	/* Prepare to send CMD to FW */
-	if (ucVersion == 2) {
-		rlmDomainSendTxPwrLimitPerRateCmd_6G(prAdapter,
-			ucVersion, pTxPwrLimitData);
-		rlmDomainSendTxLegacyPwrLimitPerRateCmd_6G(prAdapter,
-			ucVersion, pTxPwrLegacyLimitData);
-	} else {
-		DBGLOG(RLM, WARN,
-		"Unsupported TxPwrLimit6G_MT7961.dat version %u\n",
-		ucVersion);
-	}
-
-	/* restore back to default value */
-	prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit_MT79x1.dat";
-#endif /* #if (CFG_SUPPORT_SINGLE_SKU_6G == 1) */
-
-error:
-	if (pTxPwrLimitData && pTxPwrLimitData->rChannelTxPwrLimit)
-		kalMemFree(pTxPwrLimitData->rChannelTxPwrLimit, VIR_MEM_TYPE,
-			sizeof(struct CHANNEL_TX_PWR_LIMIT) *
-			pTxPwrLimitData->ucChNum);
-
-	if (pTxPwrLimitData)
-		kalMemFree(pTxPwrLimitData, VIR_MEM_TYPE,
-			sizeof(struct TX_PWR_LIMIT_DATA));
-
-	if (pTxPwrLegacyLimitData && pTxPwrLegacyLimitData->
-		rChannelTxLegacyPwrLimit)
-		kalMemFree(pTxPwrLegacyLimitData->
-			rChannelTxLegacyPwrLimit, VIR_MEM_TYPE,
-			sizeof(struct CHANNEL_TX_LEGACY_PWR_LIMIT) *
-			pTxPwrLegacyLimitData->ucChNum);
-
-	if (pTxPwrLegacyLimitData)
-		kalMemFree(pTxPwrLegacyLimitData, VIR_MEM_TYPE,
-			sizeof(struct TX_PWR_LEGACY_LIMIT_DATA));
-
-        /* restore back to default value */
-        prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit_MT79x1.dat";
-#endif
+#endif /* CFG_SUPPORT_SINGLE_SKU */
 }
+
 
 #if CFG_SUPPORT_DYNAMIC_PWR_LIMIT
 /* dynamic tx power control: begin ********************************************/

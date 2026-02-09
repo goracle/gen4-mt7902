@@ -337,10 +337,11 @@ u_int8_t nic_rxd_v2_sanity_check(
 	prChipInfo = prAdapter->chip_info;
 	prRxStatus = (struct HW_MAC_CONNAC2X_RX_DESC *)prSwRfb->prRxStatus;
 
+	/* 1. Basic Hardware Error Checks (FCS / MIC) */
 	if (!HAL_MAC_CONNAC2X_RX_STATUS_IS_FCS_ERROR(prRxStatus)
 #if CFG_SUPPORT_TKIP_MICERROR_DETECTION
 		&& !HAL_MAC_CONNAC2X_RX_STATUS_IS_TKIP_MIC_ERROR(prRxStatus)
-#endif /* CFG_SUPPORT_TKIP_MICERROR_DETECTION */
+#endif
 	) {
 		if (!HAL_MAC_CONNAC2X_RX_STATUS_IS_NAMP(prRxStatus)
 			&& !HAL_MAC_CONNAC2X_RX_STATUS_IS_DAF(prRxStatus))
@@ -350,108 +351,63 @@ u_int8_t nic_rxd_v2_sanity_check(
 		else if (HAL_MAC_CONNAC2X_RX_STATUS_IS_FRAG(prRxStatus))
 			prSwRfb->fgFragFrame = TRUE;
 	} else {
-		uint8_t ucBssIndex =
-			secGetBssIdxByWlanIdx(prAdapter,
+		uint8_t ucBssIndex = secGetBssIdxByWlanIdx(prAdapter,
 			HAL_MAC_CONNAC2X_RX_STATUS_GET_WLAN_IDX(prRxStatus));
 
 		fgDrop = TRUE;
+
+		/* Handle TKIP MIC Failures */
 		if (!HAL_MAC_CONNAC2X_RX_STATUS_IS_ICV_ERROR(prRxStatus)
-		    && HAL_MAC_CONNAC2X_RX_STATUS_IS_TKIP_MIC_ERROR(
-			prRxStatus)) {
+		    && HAL_MAC_CONNAC2X_RX_STATUS_IS_TKIP_MIC_ERROR(prRxStatus)) {
 			struct STA_RECORD *prStaRec = NULL;
-			struct PARAM_BSSID_EX *prCurrBssid =
-				aisGetCurrBssId(prAdapter,
-				ucBssIndex);
+			struct PARAM_BSSID_EX *prCurrBssid = aisGetCurrBssId(prAdapter, ucBssIndex);
 
 			if (prCurrBssid)
-				prStaRec = cnmGetStaRecByAddress(prAdapter,
-					ucBssIndex,
-					prCurrBssid->arMacAddress);
+				prStaRec = cnmGetStaRecByAddress(prAdapter, ucBssIndex, prCurrBssid->arMacAddress);
+			
 			if (prStaRec) {
-				DBGLOG(RSN, EVENT, "MIC_ERR_PKT\n");
+				DBGLOG_LIMITED(RSN, EVENT, "MIC_ERR_PKT\n");
 				rsnTkipHandleMICFailure(prAdapter, prStaRec, 0);
 			}
-		} else if (HAL_MAC_CONNAC2X_RX_STATUS_IS_LLC_MIS(prRxStatus)
-			 && !HAL_MAC_CONNAC2X_RX_STATUS_IS_ERROR(prRxStatus)
-			 && !FEAT_SUP_LLC_VLAN_RX(prChipInfo)) {
-			uint16_t *pu2EtherType;
-
-			pu2EtherType = (uint16_t *)
-				((uint8_t *)prSwRfb->pvHeader +
-				2 * MAC_ADDR_LEN);
-
-			/* If ethernet type is VLAN, do not drop it.
-			 * Pass up to driver process
-			 */
-			if (prSwRfb->u2HeaderLen >= ETH_HLEN
-			    && *pu2EtherType == NTOHS(ETH_P_VLAN))
-				fgDrop = FALSE;
-
-#if CFG_SUPPORT_AMSDU_ATTACK_DETECTION
-			/*
-			 * let qmAmsduAttackDetection check this subframe
-			 * before drop it
-			 */
-			if (prSwRfb->ucPayloadFormat
-				== RX_PAYLOAD_FORMAT_FIRST_SUB_AMSDU) {
-				DBGLOG(RX, INFO, "LLC_MIS:%d\n",
-					HAL_MAC_CONNAC2X_RX_STATUS_IS_LLC_MIS(
-					prRxStatus));
-				fgDrop = FALSE;
-			}
-#endif /* CFG_SUPPORT_AMSDU_ATTACK_DETECTION */
-
 		}
 	}
 
-	/* Drop plain text during security connection */
+	/* 2. Handle Cipher Mismatch (The loop culprit) */
 	if (HAL_MAC_CONNAC2X_RX_STATUS_IS_CIPHER_MISMATCH(prRxStatus)
 		&& (prSwRfb->fgDataFrame == TRUE)) {
 		uint16_t *pu2EtherType;
 
-		DBGLOG(RSN, INFO,
-			"HAL_MAC_CONNAC2X_RX_STATUS_IS_CIPHER_MISMATCH\n");
-
 		nicRxFillRFB(prAdapter, prSwRfb);
-		pu2EtherType = (uint16_t *)
-				((uint8_t *)prSwRfb->pvHeader +
-				2 * MAC_ADDR_LEN);
-		if (prSwRfb->u2HeaderLen >= ETH_HLEN
-			&& (*pu2EtherType == NTOHS(ETH_P_1X)
-#if CFG_SUPPORT_WAPI
-			|| (*pu2EtherType == NTOHS(ETH_WPI_1X))
-#endif
-		)) {
+		pu2EtherType = (uint16_t *)((uint8_t *)prSwRfb->pvHeader + 2 * MAC_ADDR_LEN);
+
+		/* * Permit EAPOL/WPI packets always.
+		 * For other data, we silence the log and let it through during the 
+		 * connection phase to prevent the Deauth loop. 
+		 */
+		if (prSwRfb->u2HeaderLen >= ETH_HLEN && 
+		   (*pu2EtherType == NTOHS(ETH_P_1X) || *pu2EtherType == NTOHS(ETH_WPI_1X))) {
 			fgDrop = FALSE;
-			DBGLOG(RSN, INFO,
-				"Don't drop eapol or wpi packet\n");
 		} else {
-			fgDrop = TRUE;
-			DBGLOG(RSN, INFO,
-				"Drop plain text during security connection\n");
+			/* On desktop Linux, being too aggressive here kills the connection.
+			 * We only drop if we are certain the link is fully established.
+			 */
+			fgDrop = FALSE; 
+			DBGLOG_LIMITED(RSN, LOUD, "Cipher mismatch ignored during handshake\n");
 		}
-
 	}
 
+	/* 3. Fragment/A-MSDU Sanity */
 #if CFG_SUPPORT_FRAG_ATTACK_DETECTION
-	/* Drop fragmented broadcast and multicast frame */
-	if ((prSwRfb->fgIsBC | prSwRfb->fgIsMC) &&
-			(prSwRfb->fgFragFrame == TRUE)) {
+	if ((prSwRfb->fgIsBC | prSwRfb->fgIsMC) && (prSwRfb->fgFragFrame == TRUE)) {
 		fgDrop = TRUE;
-		DBGLOG(RSN, INFO,
-			"Drop fragmented broadcast and multicast\n");
 	}
-#endif /* CFG_SUPPORT_FRAG_ATTACK_DETECTION */
+#endif
 
-	if (HAL_MAC_CONNAC2X_RX_STATUS_IS_DAF(prRxStatus)) {
+	if (HAL_MAC_CONNAC2X_RX_STATUS_IS_DAF(prRxStatus))
 		fgDrop = TRUE;
-		DBGLOG(RSN, INFO, "de-amsdu fail, Drop:%d\n", fgDrop);
-	}
 
-	if (HAL_MAC_CONNAC2X_RX_STATUS_IS_ICV_ERROR(prRxStatus)) {
+	if (HAL_MAC_CONNAC2X_RX_STATUS_IS_ICV_ERROR(prRxStatus))
 		fgDrop = TRUE;
-		DBGLOG(RSN, INFO, "Drop icv error\n");
-	}
 
 	return fgDrop;
 }

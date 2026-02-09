@@ -1235,7 +1235,8 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	struct GL_DETECT_REPLAY_INFO *prDetRplyInfo = NULL;
 #endif
 	struct PARAM_WEP *prWepKey;
-	uint8_t wepBuf[48];
+	struct PARAM_WEP wepKey;
+	//uint8_t wepBuf[48];
 	u_int8_t fgAddWepPending = FALSE;
 	struct PARAM_OP_MODE rOpMode;
 
@@ -1396,6 +1397,7 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	prGlueInfo->fgConnectHS20AP = FALSE;
 #endif /* CFG_SUPPORT_PASSPOINT */
 
+
 	if (req->key_len != 0) {
 		/* NL80211 only set the Tx wep key while connect,
 		* the max 4 wep key set prior via add key cmd
@@ -1406,25 +1408,48 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 				"Auth Algorithm : %u with wep key\n",
 				prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg);
 
-		prWepKey = (struct PARAM_WEP *) wepBuf;
+		// Validate key length before proceeding
+		if (req->key_len > MAX_KEY_LEN) {
+		    DBGLOG(REQ, WARN,
+			"WEP key length (%zu) exceeds maximum (%u)\n",
+			req->key_len, MAX_KEY_LEN);
+		    return -EINVAL;
+		}
 
+		prWepKey = &wepKey;
 		kalMemZero(prWepKey, sizeof(struct PARAM_WEP));
+
 		prWepKey->u4Length = OFFSET_OF(
-			struct PARAM_WEP, aucKeyMaterial) + req->key_len;
+		    struct PARAM_WEP, aucKeyMaterial) + req->key_len;
 		prWepKey->u4KeyLength = (uint32_t) req->key_len;
 		prWepKey->u4KeyIndex = (uint32_t) req->key_idx;
 		prWepKey->u4KeyIndex |= IS_TRANSMIT_KEY;
-		if (prWepKey->u4KeyLength > MAX_KEY_LEN) {
-			DBGLOG(REQ, WARN,
-				"Too long key length (%u)\n",
-				prWepKey->u4KeyLength);
-			return -EINVAL;
-		}
-		kalMemCopy(prWepKey->aucKeyMaterial,
-			req->key, prWepKey->u4KeyLength);
 
-		fgAddWepPending = TRUE;
+		kalMemCopy(prWepKey->aucKeyMaterial,
+		    req->key, prWepKey->u4KeyLength);
+
+		// *** INSTALL KEY IMMEDIATELY - BEFORE AUTH ***
+		rStatus = kalIoctl(prGlueInfo,
+			    wlanoidSetAddWep, prWepKey,
+			    prWepKey->u4Length,
+			    FALSE, FALSE, TRUE, &u4BufLen);
+
+		if (rStatus != WLAN_STATUS_SUCCESS) {
+		    DBGLOG(INIT, WARN,
+			"wlanoidSetAddWep fail 0x%x\n", rStatus);
+		    return -EFAULT;
+		}
+
+		DBGLOG(REQ, INFO, 
+		    "WEP key installed: idx=%u, len=%u, txkey=%d\n",
+		    prWepKey->u4KeyIndex & ~IS_TRANSMIT_KEY,
+		    prWepKey->u4KeyLength,
+		    !!(prWepKey->u4KeyIndex & IS_TRANSMIT_KEY));
+
 	}
+
+
+
 	kalMemZero(&rNewSsid, sizeof(struct PARAM_CONNECT));
 
 	rNewSsid.pucBssid = (uint8_t *)req->bss->bssid;
@@ -8114,35 +8139,51 @@ int mtk_cfg_set_txpower(struct wiphy *wiphy,
 	return mtk_p2p_cfg80211_set_txpower(wiphy, wdev, type, mbm);
 }
 
+
 int mtk_cfg_get_txpower(struct wiphy *wiphy,
 			struct wireless_dev *wdev,
 #if CFG80211_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
 			int radio_idx,
 #endif
 #if CFG80211_VERSION_CODE >= KERNEL_VERSION(6, 14, 0)
-            unsigned int link_id,
+			unsigned int link_id,
 #endif
 			int *dbm)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
+	uint32_t u4Status = WLAN_STATUS_SUCCESS;
+	int32_t i4TxPower = 0;
+	uint32_t u4Len = 0;
 
 	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
 
-	if ((!prGlueInfo) ||
-		!wlanIsDriverReady(prGlueInfo, WLAN_DRV_READY_CHCECK_WLAN_ON |
-		WLAN_DRV_READY_CHCECK_HIF_SUSPEND)) {
-		DBGLOG_LIMITED(REQ, WARN, "driver is not ready\n");
+	if (!prGlueInfo || !prGlueInfo->prAdapter)
 		return -EFAULT;
-	}
 
-	if (mtk_IsP2PNetDevice(prGlueInfo, wdev->netdev) <= 0) {
-		DBGLOG_LIMITED(REQ, WARN,
-			"STA doesn't support this function\n");
-		return -EFAULT;
-	}
+	if (!wlanIsDriverReady(prGlueInfo, WLAN_DRV_READY_CHCECK_WLAN_ON))
+		return -EAGAIN;
 
-	return mtk_p2p_cfg80211_get_txpower(wiphy, wdev, dbm);
+	if (mtk_IsP2PNetDevice(prGlueInfo, wdev->netdev) > 0)
+		return mtk_p2p_cfg80211_get_txpower(wiphy, wdev, dbm);
+
+	u4Status = kalIoctl(prGlueInfo,
+			    wlanoidQueryGetTxPower,
+			    &i4TxPower,
+			    sizeof(i4TxPower),
+			    TRUE,
+			    TRUE,
+			    FALSE,
+			    &u4Len);
+
+	if (u4Status != WLAN_STATUS_SUCCESS)
+		return -EIO;
+
+	*dbm = i4TxPower;
+
+	return 0;
 }
+
+
 #endif /* (CFG_ENABLE_WIFI_DIRECT_CFG_80211 != 0) */
 #endif	/* CFG_ENABLE_UNIFY_WIPHY */
 
