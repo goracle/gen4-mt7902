@@ -5013,13 +5013,17 @@ int32_t wlanOnWhenProbeSuccess(struct GLUE_INFO *prGlueInfo,
 {
 	int32_t u4LogLevel = ENUM_WIFI_LOG_LEVEL_DEFAULT;
 
+	if (!prGlueInfo || !prAdapter) {
+		DBGLOG(INIT, ERROR, "MT7902-FATAL: NULL Context\n");
+		return -1;
+	}
+
 	DBGLOG(INIT, TRACE, "start.\n");
+
 #if CFG_SUPPORT_CFG_FILE
 #if CFG_SUPPORT_EASY_DEBUG
-	/* move before reading file
-	 * wlanLoadDefaultCustomerSetting(prAdapter);
-	 */
-	wlanFeatureToFw(prGlueInfo->prAdapter);
+	if (prGlueInfo->prAdapter)
+		wlanFeatureToFw(prGlueInfo->prAdapter);
 #endif
 #endif
 
@@ -5027,19 +5031,28 @@ int32_t wlanOnWhenProbeSuccess(struct GLUE_INFO *prGlueInfo,
 	wlanCfgLoadIotApRule(prAdapter);
 	wlanCfgDumpIotApRule(prAdapter);
 #endif
+
 	if (!bAtResetFlow) {
 #if CFG_SUPPORT_AGPS_ASSIST
-		kalIndicateAgpsNotify(prAdapter, AGPS_EVENT_WLAN_ON, NULL,
-				0);
+		kalIndicateAgpsNotify(prAdapter, AGPS_EVENT_WLAN_ON, NULL, 0);
 #endif
+
 #if CFG_SUPPORT_CFG_FILE
-		wlanCfgSetSwCtrl(prGlueInfo->prAdapter);
-		wlanCfgSetChip(prGlueInfo->prAdapter);
-		wlanCfgSetCountryCode(prGlueInfo->prAdapter);
+		wlanCfgSetSwCtrl(prAdapter);
+		wlanCfgSetChip(prAdapter);
+		
+		/* Using u4ReadyFlag as the guard since fgIsPresent is missing */
+		if (prGlueInfo->u4ReadyFlag == 0 && prGlueInfo->prDevHandler) {
+			wlanCfgSetCountryCode(prAdapter);
+		} else {
+			DBGLOG(INIT, WARN, "MT7902-SAFE: Deferring CC sync\n");
+		}
 #endif
+
 #if (CFG_SUPPORT_PERMON == 1)
 		kalPerMonInit(prGlueInfo);
 #endif
+
 #if CFG_MET_TAG_SUPPORT
 		if (met_tag_init() != 0)
 			DBGLOG(INIT, ERROR, "MET_TAG_INIT error!\n");
@@ -5047,72 +5060,59 @@ int32_t wlanOnWhenProbeSuccess(struct GLUE_INFO *prGlueInfo,
 	}
 
 #if CFG_SUPPORT_CAL_RESULT_BACKUP_TO_HOST
-	/* Calibration Backup Flow */
 	if (!g_fgIsCalDataBackuped) {
-		if (rlmTriggerCalBackup(prGlueInfo->prAdapter,
-		    g_fgIsCalDataBackuped) == WLAN_STATUS_FAILURE) {
-			DBGLOG(RFTEST, INFO,
-			       "Error : Boot Time Wi-Fi Enable Fail........\n");
+		if (rlmTriggerCalBackup(prAdapter, g_fgIsCalDataBackuped) == WLAN_STATUS_FAILURE) {
+			DBGLOG(RFTEST, ERROR, "MT7902: Boot Cal Fail\n");
 			return -1;
 		}
-
 		g_fgIsCalDataBackuped = TRUE;
 	} else {
-		if (rlmTriggerCalBackup(prGlueInfo->prAdapter,
-		    g_fgIsCalDataBackuped) == WLAN_STATUS_FAILURE) {
-			DBGLOG(RFTEST, INFO,
-			       "Error : Normal Wi-Fi Enable Fail........\n");
+		if (rlmTriggerCalBackup(prAdapter, g_fgIsCalDataBackuped) == WLAN_STATUS_FAILURE) {
+			DBGLOG(RFTEST, ERROR, "MT7902: Normal Cal Fail\n");
 			return -1;
 		}
 	}
 #endif
 
-	/* card is ready */
 	prGlueInfo->u4ReadyFlag = 1;
+
 #if CFG_MTK_ANDROID_WMT
 	update_driver_loaded_status(prGlueInfo->u4ReadyFlag);
 #endif
 
-	/* ===== MT7902 FIX #2B: Restore carrier after reset ===== */
 	if (kalIsResetting() && prGlueInfo->prDevHandler) {
-		DBGLOG(INIT, WARN,
-		       "MT7902-FIX: Carrier ON after reset recovery\n");
+		DBGLOG(INIT, WARN, "MT7902-FIX: Carrier ON\n");
 		netif_carrier_on(prGlueInfo->prDevHandler);
 		netif_tx_wake_all_queues(prGlueInfo->prDevHandler);
 	}
-	/* ===== END FIX #2B ===== */
-
-
-
 
 	kalSetHalted(FALSE);
 
-	wlanDbgGetGlobalLogLevel(ENUM_WIFI_LOG_MODULE_FW,
-				 &u4LogLevel);
-	if (u4LogLevel > ENUM_WIFI_LOG_LEVEL_DEFAULT)
+	wlanDbgGetGlobalLogLevel(ENUM_WIFI_LOG_MODULE_FW, &u4LogLevel);
+	if (u4LogLevel > ENUM_WIFI_LOG_LEVEL_DEFAULT) {
 		wlanDbgSetLogLevelImpl(prAdapter,
-				       ENUM_WIFI_LOG_LEVEL_VERSION_V1,
-				       ENUM_WIFI_LOG_MODULE_FW,
-				       u4LogLevel);
+					ENUM_WIFI_LOG_LEVEL_VERSION_V1,
+					ENUM_WIFI_LOG_MODULE_FW,
+					u4LogLevel);
+	}
 
 #ifdef CONFIG_MTK_CONNSYS_DEDICATED_LOG_PATH
-	/* sync log status with firmware */
-	if (u4LogOnOffCache != -1) /* -1: connsysD does not set */
-		consys_log_event_notification((int)FW_LOG_CMD_ON_OFF,
-			u4LogOnOffCache);
+	if (u4LogOnOffCache != -1)
+		consys_log_event_notification((int)FW_LOG_CMD_ON_OFF, u4LogOnOffCache);
 #endif
 
 #if CFG_CHIP_RESET_HANG
 	if (fgIsResetHangState == SER_L0_HANG_RST_TRGING) {
 		DBGLOG(INIT, STATE, "[SER][L0] SET hang!\n");
-			fgIsResetHangState = SER_L0_HANG_RST_HANG;
-			fgIsResetting = TRUE;
+		fgIsResetHangState = SER_L0_HANG_RST_HANG;
+		fgIsResetting = TRUE;
 	}
 	DBGLOG(INIT, STATE, "[SER][L0] PASS!!\n");
 #endif
 
 	return 0;
 }
+
 
 #if (CFG_POWER_ON_DOWNLOAD_EMI_ROM_PATCH == 1)
 /* WiFi power on download MCU/WiFi ROM EMI + ROM patch */

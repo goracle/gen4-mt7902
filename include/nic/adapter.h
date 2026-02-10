@@ -1315,6 +1315,11 @@ struct WIFI_VAR {
 #if CFG_SUPPORT_ONE_TIME_CAL
 	uint8_t fgOneTimeCalEnable;
 #endif
+
+/* Add to struct WIFI_VAR */
+u_int8_t    fgDeferredUsOverride;
+uint16_t    u2DeferredCountryCode;
+
 };
 
 /* cnm_timer module */

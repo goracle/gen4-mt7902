@@ -1399,7 +1399,16 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 		u4Status = wlanCheckWifiFunc(prAdapter, TRUE);
 
 		if (u4Status == WLAN_STATUS_SUCCESS) {
+    /* DE-FANGED: Apply deferred US override AFTER FW ready */
+    if (prAdapter->rWifiVar.fgDeferredUsOverride) {
+        DBGLOG(RLM, INFO, "DE-FANGED: Applying deferred US override\n");
+        rlmDomainCountryCodeUpdate(prAdapter, NULL, 0);
+        prAdapter->rWifiVar.fgDeferredUsOverride = FALSE;
+    }
+
+
 #if defined(_HIF_SDIO)
+
 			uint32_t *pu4WHISR = NULL;
 			uint16_t au2TxCount[SDIO_TX_RESOURCE_NUM];
 
@@ -8567,35 +8576,52 @@ void wlanCfgSetDebugLevel(IN struct ADAPTER *prAdapter)
 	}
 }
 
+
 void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 {
 	int8_t aucValue[WLAN_CFG_VALUE_LEN_MAX];
+	uint16_t u2NewCode;
 
-	/* Apply COUNTRY Config */
-	if (wlanCfgGet(prAdapter, "Country", aucValue, "",
-		       0) == WLAN_STATUS_SUCCESS) {
-		prAdapter->rWifiVar.u2CountryCode =
-			(((uint16_t) aucValue[0]) << 8) |
-			((uint16_t) aucValue[1]);
-
-		DBGLOG(INIT, TRACE, "u2CountryCode=0x%04x\n",
-		       prAdapter->rWifiVar.u2CountryCode);
-
-		if (regd_is_single_sku_en()) {
-			rlmDomainOidSetCountry(prAdapter, aucValue, 2);
-			return;
+	/* 1. Try to get the code from 'CountryCode' (your override) or 'Country' */
+	if (wlanCfgGet(prAdapter, "CountryCode", aucValue, "", 0) != WLAN_STATUS_SUCCESS) {
+		if (wlanCfgGet(prAdapter, "Country", aucValue, "", 0) != WLAN_STATUS_SUCCESS) {
+			return; /* No country configuration found, exit quietly */
 		}
+	}
 
+	u2NewCode = (((uint16_t)aucValue[0]) << 8) | ((uint16_t)aucValue[1]);
+
+	/* 2. Store the code in the Adapter structure so it's not lost */
+	prAdapter->rWifiVar.u2CountryCode = u2NewCode;
+
+	DBGLOG(INIT, WARN, "BOLD: CountryCode detected: [%c%c] (0x%04x)\n", 
+		aucValue[0], aucValue[1], u2NewCode);
+
+	/* 3. SAFETY GATE: Check if the Command Path/HIF is ready 
+	 * We check if FW is downloaded and if the Glue layer is initialized.
+	 */
+	if (!prAdapter->fgIsFwDownloaded || !prAdapter->prGlueInfo) {
+		DBGLOG(INIT, WARN, "BOLD: FW not downloaded or Glue NULL. Caching CC.\n");
+		return; 
+	}
+
+	/* 4. If we reach here, we are in ADAPTER_STATE_READY (Safe to send commands) */
+	if (regd_is_single_sku_en()) {
+		rlmDomainOidSetCountry(prAdapter, aucValue, 2);
+	} else {
 		/* Force to re-search country code in regulatory domains */
 		prAdapter->prDomainInfo = NULL;
 		rlmDomainSendCmd(prAdapter);
 
-		/* Update supported channel list in channel table based on
-		 * current country domain
-		 */
-		wlanUpdateChannelTable(prAdapter->prGlueInfo);
+		/* Update supported channel list based on the new domain */
+		if (prAdapter->prGlueInfo)
+			wlanUpdateChannelTable(prAdapter->prGlueInfo);
 	}
+
+	DBGLOG(INIT, WARN, "BOLD: CountryCode [%c%c] successfully pushed to firmware.\n",
+		aucValue[0], aucValue[1]);
 }
+
 
 
 struct WLAN_CFG_ENTRY *wlanCfgGetEntry(IN struct ADAPTER *prAdapter,
