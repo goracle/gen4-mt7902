@@ -319,11 +319,13 @@ struct TX_PWR_LIMIT_SECTION {
 	 {"cck", "ofdm", "ht20", "ht40", "vht20", "vht40",
 	  "vht80", "vht160", "txbf_backoff"}
 	},
-	{15,
+	{24, // Increased from 15
 	 {"cck", "ofdm", "ht20", "ht40", "vht20", "vht40", "vht80",
-	  "vht160", "ru26", "ru52", "ru106", "ru242",
-	  "ru484", "ru996", "ru996x2"}
+	  "vht160", "he20", "he40", "he80", "he160", "ru26", "ru52", 
+	  "ru106", "ru242", "ru484", "ru996", "ru996x2", "txbf_backoff",
+	  "", "", "", ""}
 	},
+
 };
 
 struct TX_LEGACY_PWR_LIMIT_SECTION {
@@ -352,11 +354,14 @@ const u8 gTx_Pwr_Limit_Element_Num[][TX_PWR_LIMIT_SECTION_NUM] = {
 	 POWER_LIMIT_SKU_HT20_NUM, POWER_LIMIT_SKU_HT40_NUM,
 	 POWER_LIMIT_SKU_VHT20_2_NUM, POWER_LIMIT_SKU_VHT40_2_NUM,
 	 POWER_LIMIT_SKU_VHT80_2_NUM, POWER_LIMIT_SKU_VHT160_2_NUM,
+	 POWER_LIMIT_SKU_HE20_NUM, POWER_LIMIT_SKU_HE40_NUM,
+	 POWER_LIMIT_SKU_HE80_NUM, POWER_LIMIT_SKU_HE160_NUM,
 	 POWER_LIMIT_SKU_RU26_NUM, POWER_LIMIT_SKU_RU52_NUM,
 	 POWER_LIMIT_SKU_RU106_NUM, POWER_LIMIT_SKU_RU242_NUM,
 	 POWER_LIMIT_SKU_RU484_NUM, POWER_LIMIT_SKU_RU996_NUM,
-	 POWER_LIMIT_SKU_RU996X2_NUM},
+	 POWER_LIMIT_SKU_RU996X2_NUM, POWER_LIMIT_TXBF_BACKOFF_PARAM_NUM},
 };
+
 
 
 const u8 gTx_Legacy_Pwr_Limit_Element_Num[][TX_LEGACY_PWR_LIMIT_SECTION_NUM] = {
@@ -394,34 +399,30 @@ const char *gTx_Pwr_Limit_Element[]
 		{"2to1"},
 	},
 	{
-		{"c1", "c2", "c5", "c11"},
-		{"o6", "o9", "o12", "o18", "o24", "o36", "o48", "o54"},
-		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7"},
-		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m32"},
-		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9",
-		 "rsvd", "rsvd"},
-		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9",
-		 "rsvd", "rsvd"},
-		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9",
-		 "rsvd", "rsvd"},
-		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9",
-		 "rsvd", "rsvd"},
-		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9",
-		 "m10", "m11"},
-		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9",
-		 "m10", "m11"},
-		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9",
-		 "m10", "m11"},
-		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9",
-		 "m10", "m11"},
-		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9",
-		 "m10", "m11"},
-		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9",
-		 "m10", "m11"},
-		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9",
-		 "m10", "m11"},
+		{"c1", "c2", "c5", "c11"}, /* cck */
+		{"o6", "o9", "o12", "o18", "o24", "o36", "o48", "o54"}, /* ofdm */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7"}, /* ht20 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m32"}, /* ht40 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "rsvd", "rsvd"}, /* vht20 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "rsvd", "rsvd"}, /* vht40 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "rsvd", "rsvd"}, /* vht80 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "rsvd", "rsvd"}, /* vht160 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"}, /* he20 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"}, /* he40 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"}, /* he80 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"}, /* he160 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"}, /* ru26 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"}, /* ru52 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"}, /* ru106 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"}, /* ru242 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"}, /* ru484 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"}, /* ru996 */
+		{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"}, /* ru996x2 */
+		{"2to1"}, /* txbf_backoff */
 	},
 };
+
+
 
 const char *gTx_Legacy_Pwr_Limit_Element[]
 	[TX_LEGACY_PWR_LIMIT_SECTION_NUM]
@@ -2089,20 +2090,22 @@ u_int32_t rlmDomainAlpha2ToU32(char *pcAlpha2, u_int8_t ucAlpha2Size)
 {
 	u_int8_t ucIdx;
 	u_int32_t u4CountryCode = 0;
-
+	
 	if (ucAlpha2Size > TX_PWR_LIMIT_COUNTRY_STR_MAX_LEN) {
 		DBGLOG(RLM, ERROR, "alpha2 size %d is invalid!(max: %d)\n",
 			ucAlpha2Size, TX_PWR_LIMIT_COUNTRY_STR_MAX_LEN);
 		ucAlpha2Size = TX_PWR_LIMIT_COUNTRY_STR_MAX_LEN;
 	}
-
+	
+	/* FIX: Reverse byte order to match 0x5553 convention used everywhere else
+	 * OLD: "US" -> 0x5355 (big-endian: U=0x55 first, S=0x53 second)
+	 * NEW: "US" -> 0x5553 (little-endian: S=0x53 first, U=0x55 second)
+	 */
 	for (ucIdx = 0; ucIdx < ucAlpha2Size; ucIdx++)
-		u4CountryCode |= (pcAlpha2[ucIdx] << (ucIdx * 8));
-
+		u4CountryCode |= (pcAlpha2[ucIdx] << ((ucAlpha2Size - 1 - ucIdx) * 8));
+	
 	return u4CountryCode;
 }
-
-
 
 #if (CFG_SUPPORT_SINGLE_SKU_LOCAL_DB == 1)
 u_int32_t rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode(
@@ -2176,35 +2179,37 @@ void rlmDomainCountryCodeUpdate(struct ADAPTER *prAdapter,
                                struct wiphy *pWiphy,
                                u_int32_t u4CountryCode)
 {
-    /* --- EARLY INIT GUARD (using existing fields only) --- */
-    if (!prAdapter || 
-        !prAdapter->fgIsFwDownloaded ||   /* ← EXISTING field after FW load */
-        !prAdapter->prGlueInfo) {         /* ← Glue always exists */
-        DBGLOG(RLM, WARN, "DE-FANGED: FW not ready, deferring US override\n");
-        /* Simple flag in existing u2CountryCode field */
-        prAdapter->rWifiVar.u2CountryCode = 0x5553;  /* US - defer marker */
+    /* The only value we care about: 'US' (0x5553) */
+    u_int32_t u4ForcedCC = 0x5553; 
+
+    if (!prAdapter)
+        return;
+
+    /* --- STAGE 1: Defer if FW is not yet alive --- */
+    if (!prAdapter->fgIsFwDownloaded || !prAdapter->prGlueInfo) {
+        DBGLOG(RLM, INFO, "DE-FANGED: Caching US (0x5553) - FW/Glue not ready.\n");
+        prAdapter->rWifiVar.u2CountryCode = (uint16_t)u4ForcedCC;
         return;
     }
 
-    /* --- THE GLOBAL OVERRIDE --- */
-    u_int32_t u4ForcedCC = 0x5553; // 'US'
-    char acCountryCodeStr[MAX_COUNTRY_CODE_LEN + 1] = "US";
+    /* --- STAGE 2: Execute Force-US --- */
+    DBGLOG(RLM, INFO, "DE-FANGED: Forcing US (0x5553) to Firmware.\n");
 
-    DBGLOG(RLM, INFO, "DE-FANGED: Global Override initiated. Forcing US (0x5553).\n");
-
-    /* 1-6. Your existing logic unchanged... */
-    if (rlmDomainIsUsingLocalRegDomainDataBase()) {
+    /* Sync with Linux Regulatory DB if wiphy is linked */
+    if (pWiphy && rlmDomainIsUsingLocalRegDomainDataBase()) {
         rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode(pWiphy, u4ForcedCC);
     }
 
-    DBGLOG(RLM, INFO, "BREAKOUT: Setting CC string to %s\n", acCountryCodeStr);
-
-    /* BT sync, channel parsing, adapter lock, cmd send - unchanged */
+    /* Update the adapter variable */
     prAdapter->rWifiVar.u2CountryCode = (uint16_t)u4ForcedCC;
+
+    /* Send the command to the MT7902 MCU */
     rlmDomainSendCmd(prAdapter);
 
-    DBGLOG(RLM, INFO, "DE-FANGED: Final sync complete. Adapter set to US.\n");
+    DBGLOG(RLM, INFO, "DE-FANGED: FW command sent successfully.\n");
 }
+
+
 
 
 uint8_t rlmDomainTxPwrLimitGetTableVersion(
@@ -2287,97 +2292,299 @@ void rlmDomainReplayPendingRegdom(struct ADAPTER *prAdapter)
 	}
 }
 
-/*!
 
 
+//the madddddness
 
- * \brief Search the tx power limit setting range of the specified in the text
- *        file
+
+/* Line-oriented, diagnostic-heavy country-range parser for TxPwrLimit dat files.
  *
- * \param[IN] u4CountryCode The u32 type of the specified country.
- * \param[IN] pucBuf The content of the text file.
- * \param[IN] u4cBufLen End boundary of the text file.
- * \param[OUT] pu4CountryStart Store the start position of the desired country
- *             settings.
- * \param[OUT] pu4CountryEnd Store the end position of the desired country
- *             settings.
+ * Behavior:
+ *  - Scans the buffer one line at a time.
+ *  - Ignores comment lines starting with '#', and angle-bracket lines starting with '<'.
+ *  - Only treats a header when '[' and ']' are found on the same line.
+ *  - Returns TRUE and sets *pu4CountryStart pu4CountryEnd to a half-open byte
+ *    range [start,end) for the block contents if the requested country is found.
  *
- * \retval TRUE Success.
- * \retval FALSE Failure.
+ * Diagnostics (lots of DBGLOG calls) let you trace exactly what was parsed.
  */
-/*----------------------------------------------------------------------------*/
-u_int8_t rlmDomainTxPwrLimitGetCountryRange(
-	uint32_t u4CountryCode, uint8_t *pucBuf, uint32_t u4BufLen,
-	uint32_t *pu4CountryStart, uint32_t *pu4CountryEnd)
+
+/* Helper: find the next line range starting at 'start'.
+ * Sets *line_start and *line_end (line_end is index of the first byte AFTER newline or EOF).
+ * Returns 0 on success, non-zero if start >= buflen.
+ */
+static int
+_get_next_line_range(const uint8_t *buf, uint32_t buflen, uint32_t start,
+                     uint32_t *line_start, uint32_t *line_end)
 {
-	uint32_t u4TmpPos = 0;
-	char pcrCountryStr[TX_PWR_LIMIT_COUNTRY_STR_MAX_LEN + 1] = {0};
-	uint8_t cIdx = 0;
-	u_int8_t bFound = FALSE;
-	u_int8_t bIsSecondPass = FALSE;
-	uint32_t u4TargetCC = u4CountryCode;
-
-retry:
-	u4TmpPos = 0;
-	while (u4TmpPos < u4BufLen) {
-		// 1. Find an opening bracket
-		if (pucBuf[u4TmpPos++] != '[')
-			continue;
-
-		// 2. Read the string inside brackets
-		cIdx = 0;
-		while ((u4TmpPos < u4BufLen) && (cIdx < TX_PWR_LIMIT_COUNTRY_STR_MAX_LEN) && (pucBuf[u4TmpPos] != ']')) {
-			pcrCountryStr[cIdx++] = pucBuf[u4TmpPos++];
-		}
-		pcrCountryStr[cIdx] = '\0';
-		u4TmpPos++; // skip the ']'
-
-		// 3. Check if target Country Code is in this bracketed list
-		if (!bFound) {
-			char *token;
-			char *rest = pcrCountryStr;
-			
-			while ((token = strsep(&rest, ",")) != NULL) {
-				if (u4TargetCC == rlmDomainAlpha2ToU32(token, strlen(token))) {
-					DBGLOG(RLM, INFO, "DE-FANGED: Found CC 0x%X in list [%s]\n", u4TargetCC, pcrCountryStr);
-					*pu4CountryStart = u4TmpPos;
-					bFound = TRUE;
-					break; 
-				}
-			}
-			if (bFound)
-				continue; 
-		}
-
-		// 4. Boundary Logic
-		if (bFound) {
-			uint8_t isNextCountryHeader = FALSE;
-			if (cIdx == 2 || (cIdx == 3 && strcmp(pcrCountryStr, "WW") == 0) || strchr(pcrCountryStr, ',') != NULL) {
-				isNextCountryHeader = TRUE;
-			}
-
-			if (isNextCountryHeader) {
-				*pu4CountryEnd = u4TmpPos - (cIdx + 2); 
-				return TRUE;
-			}
-		}
-	}
-
-	if (bFound) {
-		*pu4CountryEnd = u4BufLen;
-		return TRUE;
-	}
-
-	/* --- THE BREAKOUT FALLBACK --- */
-	if (!bFound && !bIsSecondPass) {
-		DBGLOG(RLM, WARN, "CC 0x%X not found in .dat file. FORCING PASS 2 FOR 'US'\n", u4TargetCC);
-		u4TargetCC = 0x5553; // 'US'
-		bIsSecondPass = TRUE;
-		goto retry;
-	}
-
-	return FALSE;
+    if (start >= buflen)
+        return -1;
+    uint32_t s = start;
+    uint32_t p = s;
+    while (p < buflen) {
+        if (buf[p] == '\n') {
+            *line_start = s;
+            *line_end = p + 1; /* include newline in end index semantics */
+            return 0;
+        }
+        p++;
+    }
+    /* last line (no trailing newline) */
+    *line_start = s;
+    *line_end = buflen;
+    return 0;
 }
+
+/* Helper: find first non-space character index in [start, end) (or end if none). */
+static uint32_t
+_find_first_nonspace_in_range(const uint8_t *buf, uint32_t start, uint32_t end)
+{
+    uint32_t p = start;
+    while (p < end) {
+        if (buf[p] != ' ' && buf[p] != '\t' && buf[p] != '\r' && buf[p] != '\n')
+            return p;
+        p++;
+    }
+    return end;
+}
+
+/* Helper: copy substring [s..e) into dest (NUL-terminated), truncated to maxlen. */
+static void
+_copy_to_cstr(const uint8_t *buf, uint32_t s, uint32_t e, char *dest, size_t maxlen)
+{
+    size_t len = (e > s) ? (size_t)(e - s) : 0;
+    if (len >= maxlen)
+        len = maxlen - 1;
+    if (len)
+        memcpy(dest, &buf[s], len);
+    dest[len] = '\0';
+}
+
+/* Helper: trim in-place leading/trailing spaces/tabs, return length */
+static size_t
+_trim_inplace(char *s)
+{
+    char *p = s;
+    while (*p == ' ' || *p == '\t') p++;
+    if (p != s)
+        memmove(s, p, strlen(p) + 1);
+    size_t len = strlen(s);
+    while (len > 0 && (s[len-1] == ' ' || s[len-1] == '\t')) {
+        s[len-1] = '\0';
+        len--;
+    }
+    return len;
+}
+
+/* Helper: check header (NUL-terminated) for target using comma-split tokens.
+ * Emits DBGLOGs for each token tried. Returns 1 on match, 0 otherwise.
+ */
+/* Helper: check header (NUL-terminated) for target using comma-split tokens.
+ * Emits DBGLOGs for each token tried. Returns 1 on match, 0 otherwise.
+ * FIXED: Doesn't truncate tokens - skips them if too long
+ */
+static int
+_header_contains_target_diag(const char *header, uint32_t target)
+{
+    const char *p = header;
+
+    DBGLOG(RLM, INFO, "rlm: header check: '%s' for target 0x%X\n", header, target);
+
+    while (*p) {
+        const char *comma = strchr(p, ',');
+        size_t toklen = comma ? (size_t)(comma - p) : strlen(p);
+
+        char tokbuf[TX_PWR_LIMIT_COUNTRY_STR_MAX_LEN + 1];
+        
+        /* FIX: Don't truncate - skip oversized tokens entirely */
+        if (toklen > TX_PWR_LIMIT_COUNTRY_STR_MAX_LEN) {
+            DBGLOG(RLM, WARN, "rlm: token too long (%zu chars), skipping\n", toklen);
+            if (!comma) break;
+            p = comma + 1;
+            continue;
+        }
+        
+        memcpy(tokbuf, p, toklen);
+        tokbuf[toklen] = '\0';
+        (void)_trim_inplace(tokbuf);
+
+        DBGLOG(RLM, INFO, "rlm: token candidate '%s'\n", tokbuf);
+        if (tokbuf[0] != '\0') {
+            uint32_t cc = rlmDomainAlpha2ToU32(tokbuf, strlen(tokbuf));
+            DBGLOG(RLM, INFO, "rlm: token '%s' -> 0x%X\n", tokbuf, cc);
+            if (cc == target) {
+                DBGLOG(RLM, INFO, "rlm: token matched target (token='%s', target=0x%X)\n", tokbuf, target);
+                return 1;
+            }
+        }
+
+        if (!comma) break;
+        p = comma + 1;
+    }
+
+    DBGLOG(RLM, INFO, "rlm: header '%s' does not match target 0x%X\n", header, target);
+    return 0;
+}
+
+/* Replacement main function (line-based, diagnostic) */
+u_int8_t
+rlmDomainTxPwrLimitGetCountryRange(
+    uint32_t u4CountryCode, uint8_t *pucBuf, uint32_t u4BufLen,
+    uint32_t *pu4CountryStart, uint32_t *pu4CountryEnd)
+{
+    uint32_t pass;
+    uint32_t target = u4CountryCode;
+    const uint32_t max_passes = 2; /* original pass, then forced US */
+
+    DBGLOG(RLM, INFO, "rlm: rlmDomainTxPwrLimitGetCountryRange start: country=0x%X, buflen=%u\n",
+           u4CountryCode, u4BufLen);
+
+    for (pass = 0; pass < max_passes; pass++) {
+        uint32_t pos = 0;
+        uint32_t lineno = 0;
+
+        DBGLOG(RLM, INFO, "rlm: pass %u (target=0x%X)\n", (unsigned)(pass + 1), target);
+
+        while (pos < u4BufLen) {
+            uint32_t line_s, line_e;
+            if (_get_next_line_range(pucBuf, u4BufLen, pos, &line_s, &line_e) != 0)
+                break;
+
+            lineno++;
+            /* find first non-space char */
+            uint32_t first = _find_first_nonspace_in_range(pucBuf, line_s, line_e);
+
+            /* Debug: print trimmed line (cap to 256 chars for safety) */
+            {
+                uint32_t show_s = first;
+                uint32_t show_e = line_e;
+                if (show_e - show_s > 256) show_e = show_s + 256;
+                char line_preview[257] = {0};
+                _copy_to_cstr(pucBuf, show_s, show_e, line_preview, sizeof(line_preview));
+                DBGLOG(RLM, INFO, "rlm: line %u bytes[%u..%u): '%s'\n", (unsigned)lineno, line_s, line_e, line_preview);
+            }
+
+            /* skip empty lines */
+            if (first >= line_e) {
+                pos = line_e;
+                continue;
+            }
+
+            /* skip comment lines starting with '#' */
+            if (pucBuf[first] == '#') {
+                pos = line_e;
+                continue;
+            }
+
+            /* skip angle-bracket markup lines (e.g. <ofdm>, </ofdm>, <Ver:02>) */
+            if (pucBuf[first] == '<') {
+                pos = line_e;
+                continue;
+            }
+
+            /* candidate header: must start with '[' on this line */
+            if (pucBuf[first] != '[') {
+                pos = line_e;
+                continue;
+            }
+
+            /* find ']' within same line */
+            uint32_t close_idx = first + 1;
+            while (close_idx < line_e && pucBuf[close_idx] != ']') close_idx++;
+
+            if (close_idx >= line_e || pucBuf[close_idx] != ']') {
+                /* no matching ']' on same line: skip this line (do NOT abort) */
+                DBGLOG(RLM, WARN, "rlm: skipping line %u: '[' found at %u but no matching ']' on same line\n",
+                       (unsigned)lineno, (unsigned)first);
+                pos = line_e;
+                continue;
+            }
+
+            /* FIX: Use larger buffer for header extraction to avoid truncation */
+            char header[256];
+            uint32_t header_s = first + 1;
+            uint32_t header_e = close_idx;
+            _copy_to_cstr(pucBuf, header_s, header_e, header, sizeof(header));
+
+            DBGLOG(RLM, INFO, "rlm: found header on line %u: '%s' (bytes[%u..%u))\n",
+                   (unsigned)lineno, header, (unsigned)header_s, (unsigned)header_e);
+
+            /* simple sanity: header should either contain a comma, or be 2 chars (alpha2) or 'WW' */
+            {
+                size_t hlen = strlen(header);
+                if (!(strchr(header, ',') || hlen == 2 || (hlen == 3 && strcmp(header, "WW") == 0))) {
+                    DBGLOG(RLM, INFO, "rlm: header '%s' does not look like country list; skipping\n", header);
+                    pos = line_e;
+                    continue;
+                }
+            }
+
+            /* header appears valid-ish; check tokens */
+            if (_header_contains_target_diag(header, target)) {
+                /* matched: block content begins at byte index after ']' (i.e. close_idx + 1) */
+                uint32_t block_start = close_idx + 1;
+                uint32_t scan_pos = block_start;
+                uint32_t found_end = 0;
+
+                DBGLOG(RLM, INFO, "rlm: matched header '%s' at line %u; block starts at %u\n",
+                       header, (unsigned)lineno, (unsigned)block_start);
+
+                /* find the next header-starting line to mark end (first next line where first non-space char is '[' ) */
+                while (scan_pos < u4BufLen) {
+                    uint32_t nline_s, nline_e;
+                    if (_get_next_line_range(pucBuf, u4BufLen, scan_pos, &nline_s, &nline_e) != 0)
+                        break;
+                    uint32_t nfirst = _find_first_nonspace_in_range(pucBuf, nline_s, nline_e);
+
+                    if (nfirst < nline_e && pucBuf[nfirst] == '[') {
+                        found_end = nfirst;
+                        break;
+                    }
+
+                    scan_pos = nline_e;
+                }
+
+                if (found_end) {
+                    *pu4CountryStart = block_start;
+                    *pu4CountryEnd = found_end;
+                    DBGLOG(RLM, INFO, "rlm: country block range [%u..%u) found for target 0x%X\n",
+                           (unsigned)*pu4CountryStart, (unsigned)*pu4CountryEnd, target);
+                    return TRUE;
+                } else {
+                    /* block goes to EOF */
+                    *pu4CountryStart = block_start;
+                    *pu4CountryEnd = u4BufLen;
+                    DBGLOG(RLM, INFO, "rlm: country block extends to EOF [%u..%u) for target 0x%X\n",
+                           (unsigned)*pu4CountryStart, (unsigned)*pu4CountryEnd, target);
+                    return TRUE;
+                }
+            }
+
+            /* not matched; continue after this line */
+            pos = line_e;
+        } /* end while pos < buflen */
+
+        /* not found on this pass -> fallback to US for second pass */
+        if (pass == 0) {
+            DBGLOG(RLM, WARN, "rlm: CC 0x%X not found in .dat file. FORCING PASS 2 FOR 'US'\n", target);
+            target = 0x5553; /* 'US' */
+            continue;
+        }
+    } /* end passes */
+
+    DBGLOG(RLM, WARN, "rlm: rlmDomainTxPwrLimitGetCountryRange failed for original CC 0x%X\n",
+           u4CountryCode);
+    return FALSE;
+}
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2508,121 +2715,96 @@ u_int8_t rlmDomainTxPwrLimitLoadChannelSetting(
 	struct TX_PWR_LIMIT_DATA *pTxPwrLimit, uint8_t ucSectionIdx)
 {
 	uint32_t u4TmpPos = *pu4Pos;
-	char cTmpChar = 0;
 	struct CHANNEL_TX_PWR_LIMIT *prChTxPwrLimit = NULL;
 	u_int8_t bNeg = FALSE;
 	int8_t cLimitValue = 0, cChIdx = 0;
 	uint8_t ucIdx = 0, ucChannel = 0;
 	uint8_t ucElementNum = 0;
 
-	/* FATAL CHECK: If pTxPwrLimit is NULL, we can't do anything */
-	if (!pTxPwrLimit) {
-		DBGLOG(RLM, ERROR, "pTxPwrLimit is NULL!\n");
+	if (!pTxPwrLimit)
 		return FALSE;
-	}
 
 	ucElementNum = gTx_Pwr_Limit_Element_Num[ucVersion][ucSectionIdx];
 
-	/* skip blank lines */
-	while (u4TmpPos < u4BufEnd) {
-		cTmpChar = pucBuf[u4TmpPos];
-
-		if (cTmpChar == ' ' || cTmpChar == '\t' ||
-			cTmpChar == '\n' || cTmpChar == '\r') {
-			u4TmpPos++;
-			continue;
-		}
-		break;
-	}
-
-	/* SAFETY CHANGE: If we are stuck at the same position, force an increment */
-	if (u4TmpPos == *pu4Pos && u4TmpPos < u4BufEnd) {
+	while (u4TmpPos < u4BufEnd && (pucBuf[u4TmpPos] == ' ' || pucBuf[u4TmpPos] == '\t' || 
+		   pucBuf[u4TmpPos] == '\n' || pucBuf[u4TmpPos] == '\r')) {
 		u4TmpPos++;
 	}
 
-	if (u4TmpPos + 5 >= u4BufEnd) return FALSE;
+	if (u4TmpPos + 3 >= u4BufEnd)
+		return FALSE;
 
-	/* Parse Channel */
 	if (pucBuf[u4TmpPos] == 'c' && pucBuf[u4TmpPos + 1] == 'h') {
-		ucChannel = (pucBuf[u4TmpPos + 2] - '0') * 100 +
-					(pucBuf[u4TmpPos + 3] - '0') * 10 +
-					(pucBuf[u4TmpPos + 4] - '0');
+		u4TmpPos += 2;
+		ucChannel = 0;
+		while (u4TmpPos < u4BufEnd && pucBuf[u4TmpPos] >= '0' && pucBuf[u4TmpPos] <= '9') {
+			ucChannel = (ucChannel * 10) + (pucBuf[u4TmpPos] - '0');
+			u4TmpPos++;
+		}
+		while (u4TmpPos < u4BufEnd && (pucBuf[u4TmpPos] == ' ' || pucBuf[u4TmpPos] == ','))
+			u4TmpPos++;
 	} else {
-		while (u4TmpPos < u4BufEnd && pucBuf[u4TmpPos] != '\n') u4TmpPos++;
+		while (u4TmpPos < u4BufEnd && pucBuf[u4TmpPos] != '\n')
+			u4TmpPos++;
 		*pu4Pos = u4TmpPos;
 		return TRUE;
 	}
 
-	/* Find or Add Channel index */
 	cChIdx = rlmDomainTxPwrLimitGetChIdx(pTxPwrLimit, ucChannel);
-
 	if (cChIdx == -1) {
 		if (pTxPwrLimit->ucChNum < MAX_CHN_NUM) {
 			cChIdx = pTxPwrLimit->ucChNum;
 			pTxPwrLimit->rChannelTxPwrLimit[cChIdx].ucChannel = ucChannel;
 			pTxPwrLimit->ucChNum++;
 		} else {
-			/* Table full, skip line */
-			while (u4TmpPos < u4BufEnd && pucBuf[u4TmpPos] != '\n') u4TmpPos++;
-			*pu4Pos = u4TmpPos;
-			return FALSE;
+			goto skip_line;
 		}
 	}
 
-	/* TRIPLE CHECK: Ensure index is within bounds of the array */
-	if (cChIdx < 0 || cChIdx >= MAX_CHN_NUM) {
-		DBGLOG(RLM, ERROR, "Invalid cChIdx: %d\n", cChIdx);
-		return FALSE;
-	}
-
-	u4TmpPos += 5;
 	prChTxPwrLimit = &(pTxPwrLimit->rChannelTxPwrLimit[cChIdx]);
 
-	// ADD THIS CHECK:
-	if (!prChTxPwrLimit) {
-	    DBGLOG(RLM, ERROR, "prChTxPwrLimit is NULL after assignment!\n");
-	    return FALSE;
-	}
-
-
-	/* READ VALUES */
 	for (ucIdx = 0; ucIdx < ucElementNum; ucIdx++) {
-		while (u4TmpPos < u4BufEnd) {
-			cTmpChar = pucBuf[u4TmpPos];
-			if (cTmpChar == ' ' || cTmpChar == '\t' || cTmpChar == ',') {
-				u4TmpPos++;
-				continue;
-			}
-			break;
+		while (u4TmpPos < u4BufEnd && (pucBuf[u4TmpPos] == ' ' || 
+			   pucBuf[u4TmpPos] == '\t' || pucBuf[u4TmpPos] == ',')) {
+			u4TmpPos++;
 		}
 
-		if (u4TmpPos >= u4BufEnd || cTmpChar == '\n' || cTmpChar == '\r') break;
+		if (u4TmpPos >= u4BufEnd || pucBuf[u4TmpPos] == '\n' || pucBuf[u4TmpPos] == '\r')
+			break;
 
 		bNeg = FALSE;
-		cTmpChar = pucBuf[u4TmpPos];
-		if (cTmpChar == 'x') {
-			cLimitValue = 63; // Hardcoded max instead of macro to be safe
+		if (pucBuf[u4TmpPos] == 'x') {
+			cLimitValue = TX_PWR_LIMIT_MAX_VAL; 
 			u4TmpPos++;
 		} else {
-			if (cTmpChar == '-') { bNeg = TRUE; u4TmpPos++; }
+			if (pucBuf[u4TmpPos] == '-') {
+				bNeg = TRUE;
+				u4TmpPos++;
+			}
 			cLimitValue = 0;
 			while (u4TmpPos < u4BufEnd && pucBuf[u4TmpPos] >= '0' && pucBuf[u4TmpPos] <= '9') {
 				cLimitValue = (cLimitValue * 10) + (pucBuf[u4TmpPos] - '0');
 				u4TmpPos++;
 			}
-			if (bNeg) cLimitValue = -cLimitValue;
+			if (bNeg)
+				cLimitValue = -cLimitValue;
 		}
 
-		/* THE CRITICAL SECTION - Extra safety on section/element indices */
-		if (ucSectionIdx < 40 && ucIdx < 20) { // Arbitrary safety bounds
+		if (ucSectionIdx < TX_PWR_LIMIT_SECTION_NUM) {
 			if (!rlmDomainTxPwrLimitIsTxBfBackoffSection(ucVersion, ucSectionIdx)) {
-				prChTxPwrLimit->rTxPwrLimitValue[ucSectionIdx][ucIdx] = cLimitValue;
+				/* Bound check elements against the second dimension of the array */
+				if (ucIdx < (sizeof(prChTxPwrLimit->rTxPwrLimitValue[0]) / sizeof(int8_t)))
+					prChTxPwrLimit->rTxPwrLimitValue[ucSectionIdx][ucIdx] = cLimitValue;
 			} else {
-				prChTxPwrLimit->rTxBfBackoff[ucIdx] = cLimitValue;
+				if (ucIdx < (sizeof(prChTxPwrLimit->rTxBfBackoff) / sizeof(int8_t)))
+					prChTxPwrLimit->rTxBfBackoff[ucIdx] = cLimitValue;
 			}
 		}
 	}
 
+skip_line:
+	while (u4TmpPos < u4BufEnd && pucBuf[u4TmpPos] != '\n')
+		u4TmpPos++;
 	*pu4Pos = u4TmpPos;
 	return TRUE;
 }
@@ -3046,42 +3228,52 @@ void rlmDomainTxPwrLimitSetChValues(
 	}
 }
 
-void rlmDomainTxPwrLimitPerRateSetChValues(
+void rlmDomainTxPwrLimitPerRateSetValues(
 	uint8_t ucVersion,
-	struct CMD_TXPOWER_CHANNEL_POWER_LIMIT_PER_RATE *pCmd,
-	struct CHANNEL_TX_PWR_LIMIT *pChTxPwrLimit)
+	struct CMD_SET_TXPOWER_COUNTRY_TX_POWER_LIMIT_PER_RATE *pSetCmd,
+	struct TX_PWR_LIMIT_DATA *pTxPwrLimit)
 {
-	uint8_t section = 0, e = 0, count = 0;
-	uint8_t ucElementNum = 0;
-
-	for (section = 0; section < TX_PWR_LIMIT_SECTION_NUM; section++) {
-		if (rlmDomainTxPwrLimitIsTxBfBackoffSection(ucVersion, section))
-			continue;
-		ucElementNum = gTx_Pwr_Limit_Element_Num[ucVersion][section];
-		for (e = 0; e < ucElementNum; e++) {
-			pCmd->aucTxPwrLimit.i1PwrLimit[count] =
-				pChTxPwrLimit->rTxPwrLimitValue[section][e];
-			count++;
-		}
+	uint8_t ucIdx = 0;
+	int8_t cChIdx = 0;
+	struct CMD_TXPOWER_CHANNEL_POWER_LIMIT_PER_RATE *pChPwrLimit = NULL;
+	struct CHANNEL_TX_PWR_LIMIT *pChTxPwrLimit = NULL;
+	if (pSetCmd == NULL) {
+		DBGLOG(RLM, ERROR, "%s pSetCmd is NULL\n", __func__);
+		return;
 	}
-
-	DBGLOG(RLM, TRACE, "ch %d\n", pCmd->u1CentralCh);
-	count = 0;
-	for (section = 0; section < TX_PWR_LIMIT_SECTION_NUM; section++) {
-		struct TX_PWR_LIMIT_SECTION *pSection =
-			&gTx_Pwr_Limit_Section[ucVersion];
-		if (rlmDomainTxPwrLimitIsTxBfBackoffSection(ucVersion, section))
+	
+	/* Log once what we have loaded */
+	if (pSetCmd->ucNum > 0 && pTxPwrLimit) {
+		DBGLOG(RLM, INFO, "PerRate: Firmware requesting %u channels, we have %u loaded\n",
+			pSetCmd->ucNum, pTxPwrLimit->ucChNum);
+	}
+	
+	for (ucIdx = 0; ucIdx < pSetCmd->ucNum; ucIdx++) {
+		pChPwrLimit = &(pSetCmd->rChannelPowerLimit[ucIdx]);
+		cChIdx = rlmDomainTxPwrLimitGetChIdx(pTxPwrLimit,
+			pChPwrLimit->u1CentralCh);
+		if (cChIdx == -1) {
+			/* Only log first few misses to avoid spam */
+			if (ucIdx < 5) {
+				DBGLOG(RLM, WARN,
+					"PerRate: Channel %u (idx %u) not in our %u-channel table\n",
+					pChPwrLimit->u1CentralCh, ucIdx, 
+					pTxPwrLimit ? pTxPwrLimit->ucChNum : 0);
+			}
 			continue;
-		ucElementNum = gTx_Pwr_Limit_Element_Num[ucVersion][section];
-		for (e = 0; e < ucElementNum; e++) {
-			DBGLOG(RLM, TRACE, "LegacyTxPwrLimit[%s][%s]= %d\n",
-				pSection->arSectionNames[section],
-				gTx_Pwr_Limit_Element[ucVersion][section][e],
-				pCmd->aucTxPwrLimit.i1PwrLimit[count]);
-			count++;
 		}
+		pChTxPwrLimit = &pTxPwrLimit->rChannelTxPwrLimit[cChIdx];
+		/* TODO: Need to implement rlmDomainTxPwrLimitPerRateSetChValues
+		 * Similar to rlmDomainTxPwrLimitSetChValues but for PerRate structs
+		 * For now, skipping to debug channel mismatches */
+		// rlmDomainTxPwrLimitPerRateSetChValues(ucVersion,
+		//	pChPwrLimit, pChTxPwrLimit);
 	}
 }
+
+
+
+
 
 void rlmDomainTxLegacyPwrLimitPerRateSetChValues(
 	uint8_t ucVersion,
@@ -3142,19 +3334,18 @@ void rlmDomainTxPwrLimitSetValues(
 	int8_t cChIdx = 0;
 	struct CMD_CHANNEL_POWER_LIMIT_V2 *pCmd = NULL;
 	struct CHANNEL_TX_PWR_LIMIT *pChTxPwrLimit = NULL;
-
 	if (!pSetCmd || !pTxPwrLimit) {
 		DBGLOG(RLM, ERROR, "Invalid TxPwrLimit request\n");
 		return;
 	}
-
 	for (ucIdx = 0; ucIdx < pSetCmd->ucNum; ucIdx++) {
 		pCmd = &(pSetCmd->rChannelPowerLimit[ucIdx]);
 		cChIdx = rlmDomainTxPwrLimitGetChIdx(pTxPwrLimit,
 			pCmd->ucCentralCh);
 		if (cChIdx == -1) {
 			DBGLOG(RLM, ERROR,
-				"Invalid ch idx found while assigning values\n");
+				"Invalid ch idx: requested channel %u not found in loaded channel list\n",
+				pCmd->ucCentralCh);  // <-- ADD THIS to see which channel is missing
 			continue;
 		}
 		pChTxPwrLimit = &pTxPwrLimit->rChannelTxPwrLimit[cChIdx];
@@ -3162,36 +3353,7 @@ void rlmDomainTxPwrLimitSetValues(
 	}
 }
 
-void rlmDomainTxPwrLimitPerRateSetValues(
-	uint8_t ucVersion,
-	struct CMD_SET_TXPOWER_COUNTRY_TX_POWER_LIMIT_PER_RATE *pSetCmd,
-	struct TX_PWR_LIMIT_DATA *pTxPwrLimit)
-{
-	uint8_t ucIdx = 0;
-	int8_t cChIdx = 0;
-	struct CMD_TXPOWER_CHANNEL_POWER_LIMIT_PER_RATE *pChPwrLimit = NULL;
-	struct CHANNEL_TX_PWR_LIMIT *pChTxPwrLimit = NULL;
 
-	if (pSetCmd == NULL) {
-		DBGLOG(RLM, ERROR, "%s pSetCmd is NULL\n", __func__);
-		return;
-	}
-
-	for (ucIdx = 0; ucIdx < pSetCmd->ucNum; ucIdx++) {
-		pChPwrLimit = &(pSetCmd->rChannelPowerLimit[ucIdx]);
-		cChIdx = rlmDomainTxPwrLimitGetChIdx(pTxPwrLimit,
-			pChPwrLimit->u1CentralCh);
-
-		if (cChIdx == -1) {
-			DBGLOG(RLM, ERROR,
-				"Invalid ch idx found while assigning values\n");
-			continue;
-		}
-		pChTxPwrLimit = &pTxPwrLimit->rChannelTxPwrLimit[cChIdx];
-		rlmDomainTxPwrLimitPerRateSetChValues(ucVersion,
-			pChPwrLimit, pChTxPwrLimit);
-	}
-}
 
 void rlmDomainTxLegacyPwrLimitPerRateSetValues(
 	uint8_t ucVersion,
@@ -4817,6 +4979,12 @@ void rlmDomainTxPwrSendTxBfBackoffCmd(
 }
 
 #if (CFG_SUPPORT_SINGLE_SKU_6G == 1)
+
+
+
+
+
+
 void
 rlmDomainSendTxPwrLimitPerRateCmd_6G(struct ADAPTER *prAdapter,
 	uint8_t ucVersion,
@@ -4826,48 +4994,56 @@ rlmDomainSendTxPwrLimitPerRateCmd_6G(struct ADAPTER *prAdapter,
 	struct CMD_SET_TXPOWER_COUNTRY_TX_POWER_LIMIT_PER_RATE
 		*prTxPwrLimitPerRateCmd_6G;
 	uint32_t rTxPwrLimitPerRateCmdSize_6G = 0;
-
 	uint32_t u4SetCmdTableMaxSize = 0;
 	uint32_t u4SetCountryTxPwrLimitCmdSize =
 		sizeof(struct CMD_SET_TXPOWER_COUNTRY_TX_POWER_LIMIT_PER_RATE);
 	uint32_t u4ChPwrLimitSize =
 		sizeof(struct CMD_TXPOWER_CHANNEL_POWER_LIMIT_PER_RATE);
-	uint8_t ch_cnt = TX_PWR_LIMIT_6G_CH_NUM;
+	uint8_t ch_cnt = 0;
 	uint8_t ch_idx = 0;
-	const int8_t *prChannelList = &gTx_Pwr_Limit_6g_Ch[0];
-
-	wiphy = priv_to_wiphy(prAdapter->prGlueInfo);
-
-	u4SetCmdTableMaxSize = u4SetCountryTxPwrLimitCmdSize +
-	ch_cnt * u4ChPwrLimitSize;
-
-	rTxPwrLimitPerRateCmdSize_6G = u4SetCmdTableMaxSize;
-	prTxPwrLimitPerRateCmd_6G =
-	kalMemAlloc(u4SetCmdTableMaxSize, VIR_MEM_TYPE);
-
-	if (!prTxPwrLimitPerRateCmd_6G) {
+	
+	/* FIX: Use actual loaded channel count, not hardcoded TX_PWR_LIMIT_6G_CH_NUM */
+	if (!pTxPwrLimitData || pTxPwrLimitData->ucChNum == 0) {
 		DBGLOG(RLM, ERROR,
-		"%s no buf to send cmd\n", __func__);
+			"%s: No 6G power limit data loaded (pTxPwrLimitData=%p, chNum=%u)\n",
+			__func__, pTxPwrLimitData,
+			pTxPwrLimitData ? pTxPwrLimitData->ucChNum : 0);
 		return;
 	}
-
+	
+	ch_cnt = pTxPwrLimitData->ucChNum;
+	
+	DBGLOG(RLM, INFO,
+		"%s: Using %u channels from loaded 6G power limit data\n",
+		__func__, ch_cnt);
+	
+	wiphy = priv_to_wiphy(prAdapter->prGlueInfo);
+	u4SetCmdTableMaxSize = u4SetCountryTxPwrLimitCmdSize +
+		ch_cnt * u4ChPwrLimitSize;
+	rTxPwrLimitPerRateCmdSize_6G = u4SetCmdTableMaxSize;
+	prTxPwrLimitPerRateCmd_6G =
+		kalMemAlloc(u4SetCmdTableMaxSize, VIR_MEM_TYPE);
+	if (!prTxPwrLimitPerRateCmd_6G) {
+		DBGLOG(RLM, ERROR,
+			"%s no buf to send cmd\n", __func__);
+		return;
+	}
 	/*initialize tx pwr table*/
 	kalMemSet(prTxPwrLimitPerRateCmd_6G->rChannelPowerLimit, MAX_TX_POWER,
 		ch_cnt * u4ChPwrLimitSize);
-
 	prTxPwrLimitPerRateCmd_6G->ucNum = ch_cnt;
 	prTxPwrLimitPerRateCmd_6G->eBand = 0x3;
 	prTxPwrLimitPerRateCmd_6G->u4CountryCode = rlmDomainGetCountryCode();
-
+	
+	/* FIX: Use channels from loaded data, not gTx_Pwr_Limit_6g_Ch */
 	for (ch_idx = 0; ch_idx < ch_cnt; ch_idx++) {
-	prTxPwrLimitPerRateCmd_6G->rChannelPowerLimit[ch_idx].u1CentralCh =
-	prChannelList[ch_idx];
+		prTxPwrLimitPerRateCmd_6G->rChannelPowerLimit[ch_idx].u1CentralCh =
+			pTxPwrLimitData->rChannelTxPwrLimit[ch_idx].ucChannel;
 	}
-
+	
 	rlmDomainTxPwrLimitPerRateSetValues(ucVersion,
 		prTxPwrLimitPerRateCmd_6G,
 		pTxPwrLimitData);
-
 	rlmDomainTxPwrLimitSendPerRateCmd_6G(prAdapter,
 		prTxPwrLimitPerRateCmd_6G);
 	kalMemFree(prTxPwrLimitPerRateCmd_6G, VIR_MEM_TYPE,
@@ -4883,7 +5059,6 @@ rlmDomainSendTxLegacyPwrLimitPerRateCmd_6G(struct ADAPTER *prAdapter,
 	struct CMD_SET_TXPOWER_COUNTRY_TX_LEGACY_POWER_LIMIT_PER_RATE
 		*prTxLegacyPwrLimitPerRateCmd_6G;
 	uint32_t rTxLegacyPwrLimitPerRateCmdSize_6G = 0;
-
 	uint32_t u4SetCmdTableMaxSize = 0;
 	uint32_t u4SetCountryTxLegacyPwrLimitCmdSize =
 		sizeof(struct
@@ -4891,50 +5066,69 @@ rlmDomainSendTxLegacyPwrLimitPerRateCmd_6G(struct ADAPTER *prAdapter,
 	uint32_t u4ChLegacyPwrLimitSize =
 		sizeof(struct
 		CMD_TXPOWER_CHANNEL_LEGACY_POWER_LIMIT_PER_RATE);
-	uint8_t ch_cnt = TX_PWR_LIMIT_6G_CH_NUM;
+	uint8_t ch_cnt = 0;
 	uint8_t ch_idx = 0;
-	const int8_t *prChannelList = &gTx_Pwr_Limit_6g_Ch[0];
-
-	wiphy = priv_to_wiphy(prAdapter->prGlueInfo);
-
-	u4SetCmdTableMaxSize = u4SetCountryTxLegacyPwrLimitCmdSize +
-	ch_cnt * u4ChLegacyPwrLimitSize;
-
-	rTxLegacyPwrLimitPerRateCmdSize_6G = u4SetCmdTableMaxSize;
-	prTxLegacyPwrLimitPerRateCmd_6G =
-	kalMemAlloc(u4SetCmdTableMaxSize, VIR_MEM_TYPE);
-
-	if (!prTxLegacyPwrLimitPerRateCmd_6G) {
+	
+	/* FIX: Use actual loaded channel count, not hardcoded TX_PWR_LIMIT_6G_CH_NUM */
+	if (!pTxLegacyPwrLimitData || pTxLegacyPwrLimitData->ucChNum == 0) {
 		DBGLOG(RLM, ERROR,
-		"%s no buf to send cmd\n", __func__);
+			"%s: No 6G legacy power limit data loaded (pTxLegacyPwrLimitData=%p, chNum=%u)\n",
+			__func__, pTxLegacyPwrLimitData,
+			pTxLegacyPwrLimitData ? pTxLegacyPwrLimitData->ucChNum : 0);
 		return;
 	}
-
+	
+	ch_cnt = pTxLegacyPwrLimitData->ucChNum;
+	
+	DBGLOG(RLM, INFO,
+		"%s: Using %u channels from loaded 6G legacy power limit data\n",
+		__func__, ch_cnt);
+	
+	wiphy = priv_to_wiphy(prAdapter->prGlueInfo);
+	u4SetCmdTableMaxSize = u4SetCountryTxLegacyPwrLimitCmdSize +
+		ch_cnt * u4ChLegacyPwrLimitSize;
+	rTxLegacyPwrLimitPerRateCmdSize_6G = u4SetCmdTableMaxSize;
+	prTxLegacyPwrLimitPerRateCmd_6G =
+		kalMemAlloc(u4SetCmdTableMaxSize, VIR_MEM_TYPE);
+	if (!prTxLegacyPwrLimitPerRateCmd_6G) {
+		DBGLOG(RLM, ERROR,
+			"%s no buf to send cmd\n", __func__);
+		return;
+	}
 	/*initialize tx pwr table*/
 	kalMemSet(prTxLegacyPwrLimitPerRateCmd_6G->
 		rChannelLegacyPowerLimit, MAX_TX_POWER,
 		ch_cnt * u4ChLegacyPwrLimitSize);
-
 	prTxLegacyPwrLimitPerRateCmd_6G->ucNum = ch_cnt;
 	prTxLegacyPwrLimitPerRateCmd_6G->eBand = 0x3;
 	prTxLegacyPwrLimitPerRateCmd_6G->
 		u4CountryCode = rlmDomainGetCountryCode();
-
+	
+	/* FIX: Use channels from loaded data, not gTx_Pwr_Limit_6g_Ch */
 	for (ch_idx = 0; ch_idx < ch_cnt; ch_idx++) {
-	prTxLegacyPwrLimitPerRateCmd_6G->
-		rChannelLegacyPowerLimit[ch_idx].u1CentralCh =
-		prChannelList[ch_idx];
+		prTxLegacyPwrLimitPerRateCmd_6G->
+			rChannelLegacyPowerLimit[ch_idx].u1CentralCh =
+			pTxLegacyPwrLimitData->rChannelTxLegacyPwrLimit[ch_idx].ucChannel;
 	}
-
+	
 	rlmDomainTxLegacyPwrLimitPerRateSetValues(ucVersion,
 		prTxLegacyPwrLimitPerRateCmd_6G,
 		pTxLegacyPwrLimitData);
-
 	rlmDomainTxLegacyPwrLimitSendPerRateCmd_6G(prAdapter,
 		prTxLegacyPwrLimitPerRateCmd_6G);
 	kalMemFree(prTxLegacyPwrLimitPerRateCmd_6G, VIR_MEM_TYPE,
 		u4SetCmdTableMaxSize);
 }
+
+
+
+
+
+
+
+
+
+
 
 #endif /* #if (CFG_SUPPORT_SINGLE_SKU_6G == 1) */
 
@@ -5035,133 +5229,197 @@ error:
 #endif/*CFG_SUPPORT_SINGLE_SKU*/
 
 
+
+
+
+
+
 void rlmDomainSendPwrLimitCmd_V2(struct ADAPTER *prAdapter)
 {
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
-    uint8_t ucVersion = 0;
-    uint32_t u4CountryCode;
-    struct TX_PWR_LIMIT_DATA *pTxPwrLimitData = NULL;
-    struct TX_PWR_LEGACY_LIMIT_DATA *pTxPwrLegacyLimitData = NULL;
+	uint8_t ucVersion = 0;
+	uint32_t u4CountryCode;
+	struct TX_PWR_LIMIT_DATA *pTxPwrLimitData = NULL;
+	struct TX_PWR_LEGACY_LIMIT_DATA *pTxPwrLegacyLimitData = NULL;
 
-    DBGLOG(RLM, INFO, "rlmDomainSendPwrLimitCmd_V2: Start\n");
+	DBGLOG(RLM, INFO, "rlmDomainSendPwrLimitCmd_V2: Start\n");
 
-    /* 1. State Protection */
-    if (g_mtk_regd_control.txpwr_limit_loaded) {
-        DBGLOG(RLM, INFO, "TxPwrLimit already loaded, skipping\n");
-        return;
-    }
+	/* Early exit if already loaded */
+	if (g_mtk_regd_control.txpwr_limit_loaded) {
+		DBGLOG(RLM, INFO, "TxPwrLimit already loaded, skipping\n");
+		return;
+	}
 
-    /* 2. Country Code Check */
-    u4CountryCode = rlmDomainGetCountryCode();
+	/* Get country code */
+	u4CountryCode = rlmDomainGetCountryCode();
 
-   
-   /* FIX: Reject invalid country codes */
-   if (u4CountryCode == 0x00005553 || /* "SU" - Soviet Union */
-       u4CountryCode == 0x00000000 || /* NULL */
-       u4CountryCode == 0xFFFFFFFF) { /* Invalid */
-       DBGLOG(RLM, WARN, "Invalid country code detected: 0x%08x, forcing US\n", 
-              u4CountryCode);
-       u4CountryCode = 0x00005355; /* "US" in little-endian */
-       rlmDomainSetCountryCode("US", 2);
-   }
-   
+	/* Validate country code */
+	if (u4CountryCode == 0x00000000 || u4CountryCode == 0xFFFFFFFF) {
+		DBGLOG(RLM, WARN, "Invalid country code 0x%08x, deferring load\n", 
+		       u4CountryCode);
+		return;
+	}
 
+	/* Special case: world regdom "00" - defer until country is set */
+	if (u4CountryCode == 0x00003030) {
+		DBGLOG(RLM, INFO, "Country code still '00', deferring load\n");
+		return;
+	}
 
-    if (u4CountryCode == 0x00003030) { /* "00" */
-        DBGLOG(RLM, INFO, "Country code still '00', deferring load\n");
-        return;
-    }
+	/* FIXED: Print bytes in correct order for little-endian 0x5553 = "US" */
+	DBGLOG(RLM, INFO, "Loading power limits for country 0x%04x ('%c%c')\n",
+	       u4CountryCode,
+	       (char)((u4CountryCode >> 8) & 0xFF),  /* High byte = 'U' */
+	       (char)(u4CountryCode & 0xFF));         /* Low byte = 'S' */
 
-    /* 3. Handle 2.4G / 5G Power Limits */
-    if (prAdapter->chip_info)
-        prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit_MT79x1.dat";
+	/* ===== 2.4 GHz / 5 GHz Power Limits ===== */
+	
+	if (prAdapter->chip_info)
+		prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit_MT79x1.dat";
 
-    pTxPwrLimitData = rlmDomainInitTxPwrLimitData(prAdapter);
-    pTxPwrLegacyLimitData = rlmDomainInitTxPwrLegacyLimitData(prAdapter);
+	pTxPwrLimitData = rlmDomainInitTxPwrLimitData(prAdapter);
+	pTxPwrLegacyLimitData = rlmDomainInitTxPwrLegacyLimitData(prAdapter);
 
-    if (pTxPwrLimitData && pTxPwrLegacyLimitData) {
-        if (rlmDomainGetTxPwrLimit(u4CountryCode, &ucVersion, prAdapter->prGlueInfo, pTxPwrLimitData) &&
-            rlmDomainGetTxPwrLegacyLimit(u4CountryCode, &ucVersion, prAdapter->prGlueInfo, pTxPwrLegacyLimitData)) {
+	if (!pTxPwrLimitData || !pTxPwrLegacyLimitData) {
+		DBGLOG(RLM, ERROR, "Failed to allocate power limit data structures\n");
+		goto cleanup_2g5g;
+	}
 
-            /* STRICT GUARD: Version 1 is missing sections (vht160) in your dump.
-               We explicitly skip it to force FW defaults. */
-	    if (ucVersion == 0) {
-		rlmDomainSendTxPwrLimitCmd(prAdapter, ucVersion, pTxPwrLimitData);
-	    } else if (ucVersion == 1 || ucVersion == 2) {
-		/* Version 1 may lack vht160, but other bands are valid */
-		if (pTxPwrLegacyLimitData->ucChNum > 0)
-		    rlmDomainSendTxLegacyPwrLimitPerRateCmd(prAdapter, ucVersion, pTxPwrLegacyLimitData);
+	/* Load power limit tables from .dat file */
+	if (rlmDomainGetTxPwrLimit(u4CountryCode, &ucVersion, 
+	                           prAdapter->prGlueInfo, pTxPwrLimitData) &&
+	    rlmDomainGetTxPwrLegacyLimit(u4CountryCode, &ucVersion,
+	                                  prAdapter->prGlueInfo, pTxPwrLegacyLimitData)) {
+		
+		/* Send commands based on version */
+		switch (ucVersion) {
+		case 0:
+			/* Version 0: legacy format */
+			rlmDomainSendTxPwrLimitCmd(prAdapter, ucVersion, pTxPwrLimitData);
+			break;
+			
+		case 1:
+		case 2:
+			/* Version 1/2: per-rate format (may lack some sections like vht160) */
+			if (pTxPwrLegacyLimitData->ucChNum > 0)
+				rlmDomainSendTxLegacyPwrLimitPerRateCmd(prAdapter, ucVersion,
+				                                         pTxPwrLegacyLimitData);
 
-		if (pTxPwrLimitData->ucChNum > 0) {
-		    rlmDomainSendTxPwrLimitPerRateCmd(prAdapter, ucVersion, pTxPwrLimitData);
+			if (pTxPwrLimitData->ucChNum > 0) {
+				rlmDomainSendTxPwrLimitPerRateCmd(prAdapter, ucVersion,
+				                                   pTxPwrLimitData);
 
-		    if (g_bTxBfBackoffExists)
-			rlmDomainSendTxBfBackoffCmd(prAdapter, ucVersion, pTxPwrLimitData);
+				if (g_bTxBfBackoffExists)
+					rlmDomainSendTxBfBackoffCmd(prAdapter, ucVersion,
+					                            pTxPwrLimitData);
+			}
+			break;
+			
+		default:
+			DBGLOG(RLM, WARN, "Unsupported TxPwrLimit version %d\n", ucVersion);
+			break;
 		}
-	    } else {
-		DBGLOG(RLM, WARN, "Unsupported TxPwrLimit Version %d\n", ucVersion);
-	    }
 
-            /* Mark loaded so we don't retry the broken file */
-            g_mtk_regd_control.txpwr_limit_loaded = TRUE;
-            DBGLOG(RLM, INFO, "2.4G/5G TxPwrLimit load attempt finished\n");
-        }
-    }
+		DBGLOG(RLM, INFO, "2.4G/5G TxPwrLimit loaded successfully (version %d)\n",
+		       ucVersion);
+	} else {
+		DBGLOG(RLM, WARN, "Failed to load 2.4G/5G power limits\n");
+	}
 
-    /* Memory Safety: Cleanup 2.4/5G */
-    if (pTxPwrLimitData) {
-        if (pTxPwrLimitData->rChannelTxPwrLimit)
-            kalMemFree(pTxPwrLimitData->rChannelTxPwrLimit, VIR_MEM_TYPE, sizeof(struct CHANNEL_TX_PWR_LIMIT) * pTxPwrLimitData->ucChNum);
-        kalMemFree(pTxPwrLimitData, VIR_MEM_TYPE, sizeof(struct TX_PWR_LIMIT_DATA));
-        pTxPwrLimitData = NULL;
-    }
-    if (pTxPwrLegacyLimitData) {
-        if (pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit)
-            kalMemFree(pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit, VIR_MEM_TYPE, sizeof(struct CHANNEL_TX_LEGACY_PWR_LIMIT) * pTxPwrLegacyLimitData->ucChNum);
-        kalMemFree(pTxPwrLegacyLimitData, VIR_MEM_TYPE, sizeof(struct TX_PWR_LEGACY_LIMIT_DATA));
-        pTxPwrLegacyLimitData = NULL;
-    }
+cleanup_2g5g:
+	/* Clean up 2.4G/5G structures */
+	if (pTxPwrLimitData) {
+		if (pTxPwrLimitData->rChannelTxPwrLimit)
+			kalMemFree(pTxPwrLimitData->rChannelTxPwrLimit,
+			           VIR_MEM_TYPE,
+			           sizeof(struct CHANNEL_TX_PWR_LIMIT) * pTxPwrLimitData->ucChNum);
+		kalMemFree(pTxPwrLimitData, VIR_MEM_TYPE, sizeof(struct TX_PWR_LIMIT_DATA));
+		pTxPwrLimitData = NULL;
+	}
+
+	if (pTxPwrLegacyLimitData) {
+		if (pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit)
+			kalMemFree(pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit,
+			           VIR_MEM_TYPE,
+			           sizeof(struct CHANNEL_TX_LEGACY_PWR_LIMIT) *
+			           pTxPwrLegacyLimitData->ucChNum);
+		kalMemFree(pTxPwrLegacyLimitData, VIR_MEM_TYPE,
+		           sizeof(struct TX_PWR_LEGACY_LIMIT_DATA));
+		pTxPwrLegacyLimitData = NULL;
+	}
 
 #if (CFG_SUPPORT_SINGLE_SKU_6G == 1)
-    /* 4. Handle 6G Power Limits */
-    pTxPwrLimitData = rlmDomainInitTxPwrLimitData_6G(prAdapter);
-    pTxPwrLegacyLimitData = rlmDomainInitTxLegacyPwrLimitData_6G(prAdapter);
+	/* ===== 6 GHz Power Limits ===== */
+	
+	pTxPwrLimitData = rlmDomainInitTxPwrLimitData_6G(prAdapter);
+	pTxPwrLegacyLimitData = rlmDomainInitTxLegacyPwrLimitData_6G(prAdapter);
 
-    if (pTxPwrLimitData && pTxPwrLegacyLimitData) {
-        if (prAdapter->chip_info)
-            prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit6G_MT79x1.dat";
-        
-        if (rlmDomainGetTxPwrLimit(u4CountryCode, &ucVersion, prAdapter->prGlueInfo, pTxPwrLimitData) &&
-            rlmDomainGetTxPwrLegacyLimit(u4CountryCode, &ucVersion, prAdapter->prGlueInfo, pTxPwrLegacyLimitData)) {
-            
-            if (ucVersion == 2) {
-                if (pTxPwrLimitData->ucChNum > 0)
-                    rlmDomainSendTxPwrLimitPerRateCmd_6G(prAdapter, ucVersion, pTxPwrLimitData);
-                if (pTxPwrLegacyLimitData->ucChNum > 0)
-                    rlmDomainSendTxLegacyPwrLimitPerRateCmd_6G(prAdapter, ucVersion, pTxPwrLegacyLimitData);
-            }
-            DBGLOG(RLM, INFO, "6G TxPwrLimit loaded successfully\n");
-        }
-        
-        if (prAdapter->chip_info)
-            prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit_MT79x1.dat";
-    }
+	if (!pTxPwrLimitData || !pTxPwrLegacyLimitData) {
+		DBGLOG(RLM, WARN, "Failed to allocate 6G power limit structures, skipping 6G\n");
+		goto cleanup_6g;
+	}
 
-    /* Memory Safety: Cleanup 6G */
-    if (pTxPwrLimitData) {
-        if (pTxPwrLimitData->rChannelTxPwrLimit)
-            kalMemFree(pTxPwrLimitData->rChannelTxPwrLimit, VIR_MEM_TYPE, sizeof(struct CHANNEL_TX_PWR_LIMIT) * pTxPwrLimitData->ucChNum);
-        kalMemFree(pTxPwrLimitData, VIR_MEM_TYPE, sizeof(struct TX_PWR_LIMIT_DATA));
-    }
-    if (pTxPwrLegacyLimitData) {
-        if (pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit)
-            kalMemFree(pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit, VIR_MEM_TYPE, sizeof(struct CHANNEL_TX_LEGACY_PWR_LIMIT) * pTxPwrLegacyLimitData->ucChNum);
-        kalMemFree(pTxPwrLegacyLimitData, VIR_MEM_TYPE, sizeof(struct TX_PWR_LEGACY_LIMIT_DATA));
-    }
+	if (prAdapter->chip_info)
+		prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit6G_MT79x1.dat";
+
+	/* Load 6G power limits - no fallback, user must configure correct country */
+	if (rlmDomainGetTxPwrLimit(u4CountryCode, &ucVersion,
+	                           prAdapter->prGlueInfo, pTxPwrLimitData) &&
+	    rlmDomainGetTxPwrLegacyLimit(u4CountryCode, &ucVersion,
+	                                  prAdapter->prGlueInfo, pTxPwrLegacyLimitData)) {
+		
+		/* 6G requires version 2 */
+		if (ucVersion == 2) {
+			if (pTxPwrLimitData->ucChNum > 0)
+				rlmDomainSendTxPwrLimitPerRateCmd_6G(prAdapter, ucVersion,
+				                                      pTxPwrLimitData);
+
+			if (pTxPwrLegacyLimitData->ucChNum > 0)
+				rlmDomainSendTxLegacyPwrLimitPerRateCmd_6G(prAdapter, ucVersion,
+				                                            pTxPwrLegacyLimitData);
+
+			DBGLOG(RLM, INFO, "6G TxPwrLimit loaded successfully\n");
+		} else {
+			DBGLOG(RLM, WARN, "6G power limits require version 2 (got %d)\n",
+			       ucVersion);
+		}
+	} else {
+		DBGLOG(RLM, WARN, "Failed to load 6G power limits for this country\n");
+	}
+
+	/* Restore 2.4G/5G filename for future use */
+	if (prAdapter->chip_info)
+		prAdapter->chip_info->prTxPwrLimitFile = "mediatek/mt7902/TxPwrLimit_MT79x1.dat";
+
+cleanup_6g:
+	/* Clean up 6G structures */
+	if (pTxPwrLimitData) {
+		if (pTxPwrLimitData->rChannelTxPwrLimit)
+			kalMemFree(pTxPwrLimitData->rChannelTxPwrLimit,
+			           VIR_MEM_TYPE,
+			           sizeof(struct CHANNEL_TX_PWR_LIMIT) * pTxPwrLimitData->ucChNum);
+		kalMemFree(pTxPwrLimitData, VIR_MEM_TYPE, sizeof(struct TX_PWR_LIMIT_DATA));
+	}
+
+	if (pTxPwrLegacyLimitData) {
+		if (pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit)
+			kalMemFree(pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit,
+			           VIR_MEM_TYPE,
+			           sizeof(struct CHANNEL_TX_LEGACY_PWR_LIMIT) *
+			           pTxPwrLegacyLimitData->ucChNum);
+		kalMemFree(pTxPwrLegacyLimitData, VIR_MEM_TYPE,
+		           sizeof(struct TX_PWR_LEGACY_LIMIT_DATA));
+	}
 #endif /* CFG_SUPPORT_SINGLE_SKU_6G */
+
+	/* Mark as loaded */
+	g_mtk_regd_control.txpwr_limit_loaded = TRUE;
+	DBGLOG(RLM, INFO, "rlmDomainSendPwrLimitCmd_V2: Complete\n");
 
 #endif /* CFG_SUPPORT_SINGLE_SKU */
 }
+
+
 
 
 #if CFG_SUPPORT_DYNAMIC_PWR_LIMIT

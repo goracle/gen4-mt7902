@@ -1320,6 +1320,8 @@ struct WIFI_VAR {
 u_int8_t    fgDeferredUsOverride;
 uint16_t    u2DeferredCountryCode;
 
+
+
 };
 
 /* cnm_timer module */
@@ -1596,6 +1598,7 @@ struct ADAPTER {
 	u_int8_t fgIsEnterD3ReqIssued;
 
 	uint8_t aucMacAddress[MAC_ADDR_LEN];
+  uint8_t aucMacAddrBin[6];                      // The actual binary MAC
 
 	/* Current selection basing on the set of Available PHY Types */
 	enum ENUM_PHY_TYPE_INDEX eCurrentPhyType;

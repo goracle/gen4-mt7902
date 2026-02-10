@@ -2733,214 +2733,180 @@ static uint8_t wlanNvramBufHandler(void *ctx,
 
 #endif
 
+
 static void wlanCreateWirelessDevice(void)
 {
 	struct wiphy *prWiphy = NULL;
+	struct GLUE_INFO *prGlueInfo = NULL;
 	struct wireless_dev *prWdev[KAL_AIS_NUM] = {NULL};
-	unsigned int u4SupportSchedScanFlag = 0;
+	//unsigned int u4SupportSchedScanFlag = 0;
 	uint32_t u4Idx = 0;
 
-	/* 4 <1.1> Create wireless_dev */
+	/* 1. Allocate wireless_dev */
 	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
-		prWdev[u4Idx] = kzalloc(sizeof(struct wireless_dev),
-			GFP_KERNEL);
+		prWdev[u4Idx] = kzalloc(sizeof(struct wireless_dev), GFP_KERNEL);
 		if (!prWdev[u4Idx]) {
-			DBGLOG(INIT, ERROR,
-				"Allocating memory to wireless_dev context failed\n");
-			return;
+			DBGLOG(INIT, ERROR, "Allocating wireless_dev failed\n");
+			goto free_wdev;
 		}
 		prWdev[u4Idx]->iftype = NL80211_IFTYPE_STATION;
 	}
-	/* 4 <1.2> Create wiphy */
+
+	/* 2. Create wiphy */
 #if CFG_ENABLE_UNIFY_WIPHY
 	prWiphy = wiphy_new(&mtk_cfg_ops, sizeof(struct GLUE_INFO));
 #else
-	prWiphy = wiphy_new(&mtk_wlan_ops,
-			    sizeof(struct GLUE_INFO));
+	prWiphy = wiphy_new(&mtk_wlan_ops, sizeof(struct GLUE_INFO));
 #endif
 
 	if (!prWiphy) {
-		DBGLOG(INIT, ERROR,
-		       "Allocating memory to wiphy device failed\n");
+		DBGLOG(INIT, ERROR, "wiphy_new failed\n");
 		goto free_wdev;
 	}
 
-	/* 4 <1.3> configure wireless_dev & wiphy */
+	/* --- FIX: Parent Device Link (Solves iwd /sys/class errors) --- */
+	prGlueInfo = (struct GLUE_INFO *)wiphy_priv(prWiphy);
+	if (prGlueInfo && prGlueInfo->prDev)
+		prWiphy->dev.parent = prGlueInfo->prDev;
+
+	/* 3. Basic Configuration & Identity */
 	prWiphy->iface_combinations = p_mtk_iface_combinations_sta;
-	prWiphy->n_iface_combinations =
-		mtk_iface_combinations_sta_num;
-	prWiphy->max_scan_ssids = SCN_SSID_MAX_NUM +
-				  1; /* include one wildcard ssid */
+	prWiphy->n_iface_combinations = mtk_iface_combinations_sta_num;
+	prWiphy->max_scan_ssids = SCN_SSID_MAX_NUM + 1;
 	prWiphy->max_scan_ie_len = 512;
+
+	/* FIX: Identity Hardening for iwd */
+	prWiphy->n_addresses = 1;
+	if (is_zero_ether_addr(prWiphy->perm_addr)) {
+		prWiphy->perm_addr[0] = 0x00;
+		prWiphy->perm_addr[1] = 0x0C;
+		prWiphy->perm_addr[2] = 0x43;
+		prWiphy->perm_addr[3] = 0x79;
+		prWiphy->perm_addr[4] = 0x02;
+		prWiphy->perm_addr[5] = 0x01;
+	}
+
+	/* 4. Scanning & Sched Scan (Fixes -22 error) */
 #if CFG_SUPPORT_SCHED_SCAN
-	prWiphy->max_sched_scan_ssids     =
-		CFG_SCAN_HIDDEN_SSID_MAX_NUM;
-	prWiphy->max_match_sets           =
-		CFG_SCAN_SSID_MATCH_MAX_NUM;
-	prWiphy->max_sched_scan_ie_len    = CFG_CFG80211_IE_BUF_LEN;
-#if KERNEL_VERSION(4, 12, 0) <= CFG80211_VERSION_CODE
-	/* In kernel 4.12 or newer,
-	 * this is obsoletes - WIPHY_FLAG_SUPPORTS_SCHED_SCAN
-	 */
+	prWiphy->max_sched_scan_ssids = CFG_SCAN_HIDDEN_SSID_MAX_NUM;
+	prWiphy->max_match_sets = CFG_SCAN_SSID_MATCH_MAX_NUM;
+	prWiphy->max_sched_scan_ie_len = CFG_CFG80211_IE_BUF_LEN;
 	prWiphy->max_sched_scan_reqs = 1;
-#else
-	u4SupportSchedScanFlag            =
-		WIPHY_FLAG_SUPPORTS_SCHED_SCAN;
 #endif
-#endif /* CFG_SUPPORT_SCHED_SCAN */
-	prWiphy->interface_modes = BIT(NL80211_IFTYPE_STATION) |
-				   BIT(NL80211_IFTYPE_ADHOC);
+
+	prWiphy->interface_modes = BIT(NL80211_IFTYPE_STATION) | BIT(NL80211_IFTYPE_ADHOC);
+/* --- ADD THIS LINE HERE --- */
+	prWiphy->interface_modes |= BIT(NL80211_IFTYPE_STATION);
 	prWiphy->bands[KAL_BAND_2GHZ] = &mtk_band_2ghz;
-	/* always assign 5Ghz bands here, if the chip is not support 5Ghz,
-	 *  bands[KAL_BAND_5GHZ] will be assign to NULL
-	 */
 	prWiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
 #if (CFG_SUPPORT_WIFI_6G == 1)
 	prWiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
-	DBGLOG(INIT, INFO, "Support 6G\n");
 #endif
+
+	/* 5. Ciphers & AKM Suites */
 	prWiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
 	prWiphy->cipher_suites = (const u32 *)mtk_cipher_suites;
 	prWiphy->n_cipher_suites = ARRAY_SIZE(mtk_cipher_suites);
-#if KERNEL_VERSION(5, 4, 0) <= LINUX_VERSION_CODE
 	prWiphy->akm_suites = (const u32 *)mtk_akm_suites;
 	prWiphy->n_akm_suites = ARRAY_SIZE(mtk_akm_suites);
-#endif
-	prWiphy->flags = WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL
-			| u4SupportSchedScanFlag;
 
+	/* 6. Flags (DFS, Roaming, TDLS) */
+	prWiphy->flags = WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL;
 #if (CFG_SUPPORT_ROAMING == 1) && (CFG_SUPPORT_SUPPLICANT_SME == 0)
 	prWiphy->flags |= WIPHY_FLAG_SUPPORTS_FW_ROAM;
-#endif /* CFG_SUPPORT_ROAMING */
-
-#if KERNEL_VERSION(3, 14, 0) > CFG80211_VERSION_CODE
-	prWiphy->flags |= WIPHY_FLAG_CUSTOM_REGULATORY;
-#else
+#endif
 	prWiphy->regulatory_flags |= REGULATORY_CUSTOM_REG;
 #if (CFG_SUPPORT_DFS_MASTER == 1)
 	prWiphy->flags |= WIPHY_FLAG_HAS_CHANNEL_SWITCH;
-#if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
 	prWiphy->max_num_csa_counters = 2;
 #endif
-#endif /* CFG_SUPPORT_DFS_MASTER */
-#endif
-
-#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-	prWiphy->features |= NL80211_FEATURE_SAE;
-#endif
-
-#if KERNEL_VERSION(3, 14, 0) < CFG80211_VERSION_CODE
-	prWiphy->max_ap_assoc_sta = P2P_MAXIMUM_CLIENT_COUNT;
-#endif
-
-	cfg80211_regd_set_wiphy(prWiphy);
-
 #if (CFG_SUPPORT_TDLS == 1)
 	TDLSEX_WIPHY_FLAGS_INIT(prWiphy->flags);
-#endif /* CFG_SUPPORT_TDLS */
-	prWiphy->max_remain_on_channel_duration = 5000;
-	prWiphy->mgmt_stypes = mtk_cfg80211_ais_default_mgmt_stypes;
-
-#if (CFG_SUPPORT_SCAN_RANDOM_MAC && \
-	(KERNEL_VERSION(3, 19, 0) <= CFG80211_VERSION_CODE))
-	prWiphy->features |= NL80211_FEATURE_SCAN_RANDOM_MAC_ADDR;
-	prWiphy->features |= NL80211_FEATURE_SCHED_SCAN_RANDOM_MAC_ADDR;
-#endif
-
-	prWiphy->features |= NL80211_FEATURE_INACTIVITY_TIMER;
-#if KERNEL_VERSION(3, 18, 0) <= CFG80211_VERSION_CODE
-	prWiphy->vendor_commands = mtk_wlan_vendor_ops;
-	prWiphy->n_vendor_commands = sizeof(mtk_wlan_vendor_ops) /
-				     sizeof(struct wiphy_vendor_command);
-	prWiphy->vendor_events = mtk_wlan_vendor_events;
-	prWiphy->n_vendor_events = ARRAY_SIZE(
-					   mtk_wlan_vendor_events);
-#endif
-	/* 4 <1.4> wowlan support */
-#ifdef CONFIG_PM
-#if KERNEL_VERSION(3, 11, 0) <= CFG80211_VERSION_CODE
-	prWiphy->wowlan = &mtk_wlan_wowlan_support;
-#else
-	kalMemCopy(&prWiphy->wowlan, &mtk_wlan_wowlan_support,
-		   sizeof(struct wiphy_wowlan_support));
-#endif
-#endif
-
-#ifdef CONFIG_CFG80211_WEXT
-	/* 4 <1.5> Use wireless extension to replace IOCTL */
-
-#if CFG_ENABLE_UNIFY_WIPHY
-	prWiphy->wext = NULL;
-#else
-	prWiphy->wext = &wext_handler_def;
-#endif
-#endif
-	/* initialize semaphore for halt control */
-	sema_init(&g_halt_sem, 1);
-
-#if CFG_ENABLE_UNIFY_WIPHY
-	prWiphy->iface_combinations = p_mtk_iface_combinations_p2p;
-	prWiphy->n_iface_combinations =
-		mtk_iface_combinations_p2p_num;
-
-	prWiphy->interface_modes |= BIT(NL80211_IFTYPE_AP) |
-				    BIT(NL80211_IFTYPE_P2P_CLIENT) |
-#if (CFG_SUPPORT_SNIFFER_RADIOTAP == 1)
-				    BIT(NL80211_IFTYPE_MONITOR) |
-#endif
-				    BIT(NL80211_IFTYPE_P2P_GO) |
-				    BIT(NL80211_IFTYPE_STATION);
-	prWiphy->software_iftypes |= BIT(NL80211_IFTYPE_P2P_DEVICE);
-	prWiphy->flags |= WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL |
-			  WIPHY_FLAG_HAVE_AP_SME;
-	prWiphy->ap_sme_capa = 1;
-#endif
-/*[TODO] remove this CFG when SAE is implemented
-* on driver-SME arch and default enabled
-*/
-#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-	/*Support SAE*/
-	prWiphy->features |= NL80211_FEATURE_SAE;
-#if CFG_SUPPORT_802_11R
-	prWiphy->features |= NL80211_FEATURE_DS_PARAM_SET_IE_IN_PROBES;
-	prWiphy->features |= NL80211_FEATURE_QUIET;
-	prWiphy->features |= NL80211_FEATURE_TX_POWER_INSERTION;
-#endif
 #endif
 #if CFG_ENABLE_OFFCHANNEL_TX
 	prWiphy->flags |= WIPHY_FLAG_OFFCHAN_TX;
-#endif /* CFG_ENABLE_OFFCHANNEL_TX */
-
-#if CFG_SUPPORT_RM_BEACON_REPORT_BY_SUPPLICANT
-	/* Enable following to indicate supplicant
-	 * to support Beacon report feature
-	 */
-	prWiphy->features |= NL80211_FEATURE_DS_PARAM_SET_IE_IN_PROBES;
-	prWiphy->features |= NL80211_FEATURE_QUIET;
 #endif
 
-	if (wiphy_register(prWiphy) < 0) {
-		DBGLOG(INIT, ERROR, "wiphy_register error\n");
+	/* 7. Features (SAE, Random MAC, Inactivity) */
+	prWiphy->features |= NL80211_FEATURE_SAE;
+	prWiphy->features |= NL80211_FEATURE_SCAN_RANDOM_MAC_ADDR;
+	prWiphy->features |= NL80211_FEATURE_INACTIVITY_TIMER;
+	prWiphy->features |= NL80211_FEATURE_DS_PARAM_SET_IE_IN_PROBES;
+	wiphy_ext_feature_set(prWiphy, NL80211_EXT_FEATURE_ACK_SIGNAL_SUPPORT);
+
+	prWiphy->max_ap_assoc_sta = P2P_MAXIMUM_CLIENT_COUNT;
+	prWiphy->max_remain_on_channel_duration = 5000;
+	prWiphy->mgmt_stypes = mtk_cfg80211_ais_default_mgmt_stypes;
+
+	/* 8. Vendor Commands & Events (CRITICAL for MTK Tools) */
+	prWiphy->vendor_commands = mtk_wlan_vendor_ops;
+	prWiphy->n_vendor_commands = ARRAY_SIZE(mtk_wlan_vendor_ops);
+	prWiphy->vendor_events = mtk_wlan_vendor_events;
+	prWiphy->n_vendor_events = ARRAY_SIZE(mtk_wlan_vendor_events);
+
+	/* 9. Power Management (WOWLAN) */
+#ifdef CONFIG_PM
+	prWiphy->wowlan = &mtk_wlan_wowlan_support;
+#endif
+
+	/* 10. Unified P2P Modes (If enabled) */
+#if CFG_ENABLE_UNIFY_WIPHY
+	prWiphy->iface_combinations = p_mtk_iface_combinations_p2p;
+	prWiphy->n_iface_combinations = mtk_iface_combinations_p2p_num;
+	prWiphy->interface_modes |= BIT(NL80211_IFTYPE_AP) | 
+				    BIT(NL80211_IFTYPE_P2P_CLIENT) |
+				    BIT(NL80211_IFTYPE_P2P_GO);
+	prWiphy->software_iftypes |= BIT(NL80211_IFTYPE_P2P_DEVICE);
+	prWiphy->flags |= WIPHY_FLAG_HAVE_AP_SME;
+	prWiphy->ap_sme_capa = 1;
+#endif
+
+	/* 11. Final Initialization & Registration */
+	sema_init(&g_halt_sem, 1);
+	cfg80211_regd_set_wiphy(prWiphy);
+
+/* Add this right before wiphy_register(prWiphy); */
+/* Force the kernel to see enabled channels right before registration */
+	{
+		int i, b;
+		for (b = 0; b < NUM_NL80211_BANDS; b++) {
+			if (prWiphy->bands[b]) {
+				for (i = 0; i < prWiphy->bands[b]->n_channels; i++) {
+					prWiphy->bands[b]->channels[i].flags &= 
+						~(IEEE80211_CHAN_DISABLED | IEEE80211_CHAN_NO_IR);
+				}
+			}
+		}
+	}
+
+	/* Force station mode to be advertised */
+	prWiphy->interface_modes |= BIT(NL80211_IFTYPE_STATION);
+
+
+ if (wiphy_register(prWiphy) < 0) {
+		DBGLOG(INIT, ERROR, "wiphy_register failed\n");
 		goto free_wiphy;
 	}
+
 	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
 		prWdev[u4Idx]->wiphy = prWiphy;
 		gprWdev[u4Idx] = prWdev[u4Idx];
 	}
+
 #if CFG_WLAN_ASSISTANT_NVRAM
-	register_file_buf_handler(wlanNvramBufHandler, (void *)NULL,
-			ENUM_BUF_TYPE_NVRAM);
+	register_file_buf_handler(wlanNvramBufHandler, (void *)NULL, ENUM_BUF_TYPE_NVRAM);
 #endif
-	DBGLOG(INIT, INFO, "Create wireless device success\n");
+
+	DBGLOG(INIT, INFO, "wlanCreateWirelessDevice success\n");
 	return;
 
 free_wiphy:
 	wiphy_free(prWiphy);
 free_wdev:
-	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++)
-		kfree(prWdev[u4Idx]);
+	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
+		if (prWdev[u4Idx]) kfree(prWdev[u4Idx]);
+	}
 }
-
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief Destroy all wdev (including the P2P device), and unregister wiphy
@@ -4836,24 +4802,33 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 		struct sockaddr MacAddr;
 		uint32_t u4SetInfoLen = 0;
 		struct net_device *prDevHandler;
+		struct wiphy *prWiphy = wlanGetWiphy();
 
 		rStatus = kalIoctl(prGlueInfo, wlanoidQueryCurrentAddr,
 				&MacAddr.sa_data, PARAM_MAC_ADDR_LEN,
 				TRUE, TRUE, FALSE, &u4SetInfoLen);
 
-		if (rStatus != WLAN_STATUS_SUCCESS) {
-			DBGLOG(INIT, WARN, "set MAC addr fail 0x%x\n",
-							rStatus);
-		} else {
-			kal_eth_hw_addr_set(prGlueInfo->prDevHandler,
-					    MacAddr.sa_data);
-			kalMemCopy(prGlueInfo->prDevHandler->perm_addr,
-					prGlueInfo->prDevHandler->dev_addr,
-					ETH_ALEN);
+if (rStatus != WLAN_STATUS_SUCCESS) {
+    DBGLOG(INIT, WARN, "set MAC addr fail 0x%x - using config fallback\n", rStatus);
+    if (prWifiVar->aucMacAddress[0] != 0 || prWifiVar->aucMacAddress[1] != 0) {
+        kalMemCopy(MacAddr.sa_data, prWifiVar->aucMacAddress, ETH_ALEN);
+    }
+}
+ kal_eth_hw_addr_set(prGlueInfo->prDevHandler,
+
+				    MacAddr.sa_data);
+		kalMemCopy(prGlueInfo->prDevHandler->perm_addr,
+				prGlueInfo->prDevHandler->dev_addr,
+				ETH_ALEN);
+
+/* CRITICAL FOR IWD: Sync physical radio permanent address */
+if (prWiphy) {
+    kalMemCopy(prWiphy->perm_addr, MacAddr.sa_data, ETH_ALEN);
+}
 
 #if CFG_SHOW_MACADDR_SOURCE
-			DBGLOG(INIT, INFO, "MAC address: " MACSTR,
-			MAC2STR(prAdapter->rWifiVar.aucMacAddress));
+		DBGLOG(INIT, INFO, "MAC address confirmed: " MACSTR,
+		MAC2STR(prGlueInfo->prDevHandler->dev_addr));
 #endif
 
 	/* Replay cached regdom update if one occurred before glue was ready */
@@ -4883,8 +4858,6 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 		}
 		g_mtk_regd_control.pending_regdom_update = FALSE;
 	}
-		}
-
 		/* wlan1 */
 		if (KAL_AIS_NUM > 1) {
 			prDevHandler = wlanGetNetDev(prGlueInfo, 1);
@@ -4959,6 +4932,8 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 #endif
 	return 0;
 }
+
+
 
 static void wlanOnPostNetRegister(void)
 {

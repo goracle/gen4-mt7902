@@ -560,114 +560,120 @@ static inline int hexval(char c)
 	return -1;
 }
 
-/* improved, robust parser */
+/**
+ * parse_mac_address_string - Hardened MAC parser for MT7902
+ * @prAdapter: Pointer to adapter structure
+ * @prWifiVar: Pointer to wifi variables
+ * * Hardening features:
+ * 1. Strict length validation to prevent stack/buffer overflows.
+ * 2. Explicit character validation (rejects ASCII corruption).
+ * 3. Null-termination guarantees for all local buffers.
+ * 4. Chain-of-custody validation for structure pointers.
+ * 5. Kernel-standard hex conversion (kstrtou8).
+ */
+/**
+ * parse_mac_address_string - Hardened MAC parser for MT7902
+ */
 static int parse_mac_address_string(struct ADAPTER *prAdapter,
                                     struct WIFI_VAR *prWifiVar)
 {
+    /* Use a fixed-size local buffer to avoid stack exhaustion */
     char macStr[WLAN_CFG_VALUE_LEN_MAX];
-    char hexbuf[13]; /* 12 hex chars + NUL */
-    uint8_t mac[6];
-    int len = -1, i, k;
+    char hexDigits[13]; 
+    uint8_t mac[ETH_ALEN];
+    int len = 0, i = 0, k = 0, digit_count = 0;
     const char *keys[] = { "MacAddr", "MacAddress" };
-    size_t dest_buf_len = WLAN_MAC_ADDR_STR_LEN; /* explicit, not sizeof(struct member) */
 
-    if (!prAdapter || !prWifiVar)
-        return -1;
+    /* 1. Pointer Integrity Check */
+    if (!prAdapter || !prWifiVar) {
+        return -EINVAL;
+    }
 
+    /* 2. State Check */
     if (prWifiVar->ucMacAddrOverride == 0)
-        return -1;
+        return -ENOTSUPP;
 
-    /* find key */
-    for (k = 0; k < (int)(sizeof(keys)/sizeof(keys[0])); k++) {
-        len = wlanCfgGetStringSafe(prAdapter, keys[k],
-                                  macStr, sizeof(macStr), "");
-        if (len > 0)
+    /* 3. Secure String Extraction */
+    /* Ensure local buffer is clean before use */
+    memset(macStr, 0, sizeof(macStr));
+    
+    for (k = 0; k < (int)ARRAY_SIZE(keys); k++) {
+        /* wlanCfgGetStringSafe is used, but we force a limit of sizeof(macStr)-1 */
+        len = wlanCfgGetStringSafe(prAdapter, (char *)keys[k],
+                                  macStr, sizeof(macStr) - 1, "");
+        if (len > 0) break;
+    }
+
+    if (len <= 0 || len >= sizeof(macStr)) {
+        return -ENOENT;
+    }
+
+    /* 4. Defensive Parsing (No Overreads) */
+    memset(hexDigits, 0, sizeof(hexDigits));
+    
+    /* Strict loop: cannot exceed 'len' (input) or 12 (output) */
+    for (i = 0; i < len && digit_count < 12; i++) {
+        /* Reject anything that isn't a hex digit immediately */
+        if (isxdigit((unsigned char)macStr[i])) {
+            hexDigits[digit_count++] = macStr[i];
+        } else if (macStr[i] == ':' || macStr[i] == '-' || macStr[i] == ' ') {
+            /* Valid separators - skip silently */
+            continue;
+        } else if (macStr[i] == '\0') {
             break;
-    }
-    if (len <= 0) {
-        DBGLOG(INIT, INFO, "parse_mac: no MacAddr/MacAddress entry\n");
-        return -1;
-    }
-
-    /* trim leading/trailing whitespace (operate on unsigned char values) */
-    int start = 0, end = len - 1;
-    while (start <= end && (unsigned char)macStr[start] <= ' ' )
-        start++;
-    while (end >= start && (unsigned char)macStr[end] <= ' ')
-        end--;
-
-    /* collect exactly 12 hex digits */
-    int outpos = 0;
-    for (i = start; i <= end; i++) {
-        int v = hexval((unsigned char)macStr[i]);
-        if (v >= 0) {
-            if (outpos >= 12) { /* guard */
-                DBGLOG(INIT, WARN, "parse_mac: too many hex digits in \"%s\"\n", &macStr[start]);
-                return -1;
-            }
-            hexbuf[outpos++] = macStr[i];
         } else {
-            /* allowed separators */
-            if (macStr[i] == ':' || macStr[i] == '-' || macStr[i] == ' ' || macStr[i] == '\t')
-                continue;
-            DBGLOG(INIT, WARN, "parse_mac: unexpected char '%c' in \"%s\"\n", macStr[i], &macStr[start]);
-            return -1;
+            /* Malicious or corrupted junk detected */
+            DBGLOG(INIT, ERROR, "MAC: Illegal character 0x%x in config\n", (unsigned char)macStr[i]);
+            return -EILSEQ;
         }
     }
 
-    if (outpos != 12) {
-        DBGLOG(INIT, WARN, "parse_mac: expected 12 hex digits, got %d in \"%s\"\n", outpos, &macStr[start]);
-        return -1;
+    if (digit_count != 12) {
+        DBGLOG(INIT, ERROR, "MAC: Incomplete address (%d/12 digits)\n", digit_count);
+        return -EINVAL;
     }
-    hexbuf[12] = '\0';
 
-    /* parse into bytes */
+    /* 5. Safe Conversion with kstrtou8 */
     for (i = 0; i < 6; i++) {
-        int hi = hexval((unsigned char)hexbuf[2 * i]);
-        int lo = hexval((unsigned char)hexbuf[2 * i + 1]);
-        if (hi < 0 || lo < 0) {
-            DBGLOG(INIT, WARN, "parse_mac: invalid hex when parsing \"%s\"\n", hexbuf);
-            return -1;
+        char pair[3];
+        pair[0] = hexDigits[i*2];
+        pair[1] = hexDigits[i*2+1];
+        pair[2] = '\0';
+        
+        if (kstrtou8(pair, 16, &mac[i]) != 0)
+            return -EIO;
+    }
+
+    /* 6. Validate result isn't Multicast or All-Zeros */
+    if (!is_valid_ether_addr(mac)) {
+        DBGLOG(INIT, ERROR, "MAC: %pM is not a valid unicast address\n", mac);
+        return -EADDRNOTAVAIL;
+    }
+
+    /* 7. Atomic-style Update of Driver State */
+    /* Copying to internal buffers only after all validation passes */
+    memcpy(prWifiVar->aucMacAddress, mac, ETH_ALEN);
+    memcpy(prAdapter->aucMacAddress, mac, ETH_ALEN);
+    
+    /* Ensure string version is properly null-terminated */
+    snprintf(prWifiVar->aucMacAddrStr, sizeof(prWifiVar->aucMacAddrStr), "%pM", mac);
+
+    /* 8. Kernel NetDev Sync (The Oops-Guard) */
+    if (prAdapter->prGlueInfo) {
+        /* Accessing the glue layer requires checking if the net_device pointer exists */
+        struct net_device *prNetDev = prAdapter->prGlueInfo->prDevHandler;
+
+        if (prNetDev && prNetDev->reg_state == NETREG_REGISTERED) {
+            DBGLOG(INIT, INFO, "MAC: Successfully pushed %pM to Kernel\n", mac);
+            kal_eth_hw_addr_set(prNetDev, mac);
         }
-        mac[i] = (uint8_t)((hi << 4) | lo);
     }
-
-    /* reject multicast or all-zero */
-    if (is_multicast_ether_addr(mac) || is_zero_ether_addr(mac)) {
-        DBGLOG(INIT, WARN, "parse_mac: multicast or zero MAC rejected\n");
-        return -1;
-    }
-
-    /* IMPORTANT: use an explicit, known size constant, not sizeof(member) */
-    if (dest_buf_len < WLAN_MAC_ADDR_STR_LEN) {
-        DBGLOG(INIT, WARN, "parse_mac: configured WLAN_MAC_ADDR_STR_LEN too small\n");
-        return -1;
-    }
-
-    /* write canonical lower-case colon-separated string */
-    kalSnprintf(prWifiVar->aucMacAddrStr, dest_buf_len,
-                "%02x:%02x:%02x:%02x:%02x:%02x",
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-
-    /* optional: store raw bytes if struct has space (helpful) */
-#ifdef WIFI_VAR_HAS_RAW_MAC /* put this macro in your struct header if you add this */
-    memcpy(prWifiVar->aucMacAddr, mac, sizeof(mac));
-#endif
-
-    /* write canonical lower-case colon-separated string */
-    kalSnprintf(prWifiVar->aucMacAddrStr, dest_buf_len,
-                "%02x:%02x:%02x:%02x:%02x:%02x",
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-
-    /* Change this line: */
-    memcpy(prWifiVar->aucMacAddress, mac, 6); 
-
-    DBGLOG(INIT, INFO, "MAC override applied: %s (raw %02x:%02x:%02x:%02x:%02x:%02x)\n",
-           prWifiVar->aucMacAddrStr,
-           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     return 0;
 }
+
+
+
 
 
 #define SIGNED_EXTEND(n, _sValue) \
@@ -1568,8 +1574,26 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 	glCustomGenlInit();
 #endif
 
+/* --- FINAL STEP: Apply deferred Country Code --- */
+	/* * We check u4Status to ensure FW is ready.
+	 * We use the u2CountryCode we cached during the "defanged" early call.
+	 */
+	if (u4Status == WLAN_STATUS_SUCCESS && prAdapter->rWifiVar.u2CountryCode == 0x5553) {
+		struct wiphy *prWiphy = wlanGetWiphy();
+		
+		DBGLOG(INIT, INFO, "Applying deferred US CountryCode override after FW ready\n");
+		
+		/* * Now that u4Status is SUCCESS and fgIsFwDownloaded is true, 
+		 * rlmDomainCountryCodeUpdate will pass its internal guards.
+		 */
+		rlmDomainCountryCodeUpdate(prAdapter, prWiphy, 0x5553);
+	}
+
 	return u4Status;
 }				/* wlanAdapterStart */
+
+
+
 
 void wlanOffClearAllQueues(IN struct ADAPTER *prAdapter)
 {
@@ -4048,50 +4072,31 @@ void wlanoidClearTimeoutCheck(IN struct ADAPTER *prAdapter)
 /*----------------------------------------------------------------------------*/
 uint32_t wlanUpdateNetworkAddress(IN struct ADAPTER *prAdapter)
 {
-	const uint8_t aucZeroMacAddr[] = NULL_MAC_ADDR;
-	uint8_t rMacAddr[PARAM_MAC_ADDR_LEN];
+    uint8_t rMacAddr[6];
+    struct WIFI_VAR *prWifiVar = &prAdapter->rWifiVar;
 
-	DEBUGFUNC("wlanUpdateNetworkAddress");
-	ASSERT(prAdapter);
+    /* 1. Get the string from the config store */
+    /* We call our hardened parser here because wlanCfgParse has finished */
+    if (parse_mac_address_string(prAdapter, prWifiVar) == 0) {
+        DBGLOG(INIT, INFO, "MAC: Applied override from wifi.cfg\n");
+        COPY_MAC_ADDR(rMacAddr, prWifiVar->aucMacAddress); // Use the binary field!
+    } 
+    else {
+        /* 2. Emergency fallback */
+        DBGLOG(INIT, WARN, "MAC: No valid config found, using emergency LAA\n");
+        rMacAddr[0] = 0x02; rMacAddr[1] = 0x0c; rMacAddr[2] = 0xe7;
+        rMacAddr[3] = 0x66; rMacAddr[4] = 0x32; rMacAddr[5] = 0xe1;
+    }
 
-	/* --- No-NVRAM Fix: Skip Hardware Probing --- */
-	/* We intentionally skip nicpmSetDriverOwn and kalRetrieveNetworkAddress 
-	 * because touching the registers on a chip with no NVRAM/EFUSE 
-	 * is causing your PCIe 'Slave no response' hang.
-	 */
+    /* Commit the validated binary address */
+    COPY_MAC_ADDR(prAdapter->aucMacAddress, rMacAddr);
+    prAdapter->fgIsEmbbededMacAddrValid = TRUE;
 
-	/* 1. Check if we already have a valid MAC from wifi.cfg or our static default 
-	 * that we set in wlanInitFeatureOption.
-	 */
-	if (!EQUAL_MAC_ADDR(aucZeroMacAddr, prAdapter->rWifiVar.aucMacAddrStr)) {
-		DBGLOG(INIT, INFO, "Using MAC from FeatureOption buffer (Virtual NVRAM)\n");
-		COPY_MAC_ADDR(rMacAddr, prAdapter->rWifiVar.aucMacAddrStr);
-	} 
-	else {
-		/* 2. Emergency fallback if even the buffer is empty */
-		DBGLOG(INIT, WARN, "No MAC in buffer, generating emergency LAA\n");
-		rMacAddr[0] = 0x02; /* Locally Administered bit set */
-		rMacAddr[1] = 0x0c;
-		rMacAddr[2] = 0xe7;
-		rMacAddr[3] = 0x66;
-		rMacAddr[4] = 0x32;
-		rMacAddr[5] = 0xe1;
-	}
-
-#if WLAN_INCLUDE_SYS
-	sysMacAddrOverride(rMacAddr);
-#endif
-
-	/* Commit the address to the adapter structure */
-	COPY_MAC_ADDR(prAdapter->rWifiVar.aucMacAddress, rMacAddr);
-
-	/* Tell the driver this is now a "valid" embedded address so it stops 
-	 * trying to re-init the network address later.
-	 */
-	prAdapter->fgIsEmbbededMacAddrValid = TRUE;
-
-	return WLAN_STATUS_SUCCESS;
+    return WLAN_STATUS_SUCCESS;
 }
+
+
+
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief This function is called to update basic configuration into firmware
@@ -9099,149 +9104,95 @@ uint32_t wlanCfgParseToFW(int8_t **args, int8_t *args_size,
 /*----------------------------------------------------------------------------*/
 void wlanFeatureToFw(IN struct ADAPTER *prAdapter)
 {
-
 	struct WLAN_CFG_ENTRY *prWlanCfgEntry;
 	uint32_t i;
 	struct CMD_HEADER rCmdV1Header;
 	uint32_t rStatus;
 	struct CMD_FORMAT_V1 rCmd_v1;
-	uint8_t  ucTimes = 0;
+	uint8_t ucTimes = 0;
+	size_t current_offset = 0;
 
+	/* Basic pointer validation */
+	if (!prAdapter)
+		return;
 
-
+	kalMemSet(&rCmdV1Header, 0, sizeof(struct CMD_HEADER));
 	rCmdV1Header.cmdType = CMD_TYPE_SET;
 	rCmdV1Header.cmdVersion = CMD_VER_1;
-	rCmdV1Header.cmdBufferLen = 0;
-	rCmdV1Header.itemNum = 0;
-
-	kalMemSet(rCmdV1Header.buffer, 0, MAX_CMD_BUFFER_LENGTH);
-	kalMemSet(&rCmd_v1, 0, sizeof(struct CMD_FORMAT_V1));
-
-
-	prWlanCfgEntry = NULL;
 
 	for (i = 0; i < WLAN_CFG_ENTRY_NUM_MAX; i++) {
-
 		prWlanCfgEntry = wlanCfgGetEntryByIndex(prAdapter, i, 0);
 
-		if (prWlanCfgEntry) {
+		/* 1. Validate entry pointer and key existence */
+		if (!prWlanCfgEntry || !prWlanCfgEntry->aucKey[0])
+			continue;
 
-			rCmd_v1.itemType = ITEM_TYPE_STR;
+		/* 2. Skip MAC Address keys (already handled by robust parser) */
+		if (strcmp(prWlanCfgEntry->aucKey, "MacAddress") == 0 || 
+		    strcmp(prWlanCfgEntry->aucKey, "MacAddr") == 0){
+		  continue;
+		}
 
+		/* 3. Safety Check: Ensure we don't overflow the command buffer memory */
+		if (current_offset + sizeof(struct CMD_FORMAT_V1) > MAX_CMD_BUFFER_LENGTH) {
+			DBGLOG(INIT, WARN, "wlanFeatureToFw: Buffer full, flushing early\n");
+			goto flush; 
+		}
 
-			/*send string format to firmware */
-			rCmd_v1.itemStringLength = kalStrLen(
-							prWlanCfgEntry->aucKey);
-			if (rCmd_v1.itemStringLength > MAX_CMD_NAME_MAX_LENGTH)
-				continue;
-			kalMemZero(rCmd_v1.itemString, MAX_CMD_NAME_MAX_LENGTH);
-			kalMemCopy(rCmd_v1.itemString, prWlanCfgEntry->aucKey,
-				   rCmd_v1.itemStringLength);
+		kalMemSet(&rCmd_v1, 0, sizeof(struct CMD_FORMAT_V1));
+		rCmd_v1.itemType = ITEM_TYPE_STR;
 
+		/* 4. Use strnlen and strncpy equivalent for Key */
+		size_t keyLen = kalStrLen(prWlanCfgEntry->aucKey);
+		if (keyLen >= MAX_CMD_NAME_MAX_LENGTH)
+			keyLen = MAX_CMD_NAME_MAX_LENGTH - 1;
+		
+		kalMemCopy(rCmd_v1.itemString, prWlanCfgEntry->aucKey, keyLen);
+		rCmd_v1.itemStringLength = (uint16_t)keyLen;
 
-			rCmd_v1.itemValueLength = kalStrLen(
-						  prWlanCfgEntry->aucValue);
-			if (rCmd_v1.itemValueLength > MAX_CMD_VALUE_MAX_LENGTH)
-				continue;
-			kalMemZero(rCmd_v1.itemValue, MAX_CMD_VALUE_MAX_LENGTH);
-			kalMemCopy(rCmd_v1.itemValue, prWlanCfgEntry->aucValue,
-				   rCmd_v1.itemValueLength);
+		/* 5. Use strnlen and strncpy equivalent for Value */
+		size_t valLen = kalStrLen(prWlanCfgEntry->aucValue);
+		if (valLen >= MAX_CMD_VALUE_MAX_LENGTH)
+			valLen = MAX_CMD_VALUE_MAX_LENGTH - 1;
 
+		kalMemCopy(rCmd_v1.itemValue, prWlanCfgEntry->aucValue, valLen);
+		rCmd_v1.itemValueLength = (uint16_t)valLen;
 
+		/* 6. Commit to the main buffer with offset tracking */
+		kalMemCopy(rCmdV1Header.buffer + current_offset, &rCmd_v1, sizeof(struct CMD_FORMAT_V1));
+		
+		ucTimes++;
+		current_offset += sizeof(struct CMD_FORMAT_V1);
+		rCmdV1Header.cmdBufferLen = (uint16_t)current_offset;
 
-			DBGLOG(INIT, WARN,
-			       "Send key word (%s) WITH (%s) to firmware\n",
-			       rCmd_v1.itemString, rCmd_v1.itemValue);
+		/* 7. Flush if we hit the item limit */
+		if (ucTimes >= MAX_CMD_ITEM_MAX) {
+flush:
+			rCmdV1Header.itemNum = ucTimes;
+			rStatus = wlanSendSetQueryCmd(prAdapter, CMD_ID_GET_SET_CUSTOMER_CFG,
+						      TRUE, FALSE, FALSE, NULL, NULL,
+						      sizeof(struct CMD_HEADER), (uint8_t *)&rCmdV1Header,
+						      NULL, 0);
 
-			kalMemCopy(((struct CMD_FORMAT_V1 *)rCmdV1Header.buffer)
-				   + ucTimes,
-				   &rCmd_v1, sizeof(struct CMD_FORMAT_V1));
+			if (rStatus != WLAN_STATUS_SUCCESS)
+				DBGLOG(INIT, ERROR, "wlanFeatureToFw: Send failed 0x%x\n", rStatus);
 
-
-			ucTimes++;
-			rCmdV1Header.cmdBufferLen +=
-						sizeof(struct CMD_FORMAT_V1);
-			rCmdV1Header.itemNum += ucTimes;
-
-			if (ucTimes == MAX_CMD_ITEM_MAX) {
-				/* Send to FW */
-				rCmdV1Header.itemNum = ucTimes;
-
-				rStatus = wlanSendSetQueryCmd(
-						/* prAdapter */
-						prAdapter,
-						/* 0x70 */
-						CMD_ID_GET_SET_CUSTOMER_CFG,
-						/* fgSetQuery */
-						TRUE,
-						/* fgNeedResp */
-						FALSE,
-						/* fgIsOid */
-						FALSE,
-						/* pfCmdDoneHandler*/
-						NULL,
-						/* pfCmdTimeoutHandler */
-						NULL,
-						/* u4SetQueryInfoLen */
-						sizeof(struct CMD_HEADER),
-						/* pucInfoBuffer */
-						(uint8_t *)&rCmdV1Header,
-						/* pvSetQueryBuffer */
-						NULL,
-						/* u4SetQueryBufferLen */
-						0);
-
-				if (rStatus == WLAN_STATUS_FAILURE)
-					DBGLOG(INIT, INFO,
-					       "[Fail]kalIoctl wifiSefCFG fail 0x%x\n",
-					       rStatus);
-
-				DBGLOG(INIT, INFO,
-				       "kalIoctl wifiSefCFG num:%d\n", ucTimes);
-				kalMemSet(rCmdV1Header.buffer, 0,
-					  MAX_CMD_BUFFER_LENGTH);
-				rCmdV1Header.cmdBufferLen = 0;
-				ucTimes = 0;
-			}
-
-
-		} else {
-			break;
+			/* Reset for next batch */
+			kalMemSet(rCmdV1Header.buffer, 0, MAX_CMD_BUFFER_LENGTH);
+			rCmdV1Header.cmdBufferLen = 0;
+			current_offset = 0;
+			ucTimes = 0;
 		}
 	}
 
-
-	if (ucTimes != 0) {
-		/* Send to FW */
+	/* 8. Final flush for any remaining items */
+	if (ucTimes > 0) {
 		rCmdV1Header.itemNum = ucTimes;
-
-		DBGLOG(INIT, INFO, "cmdV1Header.itemNum:%d\n",
-		       rCmdV1Header.itemNum);
-
-		rStatus = wlanSendSetQueryCmd(
-			  prAdapter,	/* prAdapter */
-			  CMD_ID_GET_SET_CUSTOMER_CFG,	/* 0x70 */
-			  TRUE,		/* fgSetQuery */
-			  FALSE,	/* fgNeedResp */
-			  FALSE,	/* fgIsOid */
-			  NULL,		/* pfCmdDoneHandler*/
-			  NULL,		/* pfCmdTimeoutHandler */
-			  sizeof(struct CMD_HEADER),	/* u4SetQueryInfoLen */
-			  (uint8_t *)&rCmdV1Header,/* pucInfoBuffer */
-			  NULL,	/* pvSetQueryBuffer */
-			  0);	/* u4SetQueryBufferLen */
-
-		if (rStatus == WLAN_STATUS_FAILURE)
-			DBGLOG(INIT, INFO,
-			       "[Fail]kalIoctl wifiSefCFG fail 0x%x\n",
-			       rStatus);
-
-		DBGLOG(INIT, INFO, "kalIoctl wifiSefCFG num:%d\n", ucTimes);
-		kalMemSet(rCmdV1Header.buffer, 0, MAX_CMD_BUFFER_LENGTH);
-		rCmdV1Header.cmdBufferLen = 0;
-		ucTimes = 0;
+		wlanSendSetQueryCmd(prAdapter, CMD_ID_GET_SET_CUSTOMER_CFG,
+				    TRUE, FALSE, FALSE, NULL, NULL,
+				    sizeof(struct CMD_HEADER), (uint8_t *)&rCmdV1Header,
+				    NULL, 0);
 	}
-
 }
 
 

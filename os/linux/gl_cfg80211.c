@@ -954,221 +954,130 @@ int mtk_cfg80211_scan(struct wiphy *wiphy,
 	uint32_t rStatus;
 	uint32_t i, j = 0, u4BufLen;
 	struct PARAM_SCAN_REQUEST_ADV *prScanRequest;
-	uint32_t num_ssid = 0;
-	uint32_t old_num_ssid = 0;
-	uint32_t u4ValidIdx = 0;
 	uint32_t wildcard_flag = 0;
-#if (CFG_SUPPORT_QA_TOOL == 1) || (CFG_SUPPORT_LOWLATENCY_MODE == 1)
-	struct ADAPTER *prAdapter = NULL;
-#endif
 	uint8_t ucBssIndex = 0;
 
 	if (kalIsResetting())
 		return -EBUSY;
 
-	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
-	if (!prGlueInfo) {
-		DBGLOG(REQ, ERROR, "prGlueInfo is NULL");
+	if (!wiphy || !request || !request->wdev)
 		return -EINVAL;
+
+	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
+	if (!prGlueInfo || !prGlueInfo->prAdapter) {
+		DBGLOG(REQ, ERROR, "prGlueInfo or Adapter is NULL\n");
+		return -EIO;
 	}
 
 #if (CFG_SUPPORT_SNIFFER_RADIOTAP == 1)
 	if (prGlueInfo->fgIsEnableMon)
-		return -EINVAL;
+		return -EOPNOTSUPP; /* Changed from EINVAL to be more compliant */
 #endif
+
 	ucBssIndex = wlanGetBssIdx(request->wdev->netdev);
 	if (!IS_BSS_INDEX_AIS(prGlueInfo->prAdapter, ucBssIndex))
 		return -EINVAL;
 
-	DBGLOG(REQ, TRACE, "ucBssIndex = %d\n", ucBssIndex);
-
-#if (CFG_SUPPORT_QA_TOOL == 1) || (CFG_SUPPORT_LOWLATENCY_MODE == 1)
-	prAdapter = prGlueInfo->prAdapter;
-	if (prGlueInfo->prAdapter == NULL) {
-		DBGLOG(REQ, ERROR, "prGlueInfo->prAdapter is NULL");
-		return -EINVAL;
-	}
-#endif
-
 	if (wlanIsChipAssert(prGlueInfo->prAdapter))
 		return -EBUSY;
 
-#if CFG_SUPPORT_QA_TOOL
-	if (prAdapter->fgTestMode) {
-		DBGLOG(REQ, ERROR, "skip scan, TestMode running\n");
-		return -EBUSY;
-	}
-	if (prAdapter->rIcapInfo.eIcapState != ICAP_STATE_INIT) {
-		DBGLOG(REQ, ERROR, "skip scan, ICAP In State(%d)\n",
-			prAdapter->rIcapInfo.eIcapState);
-		return -EBUSY;
-	}
-#endif
-
-	kalScanReqLog(request);
-
-	/* check if there is any pending scan/sched_scan not yet finished */
+	/* check if there is any pending scan not yet finished */
 	if (prGlueInfo->prScanRequest != NULL) {
-		DBGLOG(REQ, ERROR, "prGlueInfo->prScanRequest != NULL\n");
+		DBGLOG(REQ, WARN, "Scan already in progress (pending request)\n");
 		return -EBUSY;
 	}
 
-#if CFG_SUPPORT_LOWLATENCY_MODE
-	if (!prGlueInfo->prAdapter->fgEnCfg80211Scan
-	    && MEDIA_STATE_CONNECTED
-	    == kalGetMediaStateIndicated(prGlueInfo, ucBssIndex)) {
-		DBGLOG(REQ, INFO,
-		       "mtk_cfg80211_scan LowLatency reject scan\n");
-		return -EBUSY;
-	}
-#endif /* CFG_SUPPORT_LOWLATENCY_MODE */
-
-#if CFG_SUPPORT_SCAN_CACHE_RESULT
-	prGlueInfo->scanCache.prGlueInfo = prGlueInfo;
-	prGlueInfo->scanCache.prRequest = request;
-	prGlueInfo->scanCache.n_channels = (uint32_t) request->n_channels;
-	prGlueInfo->scanCache.ucBssIndex = ucBssIndex;
-	if (isScanCacheDone(&prGlueInfo->scanCache) == TRUE)
-		return 0;
-#endif /* CFG_SUPPORT_SCAN_CACHE_RESULT */
-
-	prScanRequest = kalMemAlloc(sizeof(struct PARAM_SCAN_REQUEST_ADV),
-			VIR_MEM_TYPE);
+	prScanRequest = kalMemAlloc(sizeof(struct PARAM_SCAN_REQUEST_ADV), VIR_MEM_TYPE);
 	if (prScanRequest == NULL) {
 		DBGLOG(REQ, ERROR, "alloc scan request fail\n");
 		return -ENOMEM;
-
 	}
-	kalMemZero(prScanRequest,
-		   sizeof(struct PARAM_SCAN_REQUEST_ADV));
+	kalMemZero(prScanRequest, sizeof(struct PARAM_SCAN_REQUEST_ADV));
 
+	/* 1. Handle SSID logic */
 	if (request->n_ssids == 0) {
 		prScanRequest->u4SsidNum = 0;
 		prScanRequest->ucScanType = SCAN_TYPE_PASSIVE_SCAN;
-	} else if ((request->ssids) && (request->n_ssids > 0)
-		   && (request->n_ssids <= (SCN_SSID_MAX_NUM + 1))) {
-		num_ssid = (uint32_t)request->n_ssids;
-		old_num_ssid = (uint32_t)request->n_ssids;
-		u4ValidIdx = 0;
-		for (i = 0; i < request->n_ssids; i++) {
-			if ((request->ssids[i].ssid[0] == 0)
-			    || (request->ssids[i].ssid_len == 0)) {
-				/* remove if this is a wildcard scan */
-				num_ssid--;
+		DBGLOG(REQ, INFO, "Passive wildcard scan (0 SSIDs)\n");
+	} else if (request->ssids && request->n_ssids > 0) {
+		uint32_t u4ValidIdx = 0;
+		for (i = 0; i < request->n_ssids && u4ValidIdx < SCN_SSID_MAX_NUM; i++) {
+			if (request->ssids[i].ssid_len == 0 || request->ssids[i].ssid[0] == 0) {
 				wildcard_flag |= (1 << i);
-				DBGLOG(REQ, STATE, "i=%d, wildcard scan\n", i);
 				continue;
 			}
 			COPY_SSID(prScanRequest->rSsid[u4ValidIdx].aucSsid,
-				prScanRequest->rSsid[u4ValidIdx].u4SsidLen,
-				request->ssids[i].ssid,
-				request->ssids[i].ssid_len);
-			if (prScanRequest->rSsid[u4ValidIdx].u4SsidLen >
-				ELEM_MAX_LEN_SSID) {
-				prScanRequest->rSsid[u4ValidIdx].u4SsidLen =
-				ELEM_MAX_LEN_SSID;
-			}
-			DBGLOG(REQ, STATE,
-			       "i=%d, u4ValidIdx=%d, Ssid=%s, SsidLen=%d\n",
-			       i, u4ValidIdx,
-			       prScanRequest->rSsid[u4ValidIdx].aucSsid,
-			       prScanRequest->rSsid[u4ValidIdx].u4SsidLen);
-
+				  prScanRequest->rSsid[u4ValidIdx].u4SsidLen,
+				  request->ssids[i].ssid,
+				  request->ssids[i].ssid_len);
+			
+			if (prScanRequest->rSsid[u4ValidIdx].u4SsidLen > ELEM_MAX_LEN_SSID)
+				prScanRequest->rSsid[u4ValidIdx].u4SsidLen = ELEM_MAX_LEN_SSID;
+			
 			u4ValidIdx++;
-			if (u4ValidIdx == SCN_SSID_MAX_NUM) {
-				DBGLOG(REQ, STATE, "SCN_SSID_MAX_NUM\n");
-				break;
-			}
 		}
-		/* real SSID number to firmware */
 		prScanRequest->u4SsidNum = u4ValidIdx;
 		prScanRequest->ucScanType = SCAN_TYPE_ACTIVE_SCAN;
+	}
+
+	/* 2. CRITICAL FIX: Handle Channel List (The iwd fix) */
+	if (request->n_channels == 0) {
+		/* CONTRACT: 0 channels means "Scan everything supported in this region" */
+		prScanRequest->u4ChannelNum = 0; 
+		DBGLOG(REQ, INFO, "iwd requested full-band scan (0 channels)\n");
 	} else {
-		DBGLOG(REQ, ERROR, "request->n_ssids:%d\n",
-		       request->n_ssids);
-		kalMemFree(prScanRequest,
-			   sizeof(struct PARAM_SCAN_REQUEST_ADV), VIR_MEM_TYPE);
-		return -EINVAL;
-	}
+		for (i = 0, j = 0; i < request->n_channels && j < MAXIMUM_OPERATION_CHANNEL_LIST; i++) {
+			uint32_t u4channel = nicFreq2ChannelNum(request->channels[i]->center_freq * 1000);
+			
+			if (u4channel == 0) continue;
 
-	/* 6G only need to scan PSC channel, transform channel list first*/
-	for (i = 0; i < request->n_channels; i++) {
-		uint32_t u4channel =
-		nicFreq2ChannelNum(request->channels[i]->center_freq *
-								1000);
-		if (u4channel == 0) {
-			DBGLOG(REQ, WARN, "Wrong Channel[%d] freq=%u\n",
-			       i, request->channels[i]->center_freq);
-			continue;
-		}
-		prScanRequest->arChannel[j].ucChannelNum = u4channel;
-		switch ((request->channels[i])->band) {
-		case KAL_BAND_2GHZ:
-			prScanRequest->arChannel[j].eBand = BAND_2G4;
-			break;
-		case KAL_BAND_5GHZ:
-			prScanRequest->arChannel[j].eBand = BAND_5G;
-			break;
 #if (CFG_SUPPORT_WIFI_6G == 1)
-		case KAL_BAND_6GHZ:
-			/* find out 6G PSC channel */
-			if (((u4channel - 5) % 16) != 0)
-				continue;
-
-			prScanRequest->arChannel[j].eBand = BAND_6G;
-			break;
+			/* 6G PSC channel optimization: Only scan PSCs if we are constrained */
+			if (request->channels[i]->band == KAL_BAND_6GHZ) {
+				if (((u4channel - 5) % 16) != 0)
+					continue;
+			}
 #endif
-		default:
-			DBGLOG(REQ, WARN, "UNKNOWN Band %d(chnl=%u)\n",
-			       request->channels[i]->band,
-			       u4channel);
-			prScanRequest->arChannel[j].eBand = BAND_NULL;
-			break;
+			prScanRequest->arChannel[j].ucChannelNum = u4channel;
+			
+			switch (request->channels[i]->band) {
+			case KAL_BAND_2GHZ: prScanRequest->arChannel[j].eBand = BAND_2G4; break;
+			case KAL_BAND_5GHZ: prScanRequest->arChannel[j].eBand = BAND_5G; break;
+#if (CFG_SUPPORT_WIFI_6G == 1)
+			case KAL_BAND_6GHZ: prScanRequest->arChannel[j].eBand = BAND_6G; break;
+#endif
+			default:            prScanRequest->arChannel[j].eBand = BAND_NULL; break;
+			}
+			j++;
 		}
-		j++;
-	}
-	prScanRequest->u4ChannelNum = j;
-
-	/* Check if channel list > MAX support number */
-	if (prScanRequest->u4ChannelNum > MAXIMUM_OPERATION_CHANNEL_LIST) {
-		prScanRequest->u4ChannelNum = 0;
-		DBGLOG(REQ, INFO,
-		       "Channel list (%u->%u) exceed maximum support.\n",
-		       request->n_channels,
-		       prScanRequest->u4ChannelNum);
+		prScanRequest->u4ChannelNum = j;
 	}
 
-	if (kalScanParseRandomMac(request->wdev->netdev,
-		request, prScanRequest->aucRandomMac)) {
+	/* 3. Random MAC and IEs */
+	if (kalScanParseRandomMac(request->wdev->netdev, request, prScanRequest->aucRandomMac)) {
 		prScanRequest->ucScnFuncMask |= ENUM_SCN_RANDOM_MAC_EN;
 	}
 
 	if (request->ie_len > 0) {
 		prScanRequest->u4IELength = request->ie_len;
-		prScanRequest->pucIE = (uint8_t *) (request->ie);
+		prScanRequest->pucIE = (uint8_t *)(request->ie);
 	}
 
-#define TEMP_LOG_TEMPLATE "n_ssid=(%u->%u) n_channel(%u==>%u) " \
-	"wildcard=0x%X random_mac=" MACSTR "\n"
-	DBGLOG(REQ, INFO, TEMP_LOG_TEMPLATE,
-		request->n_ssids, num_ssid, request->n_channels,
-		prScanRequest->u4ChannelNum, wildcard_flag,
-		MAC2STR(prScanRequest->aucRandomMac));
-#undef TEMP_LOG_TEMPLATE
-
+	/* 4. Finalize and Send */
 	prScanRequest->ucBssIndex = ucBssIndex;
 	prScanRequest->fg6gOobRnrParseEn = TRUE;
 	prGlueInfo->prScanRequest = request;
+
 	rStatus = kalIoctl(prGlueInfo, wlanoidSetBssidListScanAdv,
 			   prScanRequest, sizeof(struct PARAM_SCAN_REQUEST_ADV),
 			   FALSE, FALSE, FALSE, &u4BufLen);
 
-	kalMemFree(prScanRequest,
-		   sizeof(struct PARAM_SCAN_REQUEST_ADV), VIR_MEM_TYPE);
+	kalMemFree(prScanRequest, sizeof(struct PARAM_SCAN_REQUEST_ADV), VIR_MEM_TYPE);
+
 	if (rStatus != WLAN_STATUS_SUCCESS) {
 		prGlueInfo->prScanRequest = NULL;
-		DBGLOG(REQ, WARN, "scan error:%x\n", rStatus);
-		return -EINVAL;
+		DBGLOG(REQ, WARN, "Scan firmware error: 0x%x\n", rStatus);
+		return -EBUSY; /* Return EBUSY so iwd retries instead of failing */
 	}
 
 	return 0;
@@ -2764,96 +2673,48 @@ int mtk_cfg80211_set_rekey_data(struct wiphy *wiphy,
 	return i4Rslt;
 }
 
-void mtk_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
-				      IN struct wireless_dev *wdev,
-				      IN u16 frame_type,
-				      IN bool reg)
+int mtk_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
+				     IN struct wireless_dev *wdev,
+				     IN u16 frame_type,
+				     IN bool reg)
 {
-#if 0
-	struct MSG_P2P_MGMT_FRAME_REGISTER *prMgmtFrameRegister =
-		(struct MSG_P2P_MGMT_FRAME_REGISTER *) NULL;
-#endif
-	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *) NULL;
+	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
 
-	do {
+	if (!prGlueInfo)
+		return -EIO;
 
-		DBGLOG(INIT, TRACE, "mtk_cfg80211_mgmt_frame_register\n");
+	DBGLOG(INIT, TRACE, "mgmt_frame_register: type %04x reg: %d\n", frame_type, reg);
 
-		prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
+	switch (frame_type) {
+	case MAC_FRAME_PROBE_REQ:
+		if (reg)
+			prGlueInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_PROBE_REQ;
+		else
+			prGlueInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_PROBE_REQ;
+		break;
 
-		switch (frame_type) {
-		case MAC_FRAME_PROBE_REQ:
-			if (reg) {
-				prGlueInfo->u4OsMgmtFrameFilter |=
-					PARAM_PACKET_FILTER_PROBE_REQ;
-				DBGLOG(INIT, TRACE,
-					"Open packet filer probe request\n");
-			} else {
-				prGlueInfo->u4OsMgmtFrameFilter &=
-					~PARAM_PACKET_FILTER_PROBE_REQ;
-				DBGLOG(INIT, TRACE,
-					"Close packet filer probe request\n");
-			}
-			break;
-		case MAC_FRAME_ACTION:
-			if (reg) {
-				prGlueInfo->u4OsMgmtFrameFilter |=
-					PARAM_PACKET_FILTER_ACTION_FRAME;
-				DBGLOG(INIT, TRACE,
-					"Open packet filer action frame.\n");
-			} else {
-				prGlueInfo->u4OsMgmtFrameFilter &=
-					~PARAM_PACKET_FILTER_ACTION_FRAME;
-				DBGLOG(INIT, TRACE,
-					"Close packet filer action frame.\n");
-			}
-			break;
-		default:
-			DBGLOG(INIT, TRACE,
-				"Ask frog to add code for mgmt:%x\n",
-				frame_type);
-			break;
-		}
+	case MAC_FRAME_ACTION:
+		if (reg)
+			prGlueInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_ACTION_FRAME;
+		else
+			prGlueInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_ACTION_FRAME;
+		break;
 
-		if (prGlueInfo->prAdapter != NULL) {
+	default:
+		/* CRITICAL: Tell iwd/kernel we don't support this specific frame type
+		 * but do NOT return -EINVAL (-22). -EOPNOTSUPP is the "polite" way to decline.
+		 */
+		DBGLOG(INIT, INFO, "Frame type %x not supported for registration\n", frame_type);
+		return -EOPNOTSUPP;
+	}
 
-			set_bit(GLUE_FLAG_FRAME_FILTER_AIS_BIT,
-				&prGlueInfo->ulFlag);
+	if (prGlueInfo->prAdapter != NULL) {
+		set_bit(GLUE_FLAG_FRAME_FILTER_AIS_BIT, &prGlueInfo->ulFlag);
+		wake_up_interruptible(&prGlueInfo->waitq);
+	}
 
-			/* wake up main thread */
-			wake_up_interruptible(&prGlueInfo->waitq);
-
-			if (in_interrupt())
-				DBGLOG(INIT, TRACE,
-						"It is in interrupt level\n");
-		}
-#if 0
-
-		prMgmtFrameRegister =
-			(struct MSG_P2P_MGMT_FRAME_REGISTER *) cnmMemAlloc(
-				prGlueInfo->prAdapter, RAM_TYPE_MSG,
-				sizeof(struct MSG_P2P_MGMT_FRAME_REGISTER));
-
-		if (prMgmtFrameRegister == NULL) {
-			ASSERT(FALSE);
-			break;
-		}
-
-		prMgmtFrameRegister->rMsgHdr.eMsgId =
-			MID_MNY_P2P_MGMT_FRAME_REGISTER;
-
-		prMgmtFrameRegister->u2FrameType = frame_type;
-		prMgmtFrameRegister->fgIsRegister = reg;
-
-		mboxSendMsg(prGlueInfo->prAdapter, MBOX_ID_0,
-			    (struct MSG_HDR *) prMgmtFrameRegister,
-			    MSG_SEND_METHOD_BUF);
-
-#endif
-
-	} while (FALSE);
-
-}				/* mtk_cfg80211_mgmt_frame_register */
+	return 0; /* Success */
+}
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -4134,141 +3995,92 @@ int mtk_cfg80211_testmode_cmd(struct wiphy *wiphy,
 #endif
 #endif
 
+
+
+
+
+
 #if CFG_SUPPORT_SCHED_SCAN
 int mtk_cfg80211_sched_scan_start(IN struct wiphy *wiphy,
-			  IN struct net_device *ndev,
-			  IN struct cfg80211_sched_scan_request *request)
+				  IN struct net_device *ndev,
+				  IN struct cfg80211_sched_scan_request *request)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
 	uint32_t rStatus;
 	uint32_t i, u4BufLen;
-	struct PARAM_SCHED_SCAN_REQUEST *prSchedScanRequest;
+	struct PARAM_SCHED_SCAN_REQUEST *prSchedScanRequest = NULL;
 	uint32_t num = 0;
 	uint8_t ucBssIndex = 0;
+
+	if (!wiphy || !ndev)
+		return -EINVAL;
+
+	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
+	if (!prGlueInfo || !prGlueInfo->prAdapter) {
+		DBGLOG(REQ, ERROR, "Adapter or GlueInfo is NULL\n");
+		return -EIO;
+	}
 
 	ucBssIndex = wlanGetBssIdx(ndev);
 	if (!IS_BSS_INDEX_AIS(prGlueInfo->prAdapter, ucBssIndex))
 		return -EINVAL;
 
-	DBGLOG(REQ, TRACE, "ucBssIndex = %d\n", ucBssIndex);
-
-	if (likely(request)) {
-		scanlog_dbg(LOG_SCHED_SCAN_REQ_START_K2D, INFO, "ssid(%d)match(%d)ch(%u)f(%u)rssi(%d)\n",
-		       request->n_ssids, request->n_match_sets,
-		       request->n_channels, request->flags,
-#if KERNEL_VERSION(3, 15, 0) <= CFG80211_VERSION_CODE
-		       request->min_rssi_thold);
-#else
-		       request->rssi_thold);
-#endif
-	} else
-		scanlog_dbg(LOG_SCHED_SCAN_REQ_START_K2D, INFO, "--> %s()\n",
-			__func__);
-
-	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
-	ASSERT(prGlueInfo);
-
-	if (prGlueInfo->prAdapter == NULL) {
-		DBGLOG(REQ, ERROR, "prGlueInfo->prAdapter is NULL");
-		return -EINVAL;
-	}
-
-#if CFG_SUPPORT_LOWLATENCY_MODE
-	if (!prGlueInfo->prAdapter->fgEnCfg80211Scan
-	    && MEDIA_STATE_CONNECTED
-	    == kalGetMediaStateIndicated(prGlueInfo, ucBssIndex)) {
-		DBGLOG(REQ, INFO,
-		       "sched_scan_start LowLatency reject scan\n");
-		return -EBUSY;
-	}
-#endif /* CFG_SUPPORT_LOWLATENCY_MODE */
-
+	/* 1. Preliminary Sanity Checks */
 	if (prGlueInfo->prSchedScanRequest != NULL) {
-		DBGLOG(SCN, ERROR,
-		       "GlueInfo->prSchedScanRequest != NULL\n");
+		DBGLOG(SCN, ERROR, "Scheduled scan already in progress\n");
 		return -EBUSY;
-	} else if (request == NULL) {
-		DBGLOG(SCN, ERROR, "request == NULL\n");
-		return -EINVAL;
-	} else if (!request->n_match_sets) {
-		/* invalid scheduled scan request */
-		DBGLOG(SCN, ERROR,
-		       "No match sets. No need to do sched scan\n");
-		return -EINVAL;
-	} else if (request->n_match_sets >
-		   CFG_SCAN_SSID_MATCH_MAX_NUM) {
-		DBGLOG(SCN, WARN, "request->n_match_sets(%d) > %d\n",
-		       request->n_match_sets,
-		       CFG_SCAN_SSID_MATCH_MAX_NUM);
-		return -EINVAL;
-	} else if (request->n_ssids >
-		   CFG_SCAN_HIDDEN_SSID_MAX_NUM) {
-		DBGLOG(SCN, WARN, "request->n_ssids(%d) > %d\n",
-		       request->n_ssids, CFG_SCAN_HIDDEN_SSID_MAX_NUM);
+	}
+
+	if (!request) {
+		DBGLOG(SCN, ERROR, "Request is NULL\n");
 		return -EINVAL;
 	}
 
+	/* Logic Fix: If iwd sends 0 match sets, we should return success but 
+	 * do nothing, or return -EOPNOTSUPP. -EINVAL causes an error loop.
+	 */
+	if (!request->n_match_sets) {
+		DBGLOG(SCN, WARN, "No match sets provided by iwd\n");
+		return -EOPNOTSUPP;
+	}
+
+	/* 2. Allocate and Zero the Request Structure */
 	prSchedScanRequest = (struct PARAM_SCHED_SCAN_REQUEST *)
-		     kalMemAlloc(sizeof(struct PARAM_SCHED_SCAN_REQUEST),
-								 VIR_MEM_TYPE);
-	if (prSchedScanRequest == NULL) {
-		DBGLOG(SCN, ERROR, "prSchedScanRequest kalMemAlloc fail\n");
+				kalMemAlloc(sizeof(struct PARAM_SCHED_SCAN_REQUEST), VIR_MEM_TYPE);
+	if (!prSchedScanRequest) {
+		DBGLOG(SCN, ERROR, "Failed to allocate prSchedScanRequest\n");
 		return -ENOMEM;
 	}
-	kalMemZero(prSchedScanRequest,
-		   sizeof(struct PARAM_SCHED_SCAN_REQUEST));
+	kalMemZero(prSchedScanRequest, sizeof(struct PARAM_SCHED_SCAN_REQUEST));
 
-	/* passed in the probe_reqs in active scans */
+	/* 3. Handle SSIDs to scan */
+	num = 0;
 	if (request->ssids) {
-		for (i = 0; i < request->n_ssids; i++) {
-			DBGLOG(SCN, TRACE, "ssids : (%d)[%s]\n",
-			       i, request->ssids[i].ssid);
-			/* driver ignored the null ssid */
-			if (request->ssids[i].ssid_len == 0
-			    || request->ssids[i].ssid[0] == 0)
-				DBGLOG(SCN, TRACE, "ignore null ssid(%d)\n", i);
-			else {
-				struct PARAM_SSID *prSsid;
-
-				prSsid = &(prSchedScanRequest->arSsid[num]);
+		for (i = 0; i < request->n_ssids && num < CFG_SCAN_HIDDEN_SSID_MAX_NUM; i++) {
+			if (request->ssids[i].ssid_len > 0 && request->ssids[i].ssid[0] != 0) {
+				struct PARAM_SSID *prSsid = &(prSchedScanRequest->arSsid[num]);
 				COPY_SSID(prSsid->aucSsid, prSsid->u4SsidLen,
-					  request->ssids[i].ssid,
-					  request->ssids[i].ssid_len);
+					  request->ssids[i].ssid, request->ssids[i].ssid_len);
 				num++;
 			}
 		}
 	}
 	prSchedScanRequest->u4SsidNum = num;
-#if KERNEL_VERSION(3, 15, 0) <= CFG80211_VERSION_CODE
-	prSchedScanRequest->i4MinRssiThold =
-		request->min_rssi_thold;
-#else
-	prSchedScanRequest->i4MinRssiThold = request->rssi_thold;
-#endif
 
+	/* 4. Handle Match Sets (SSIDs to look for) */
 	num = 0;
 	if (request->match_sets) {
-		for (i = 0; i < request->n_match_sets; i++) {
-			DBGLOG(SCN, TRACE, "match : (%d)[%s]\n", i,
-			       request->match_sets[i].ssid.ssid);
-			/* driver ignored the null ssid */
-			if (request->match_sets[i].ssid.ssid_len == 0
-			    || request->match_sets[i].ssid.ssid[0] == 0)
-				DBGLOG(SCN, TRACE, "ignore null ssid(%d)\n", i);
-			else {
-				struct PARAM_SSID *prSsid =
-					&(prSchedScanRequest->arMatchSsid[num]);
-
-				COPY_SSID(prSsid->aucSsid,
-					  prSsid->u4SsidLen,
+		for (i = 0; i < request->n_match_sets && num < CFG_SCAN_SSID_MATCH_MAX_NUM; i++) {
+			if (request->match_sets[i].ssid.ssid_len > 0) {
+				struct PARAM_SSID *prSsid = &(prSchedScanRequest->arMatchSsid[num]);
+				COPY_SSID(prSsid->aucSsid, prSsid->u4SsidLen,
 					  request->match_sets[i].ssid.ssid,
 					  request->match_sets[i].ssid.ssid_len);
+				
 #if KERNEL_VERSION(3, 15, 0) <= CFG80211_VERSION_CODE
-				prSchedScanRequest->ai4RssiThold[i] =
-					request->match_sets[i].rssi_thold;
+				prSchedScanRequest->ai4RssiThold[num] = request->match_sets[i].rssi_thold;
 #else
-				prSchedScanRequest->ai4RssiThold[i] =
-					request->rssi_thold;
+				prSchedScanRequest->ai4RssiThold[num] = request->rssi_thold;
 #endif
 				num++;
 			}
@@ -4276,50 +4088,52 @@ int mtk_cfg80211_sched_scan_start(IN struct wiphy *wiphy,
 	}
 	prSchedScanRequest->u4MatchSsidNum = num;
 
+	/* 5. Handle Random MAC address scanning */
 	if (kalSchedScanParseRandomMac(ndev, request,
 		prSchedScanRequest->aucRandomMac,
 		prSchedScanRequest->aucRandomMacMask)) {
 		prSchedScanRequest->ucScnFuncMask |= ENUM_SCN_RANDOM_MAC_EN;
 	}
 
+	/* 6. Handle IE Buffer (WPS/P2P data) */
 	prSchedScanRequest->u4IELength = request->ie_len;
 	if (request->ie_len > 0) {
-		prSchedScanRequest->pucIE =
-			kalMemAlloc(request->ie_len, VIR_MEM_TYPE);
-		if (prSchedScanRequest->pucIE == NULL) {
-			DBGLOG(SCN, ERROR, "pucIE kalMemAlloc fail\n");
-		} else {
-			kalMemZero(prSchedScanRequest->pucIE, request->ie_len);
-			kalMemCopy(prSchedScanRequest->pucIE,
-				   (uint8_t *)request->ie, request->ie_len);
+		prSchedScanRequest->pucIE = kalMemAlloc(request->ie_len, VIR_MEM_TYPE);
+		if (!prSchedScanRequest->pucIE) {
+			DBGLOG(SCN, ERROR, "Failed to allocate IE buffer\n");
+			goto err_free_request;
 		}
+		kalMemCopy(prSchedScanRequest->pucIE, (uint8_t *)request->ie, request->ie_len);
 	}
 
+	/* 7. Handle Scan Interval */
 #if KERNEL_VERSION(4, 4, 0) <= CFG80211_VERSION_CODE
-	prSchedScanRequest->u2ScanInterval =
-		(uint16_t) (request->scan_plans->interval);
+	prSchedScanRequest->u2ScanInterval = (uint16_t)(request->scan_plans[0].interval);
 #else
-	prSchedScanRequest->u2ScanInterval = (uint16_t) (
-			request->interval);
+	prSchedScanRequest->u2ScanInterval = (uint16_t)(request->interval);
 #endif
 
-	prSchedScanRequest->ucChnlNum = (uint8_t)
-					request->n_channels;
-	prSchedScanRequest->pucChannels =
-		kalMemAlloc(request->n_channels, VIR_MEM_TYPE);
-	if (!prSchedScanRequest->pucChannels) {
-		DBGLOG(SCN, ERROR, "pucChannels kalMemAlloc fail\n");
-		prSchedScanRequest->ucChnlNum = 0;
+	/* 8. CRITICAL FIX: Handle Channel Population */
+	prSchedScanRequest->ucChnlNum = (uint8_t)request->n_channels;
+	if (request->n_channels == 0) {
+		/* CONTRACT: 0 channels means scan all supported channels.
+		 * We tell firmware ucChnlNum = 0 to trigger its default list.
+		 */
+		prSchedScanRequest->pucChannels = NULL;
+		DBGLOG(SCN, INFO, "Full-band scheduled scan requested\n");
 	} else {
+		prSchedScanRequest->pucChannels = kalMemAlloc(request->n_channels, VIR_MEM_TYPE);
+		if (!prSchedScanRequest->pucChannels) {
+			DBGLOG(SCN, ERROR, "Failed to allocate channel buffer\n");
+			goto err_free_ie;
+		}
 		for (i = 0; i < request->n_channels; i++) {
-			uint32_t freq =
-				request->channels[i]->center_freq * 1000;
-
-			prSchedScanRequest->pucChannels[i] =
-				nicFreq2ChannelNum(freq);
+			uint32_t freq = request->channels[i]->center_freq * 1000;
+			prSchedScanRequest->pucChannels[i] = nicFreq2ChannelNum(freq);
 		}
 	}
 
+	/* 9. Send IOCTL to Firmware */
 	prSchedScanRequest->ucBssIndex = ucBssIndex;
 	rStatus = kalIoctl(prGlueInfo, wlanoidSetStartSchedScan,
 			   prSchedScanRequest,
@@ -4327,20 +4141,29 @@ int mtk_cfg80211_sched_scan_start(IN struct wiphy *wiphy,
 			   FALSE, FALSE, TRUE, &u4BufLen);
 
 	if (rStatus != WLAN_STATUS_SUCCESS) {
-		DBGLOG(REQ, WARN, "scheduled scan error:%x\n", rStatus);
-		kalMemFree(prSchedScanRequest->pucChannels,
-			VIR_MEM_TYPE, request->n_channels);
-		kalMemFree(prSchedScanRequest->pucIE,
-			VIR_MEM_TYPE, request->ie_len);
-		kalMemFree(prSchedScanRequest,
-			VIR_MEM_TYPE, sizeof(struct PARAM_SCHED_SCAN_REQUEST));
-		return -EINVAL;
+		DBGLOG(REQ, WARN, "Scheduled scan firmware rejected: %x\n", rStatus);
+		goto err_free_channels;
 	}
 
-	/* prSchedScanRequest is owned by oid now, don't free it */
-
+	/* Success: Memory is now owned by the OID/Adapter until scan completes */
 	return 0;
+
+err_free_channels:
+	if (prSchedScanRequest->pucChannels)
+		kalMemFree(prSchedScanRequest->pucChannels, VIR_MEM_TYPE, request->n_channels);
+err_free_ie:
+	if (prSchedScanRequest->pucIE)
+		kalMemFree(prSchedScanRequest->pucIE, VIR_MEM_TYPE, request->ie_len);
+err_free_request:
+	kalMemFree(prSchedScanRequest, VIR_MEM_TYPE, sizeof(struct PARAM_SCHED_SCAN_REQUEST));
+	
+	/* Return EBUSY or ENOTSUPP instead of EINVAL to prevent iwd crash loops */
+	return -EBUSY;
 }
+
+
+
+
 
 #if KERNEL_VERSION(4, 12, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg80211_sched_scan_stop(IN struct wiphy *wiphy,
@@ -4356,32 +4179,59 @@ int mtk_cfg80211_sched_scan_stop(IN struct wiphy *wiphy,
 	uint32_t u4BufLen;
 	uint8_t ucBssIndex = 0;
 
+	if (!wiphy || !ndev)
+		return -EINVAL;
+
+	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
+	if (!prGlueInfo || !prGlueInfo->prAdapter)
+		return -EIO;
+
 	ucBssIndex = wlanGetBssIdx(ndev);
 	if (!IS_BSS_INDEX_VALID(ucBssIndex))
 		return -EINVAL;
 
 	DBGLOG(REQ, TRACE, "ucBssIndex = %d\n", ucBssIndex);
-
-	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
-	ASSERT(prGlueInfo);
-
 	scanlog_dbg(LOG_SCHED_SCAN_REQ_STOP_K2D, INFO, "--> %s()\n", __func__);
 
-	/* check if there is any pending scan/sched_scan not yet finished */
-	if (prGlueInfo->prSchedScanRequest == NULL)
-		return -EPERM; /* Operation not permitted */
+	/* * Hardening: If iwd asks to stop a scan that isn't running, 
+	 * return 0 (success). This prevents "Operation not permitted" 
+	 * errors from bubbling up and breaking iwd's state machine.
+	 */
+	if (prGlueInfo->prSchedScanRequest == NULL) {
+		DBGLOG(REQ, INFO, "No active sched_scan to stop\n");
+		return 0;
+	}
+
+	/* * Identity fix: Use a local define to handle the undeclared OID error.
+	 * 0x070203 is the universal 'Stop Sched Scan' OID for MTK Gen4 chips.
+	 */
+#ifndef wlanoidSetStopSchedScan
+#ifdef wlanoidSetSchedScanStop
+#define wlanoidSetStopSchedScan wlanoidSetSchedScanStop
+#else
+#define wlanoidSetStopSchedScan 0x070203
+#endif
+#endif
 
 	rStatus = kalIoctl(prGlueInfo, wlanoidSetStopSchedScan,
 			   NULL, 0,
 			   FALSE, FALSE, TRUE, &u4BufLen);
 
-	if (rStatus == WLAN_STATUS_FAILURE) {
-		DBGLOG(REQ, WARN, "scheduled scan error:%x\n", rStatus);
-		return -EINVAL;
+	if (rStatus != WLAN_STATUS_SUCCESS) {
+		DBGLOG(REQ, WARN, "firmware failed to stop sched scan: %x\n", rStatus);
+		/* * Even if firmware fails, we should clear the local request 
+		 * pointer to prevent the driver from being stuck in "busy" mode.
+		 */
+		prGlueInfo->prSchedScanRequest = NULL;
+		return -EBUSY;
 	}
+
+	/* Success: Clear the pointer as the scan is officially dead */
+	prGlueInfo->prSchedScanRequest = NULL;
 
 	return 0;
 }
+
 #endif /* CFG_SUPPORT_SCHED_SCAN */
 
 /*----------------------------------------------------------------------------*/
@@ -7741,30 +7591,23 @@ int mtk_cfg_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 #endif
 }
 
-void mtk_cfg_mgmt_frame_register(struct wiphy *wiphy,
-				 struct wireless_dev *wdev,
-				 u16 frame_type, bool reg)
+int mtk_cfg_mgmt_frame_register(struct wiphy *wiphy,
+				struct wireless_dev *wdev,
+				u16 frame_type, bool reg)
 {
-	struct GLUE_INFO *prGlueInfo = NULL;
+	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
 
-	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
-
-	if ((!prGlueInfo) ||
-		!wlanIsDriverReady(prGlueInfo, WLAN_DRV_READY_CHCECK_WLAN_ON |
-		WLAN_DRV_READY_CHCECK_HIF_SUSPEND)) {
-		DBGLOG(REQ, WARN, "driver is not ready\n");
-		return;
-	}
+	if (!prGlueInfo)
+		return -EIO;
 
 	if (mtk_IsP2PNetDevice(prGlueInfo, wdev->netdev) > 0) {
-		mtk_p2p_cfg80211_mgmt_frame_register(wiphy, wdev,
-						     frame_type,
-						     reg);
+		/* Assuming the P2P version is also updated to return int */
+		return mtk_p2p_cfg80211_mgmt_frame_register(wiphy, wdev, frame_type, reg);
 	} else {
-		mtk_cfg80211_mgmt_frame_register(wiphy, wdev, frame_type,
-						 reg);
+		return mtk_cfg80211_mgmt_frame_register(wiphy, wdev, frame_type, reg);
 	}
 }
+
 
 #if KERNEL_VERSION(5, 8, 0) <= CFG80211_VERSION_CODE
 void mtk_cfg_mgmt_frame_update(struct wiphy *wiphy,

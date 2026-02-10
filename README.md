@@ -116,7 +116,7 @@ sudo nmcli device set wlan0 managed no
 sudo wpa_supplicant -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf
 ```
 
-**iwd** (iNet Wireless Daemon) is **not recommended** — it triggers firmware state machine bugs. Stick with wpa_supplicant for now.
+**iwd** (iNet Wireless Daemon) is **not recommended** — it triggers regulatory power limit bugs and disables everything. Stick with wpa_supplicant for now.
 
 ---
 

@@ -3507,7 +3507,7 @@ mtk_p2p_cfg80211_set_bitrate_mask(IN struct wiphy *wiphy,
 	return i4Rslt;
 }				/* mtk_p2p_cfg80211_set_bitrate_mask */
 
-void mtk_p2p_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
+int mtk_p2p_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
 		struct wireless_dev *wdev,
 		IN u16 frame_type, IN bool reg)
 {
@@ -3614,7 +3614,7 @@ void mtk_p2p_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
 			DBGLOG(P2P, ERROR,
 				"Ask frog to add code for mgmt:%x\n",
 				frame_type);
-			break;
+			return -EOPNOTSUPP; /* ADD THIS: Return polite decline */
 		}
 
 		set_bit(GLUE_FLAG_FRAME_FILTER_BIT, &prGlueInfo->ulFlag);
@@ -3651,7 +3651,7 @@ void mtk_p2p_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
 #endif
 
 	} while (FALSE);
-
+return 0; /* <--- ADD THIS LINE HERE */
 }				/* mtk_p2p_cfg80211_mgmt_frame_register */
 
 #ifdef CONFIG_NL80211_TESTMODE

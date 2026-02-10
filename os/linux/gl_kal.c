@@ -730,21 +730,16 @@ void kalReleaseMutex(IN struct GLUE_INFO *prGlueInfo,
  * \return (none)
  */
 /*----------------------------------------------------------------------------*/
-void kalUpdateMACAddress(IN struct GLUE_INFO *prGlueInfo,
-			 IN uint8_t *pucMacAddr)
+void kalUpdateMACAddress(IN struct GLUE_INFO *prGlueInfo, IN uint8_t *pucMacAddr)
 {
-	ASSERT(prGlueInfo);
-	ASSERT(pucMacAddr);
+    /* Use %pM for kernel-standard MAC printing to avoid pointer confusion */
+    DBGLOG(INIT, INFO, "Setting HW MAC to %pM (Old was %pM)\n", 
+           pucMacAddr, prGlueInfo->prDevHandler->dev_addr);
 
-	DBGLOG(INIT, INFO,
-			MACSTR ", " MACSTR ".\n",
-			prGlueInfo->prDevHandler->dev_addr,
-			MAC2STR(pucMacAddr));
-
-	if (UNEQUAL_MAC_ADDR(prGlueInfo->prDevHandler->dev_addr,
-			     pucMacAddr))
-		kal_eth_hw_addr_set(prGlueInfo->prDevHandler, pucMacAddr);
+    if (memcmp(prGlueInfo->prDevHandler->dev_addr, pucMacAddr, 6) != 0)
+        eth_hw_addr_set(prGlueInfo->prDevHandler, pucMacAddr);
 }
+
 
 #if CFG_TCP_IP_CHKSUM_OFFLOAD
 /*----------------------------------------------------------------------------*/
@@ -3393,192 +3388,116 @@ kalIoctl(IN struct GLUE_INFO *prGlueInfo,
 
 uint32_t
 kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
-	 IN PFN_OID_HANDLER_FUNC pfnOidHandler,
-	 IN void *pvInfoBuf,
-	 IN uint32_t u4InfoBufLen, IN u_int8_t fgRead,
-	 IN u_int8_t fgWaitResp, IN u_int8_t fgCmd,
-	 OUT uint32_t *pu4QryInfoLen,
-	 IN uint8_t ucBssIndex)
+                 IN PFN_OID_HANDLER_FUNC pfnOidHandler,
+                 IN void *pvInfoBuf,
+                 IN uint32_t u4InfoBufLen, 
+                 IN uint8_t fgRead,
+                 IN uint8_t fgWaitResp, 
+                 IN uint8_t fgCmd,
+                 OUT uint32_t *pu4QryInfoLen,
+                 IN uint8_t ucBssIndex)
 {
-	GLUE_SPIN_LOCK_DECLARATION();
-	(void)__ulFlags;
-	(void)__ulFlags;
-	(void)__ulFlags;
-	(void)__ulFlags;
-	struct GL_IO_REQ *prIoReq = NULL;
-	struct KAL_THREAD_SCHEDSTATS schedstats;
-	uint32_t ret = WLAN_STATUS_SUCCESS;
-	uint32_t waitRet = 0;
+    struct GL_IO_REQ *prIoReq = NULL;
+    struct KAL_THREAD_SCHEDSTATS schedstats;
+    uint32_t ret = WLAN_STATUS_SUCCESS;
+    long waitRet = 0;
 
-	if (kalIsResetting())
-		return WLAN_STATUS_SUCCESS;
+    /* 1. Basic Sanity Checks */
+    if (!prGlueInfo || !prGlueInfo->prAdapter || kalIsResetting())
+        return WLAN_STATUS_ADAPTER_NOT_READY;
 
-	ASSERT(prGlueInfo);
-	ASSERT(prGlueInfo->prAdapter);
+    if (wlanIsChipAssert(prGlueInfo->prAdapter))
+        return WLAN_STATUS_FAILURE;
 
-	if (wlanIsChipAssert(prGlueInfo->prAdapter))
-		return WLAN_STATUS_SUCCESS;
-
-
-	/* Due to dead lock issue in WPA3 flow,
-	*  just direct function call if already in main_thread.
-	*/
-#if CFG_SUPPORT_MULTITHREAD
-#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-	if (prGlueInfo->u4TxThreadPid == KAL_GET_CURRENT_THREAD_ID()) {
-	(void)__ulFlags;
-	(void)__ulFlags;
+    /* 2. Optimized Path: If already in main thread */
+#if (CFG_SUPPORT_MULTITHREAD && CFG_SUPPORT_SUPPLICANT_SME)
+    if (prGlueInfo->u4TxThreadPid == KAL_GET_CURRENT_THREAD_ID()) {
+        if (pfnOidHandler) {
 #if CFG_REDIRECT_OID_SUPPORT
-		if (pfnOidHandler)
-			kalRedirectsMainTreadOid(prGlueInfo,
-				pfnOidHandler,
-				pvInfoBuf,
-				u4InfoBufLen,
-				fgRead,
-				fgWaitResp,
-				fgCmd,
-				pu4QryInfoLen);
+            /* Fix: Function is void, call it then return success */
+            kalRedirectsMainTreadOid(prGlueInfo, pfnOidHandler, pvInfoBuf, 
+                                     u4InfoBufLen, fgRead, fgWaitResp, 
+                                     fgCmd, pu4QryInfoLen);
+            return WLAN_STATUS_SUCCESS;
 #else
-		if (pfnOidHandler)
-			ret = pfnOidHandler(prGlueInfo->prAdapter,
-				pvInfoBuf, u4InfoBufLen, pu4QryInfoLen);
+            return pfnOidHandler(prGlueInfo->prAdapter, pvInfoBuf, 
+                                 u4InfoBufLen, pu4QryInfoLen);
 #endif
-		return ret;
-	}
-#endif
+        }
+    }
 #endif
 
-	/* <1> Check if driver is halt */
-	/* if (prGlueInfo->u4Flag & GLUE_FLAG_HALT) { */
-	(void)__ulFlags;
-	(void)__ulFlags;
-	/* return WLAN_STATUS_ADAPTER_NOT_READY; */
-	/* } */
+    /* 3. Locking Sequence */
+    if (down_interruptible(&g_halt_sem))
+        return WLAN_STATUS_FAILURE;
 
-	if (down_interruptible(&g_halt_sem))
-		return WLAN_STATUS_FAILURE;
+    if (g_u4HaltFlag) {
+        up(&g_halt_sem);
+        return WLAN_STATUS_ADAPTER_NOT_READY;
+    }
 
-	if (g_u4HaltFlag) {
-	(void)__ulFlags;
-	(void)__ulFlags;
-		up(&g_halt_sem);
-		return WLAN_STATUS_ADAPTER_NOT_READY;
-	}
+    if (down_interruptible(&prGlueInfo->ioctl_sem)) {
+        up(&g_halt_sem);
+        return WLAN_STATUS_FAILURE;
+    }
 
-	if (down_interruptible(&prGlueInfo->ioctl_sem)) {
-	(void)__ulFlags;
-	(void)__ulFlags;
-		up(&g_halt_sem);
-		return WLAN_STATUS_FAILURE;
-	}
+    /* Verify thread health */
+    if (unlikely(!prGlueInfo->main_thread)) {
+        DBGLOG(OID, ERROR, "IOCTL failed: Main thread is NULL\n");
+        ret = WLAN_STATUS_FAILURE;
+        goto exit_unlock;
+    }
 
-	if (prGlueInfo->main_thread == NULL) {
-	(void)__ulFlags;
-	(void)__ulFlags;
-		dump_stack();
-		DBGLOG(OID, WARN, "skip executing request.\n");
-		up(&prGlueInfo->ioctl_sem);
-		up(&g_halt_sem);
-		return WLAN_STATUS_FAILURE;
-	}
+    /* 4. Prepare Request */
+    prIoReq = &(prGlueInfo->OidEntry);
+    prIoReq->prAdapter      = prGlueInfo->prAdapter;
+    prIoReq->pfnOidHandler  = pfnOidHandler;
+    prIoReq->pvInfoBuf      = pvInfoBuf;
+    prIoReq->u4InfoBufLen   = u4InfoBufLen;
+    prIoReq->pu4QryInfoLen  = pu4QryInfoLen;
+    prIoReq->fgRead         = fgRead;
+    prIoReq->fgWaitResp     = fgWaitResp;
+    prIoReq->rStatus        = WLAN_STATUS_PENDING;
+    
+    SET_IOCTL_BSSIDX(prGlueInfo->prAdapter, ucBssIndex);
 
-	/* <2> TODO: thread-safe */
+    prGlueInfo->rPendStatus = WLAN_STATUS_FAILURE;
+    prGlueInfo->u4OidCompleteFlag = 0;
+    prIoReq->u4Flag = fgCmd;
 
-	/* <3> point to the OidEntry of Glue layer */
+    /* 5. Trigger Main Thread */
+    reinit_completion(&prGlueInfo->rPendComp);
+    smp_wmb(); 
+    set_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag);
 
-	prIoReq = &(prGlueInfo->OidEntry);
+    /* 6. Power Management */
+    KAL_WAKE_LOCK_TIMEOUT(prGlueInfo->prAdapter, prGlueInfo->prTimeoutWakeLock, 
+        MSEC_TO_JIFFIES(prGlueInfo->prAdapter->rWifiVar.u4WakeLockThreadWakeup));
 
-	ASSERT(prIoReq);
+    wake_up_interruptible(&prGlueInfo->waitq);
 
-	/* <4> Compose the I/O request */
-	prIoReq->prAdapter = prGlueInfo->prAdapter;
-	prIoReq->pfnOidHandler = pfnOidHandler;
-	prIoReq->pvInfoBuf = pvInfoBuf;
-	prIoReq->u4InfoBufLen = u4InfoBufLen;
-	prIoReq->pu4QryInfoLen = pu4QryInfoLen;
-	prIoReq->fgRead = fgRead;
-	prIoReq->fgWaitResp = fgWaitResp;
-	prIoReq->rStatus = WLAN_STATUS_FAILURE;
-	SET_IOCTL_BSSIDX(
-		prGlueInfo->prAdapter,
-		ucBssIndex);
+    /* 7. Wait for Completion */
+    kalThreadSchedMark(prGlueInfo->main_thread, &schedstats);
+    waitRet = wait_for_completion_timeout(&prGlueInfo->rPendComp, MSEC_TO_JIFFIES(30000));
+    kalThreadSchedUnmark(prGlueInfo->main_thread, &schedstats);
 
-	/* <5> Reset the status of pending OID */
-	prGlueInfo->rPendStatus = WLAN_STATUS_FAILURE;
-	/* prGlueInfo->u4TimeoutFlag = 0; */
-	prGlueInfo->u4OidCompleteFlag = 0;
+    if (likely(waitRet > 0)) {
+        ret = (prIoReq->rStatus == WLAN_STATUS_PENDING) ? prGlueInfo->rPendStatus : prIoReq->rStatus;
+        if (ret != WLAN_STATUS_SUCCESS)
+            DBGLOG(OID, WARN, "IOCTL OID(0x%p) failed with 0x%08x\n", pfnOidHandler, ret);
+    } else {
+        DBGLOG(OID, ERROR, "IOCTL TIMEOUT (30s). Stats: exec=%llu run=%llu\n",
+               schedstats.exec, schedstats.runnable);
+        if (fgCmd)
+            wlanReleasePendingOid(prGlueInfo->prAdapter, 0);
+        ret = WLAN_STATUS_FAILURE;
+    }
 
-	/* <6> Check if we use the command queue */
-	prIoReq->u4Flag = fgCmd;
-
-	/* <7> schedule the OID bit
-	 * Use memory barrier to ensure OidEntry is written done and then set
-	 * bit.
-	 */
-	smp_mb();
-	set_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag);
-
-	/* <7.1> Hold wakelock to ensure OS won't be suspended */
-	KAL_WAKE_LOCK_TIMEOUT(prGlueInfo->prAdapter,
-		prGlueInfo->prTimeoutWakeLock, MSEC_TO_JIFFIES(
-		prGlueInfo->prAdapter->rWifiVar.u4WakeLockThreadWakeup));
-
-	/* <8> Wake up main thread to handle kick start the I/O request.
-	 * Use memory barrier to ensure set bit is done and then wake up main
-	 * thread.
-	 */
-	smp_mb();
-	wake_up_interruptible(&prGlueInfo->waitq);
-
-	/* <9> Block and wait for event or timeout,
-	 * current the timeout is 30 secs
-	 */
-	kalThreadSchedMark(prGlueInfo->main_thread, &schedstats);
-	waitRet = wait_for_completion_timeout(&prGlueInfo->rPendComp,
-				MSEC_TO_JIFFIES(30*1000));
-	kalThreadSchedUnmark(prGlueInfo->main_thread, &schedstats);
-	if (waitRet > 0) {
-	(void)__ulFlags;
-	(void)__ulFlags;
-		/* Case 1: No timeout. */
-		/* if return WLAN_STATUS_PENDING, the status of cmd is stored
-		 * in prGlueInfo
-		 */
-		if (prIoReq->rStatus == WLAN_STATUS_PENDING)
-			ret = prGlueInfo->rPendStatus;
-		else
-			ret = prIoReq->rStatus;
-		if (ret != WLAN_STATUS_SUCCESS)
-			DBGLOG(OID, WARN, "kalIoctl: ret ErrCode: %x\n", ret);
-	} else {
-	(void)__ulFlags;
-	(void)__ulFlags;
-		/* Case 2: timeout */
-		/* clear pending OID's cmd in CMD queue */
-		if (fgCmd) {
-	(void)__ulFlags;
-	(void)__ulFlags;
-			/* prGlueInfo->u4TimeoutFlag = 1; */
-			wlanReleasePendingOid(prGlueInfo->prAdapter, 0);
-		}
-
-		/* note: do not dump main_thread's call stack here, */
-		/*       because it may be running on other cpu.    */
-		DBGLOG(OID, WARN,
-			"wait main_thread timeout, duration:%llums, sched(x%llu/r%llu/i%llu)\n",
-			schedstats.time, schedstats.exec,
-			schedstats.runnable, schedstats.iowait);
-
-		ret = WLAN_STATUS_FAILURE;
-	}
-
-	/* <10> Clear bit for error handling */
-	clear_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag);
-
-	up(&prGlueInfo->ioctl_sem);
-	up(&g_halt_sem);
-
-	return ret;
+exit_unlock:
+    clear_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag);
+    up(&prGlueInfo->ioctl_sem);
+    up(&g_halt_sem);
+    return ret;
 }
 
 /*----------------------------------------------------------------------------*/

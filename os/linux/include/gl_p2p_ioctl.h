@@ -593,7 +593,7 @@ int mtk_p2p_cfg80211_stop_ap(struct wiphy *wiphy,
 int mtk_p2p_cfg80211_set_channel(struct wiphy *wiphy,
 		struct cfg80211_chan_def *chandef);
 
-void mtk_p2p_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
+int mtk_p2p_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
 		struct wireless_dev *wdev,
 		IN u16 frame_type,
 		IN bool reg);
