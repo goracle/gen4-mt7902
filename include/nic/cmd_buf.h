@@ -174,6 +174,8 @@ struct CMD_INFO {
 		__FILE__ ":" STRLINE(__LINE__))
 #endif
 
+void cmdFreeBufEnQ(struct ADAPTER *prAdapter, struct CMD_INFO *prCmdInfo);
+
 /*******************************************************************************
  *                   F U N C T I O N   D E C L A R A T I O N S
  *******************************************************************************

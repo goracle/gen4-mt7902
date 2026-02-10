@@ -10677,85 +10677,101 @@ uint32_t rftestSetFrequency(IN struct ADAPTER *prAdapter,
 
 #ifdef CFG_SUPPORT_UNIFIED_COMMAND
 
-uint32_t
-wlanSendSetQueryCmdAdv(IN struct ADAPTER *prAdapter,
-		    uint8_t ucCID,
-		    uint8_t ucExtCID,
-		    uint8_t fgSetQuery,
-		    uint8_t fgNeedResp,
-		    uint8_t fgIsOid,
-		    PFN_CMD_DONE_HANDLER pfCmdDoneHandler,
-		    PFN_CMD_TIMEOUT_HANDLER pfCmdTimeoutHandler,
-		    uint32_t u4SetQueryInfoLen,
-		    uint8_t *pucInfoBuffer, OUT void *pvSetQueryBuffer,
-		    IN uint32_t u4SetQueryBufferLen,
-		    enum EUNM_CMD_SEND_METHOD eMethod) {
-	struct GLUE_INFO *prGlueInfo;
-	struct CMD_INFO *prCmdInfo;
-	uint8_t *pucCmfBuf;
-	struct mt66xx_chip_info *prChipInfo;
-	uint16_t cmd_size;
-	uint32_t status = WLAN_STATUS_PENDING;
+uint32_t wlanSendSetQueryCmdAdv(IN struct ADAPTER *prAdapter,
+        uint8_t ucCID, uint8_t ucExtCID, uint8_t fgSetQuery,
+        uint8_t fgNeedResp, uint8_t fgIsOid,
+        PFN_CMD_DONE_HANDLER pfCmdDoneHandler,
+        PFN_CMD_TIMEOUT_HANDLER pfCmdTimeoutHandler,
+        uint32_t u4SetQueryInfoLen,
+        uint8_t *pucInfoBuffer, OUT void *pvSetQueryBuffer,
+        IN uint32_t u4SetQueryBufferLen,
+        enum EUNM_CMD_SEND_METHOD eMethod) 
+{
+    struct GLUE_INFO *prGlueInfo;
+    struct CMD_INFO *prCmdInfo;
+    uint8_t *pucCmfBuf;
+    struct mt66xx_chip_info *prChipInfo;
+    uint16_t cmd_size;
+    uint32_t status = WLAN_STATUS_PENDING;
 
-	if (kalIsResetting()) {
-		DBGLOG(INIT, WARN, "Chip resetting, skip\n");
-		return WLAN_STATUS_NOT_ACCEPTED;
-	}
-	prGlueInfo = prAdapter->prGlueInfo;
-	prChipInfo = prAdapter->chip_info;
-	cmd_size = prChipInfo->u2CmdTxHdrSize + u4SetQueryInfoLen;
-	prCmdInfo = cmdBufAllocateCmdInfo(prAdapter, cmd_size);
-	DEBUGFUNC("wlanSendSetQueryCmd");
-	if (!prCmdInfo) {
-		DBGLOG(INIT, ERROR, "Allocate CMD_INFO_T FAILED ID[0x%x]\n",
-			ucCID);
-		return WLAN_STATUS_RESOURCES;
-	}
-	/* Setup common CMD Info Packet */
-	prCmdInfo->eCmdType = COMMAND_TYPE_NETWORK_IOCTL;
-	prCmdInfo->u2InfoBufLen = cmd_size;
-	prCmdInfo->pfCmdDoneHandler = pfCmdDoneHandler;
-	prCmdInfo->pfCmdTimeoutHandler = pfCmdTimeoutHandler;
-	prCmdInfo->fgIsOid = fgIsOid;
-	prCmdInfo->ucCID = ucCID;
-	prCmdInfo->fgSetQuery = fgSetQuery;
-	prCmdInfo->fgNeedResp = fgNeedResp;
-	prCmdInfo->u4SetInfoLen = u4SetQueryInfoLen;
-	prCmdInfo->pvInformationBuffer = pvSetQueryBuffer;
-	prCmdInfo->u4InformationBufferLength = u4SetQueryBufferLen;
-	/* Setup WIFI_CMD_T (no payload) */
-	NIC_FILL_CMD_TX_HDR(prAdapter,
-		prCmdInfo->pucInfoBuffer,
-		prCmdInfo->u2InfoBufLen,
-		prCmdInfo->ucCID,
-		CMD_PACKET_TYPE_ID,
-		&prCmdInfo->ucCmdSeqNum,
-		prCmdInfo->fgSetQuery,
-		&pucCmfBuf, FALSE, 0, S2D_INDEX_CMD_H2N,
-		prCmdInfo->fgNeedResp);
-	prCmdInfo->pucSetInfoBuffer = pucCmfBuf;
-	if (u4SetQueryInfoLen > 0 && pucInfoBuffer != NULL)
-		kalMemCopy(pucCmfBuf, pucInfoBuffer,
-			   u4SetQueryInfoLen);
-	switch (eMethod) {
-	case CMD_SEND_METHOD_ENQUEUE:
-		/* insert into prCmdQueue */
-		kalEnqueueCommand(prGlueInfo,
-				  (struct QUE_ENTRY *) prCmdInfo);
-		/* wakeup txServiceThread later */
-		GLUE_SET_EVENT(prGlueInfo);
-		break;
-	case CMD_SEND_METHOD_REQ_RESOURCE:
-		status = wlanSendCommand(prAdapter, prCmdInfo);
-		cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
-		break;
-	case CMD_SEND_METHOD_TX:
-		status = nicTxCmd(prAdapter, prCmdInfo, TC4_INDEX);
-		cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
-		break;
-	}
-	return status;
+    if (kalIsResetting()) {
+        DBGLOG(INIT, WARN, "Chip resetting, skip\n");
+        return WLAN_STATUS_NOT_ACCEPTED;
+    }
+
+    prGlueInfo = prAdapter->prGlueInfo;
+    prChipInfo = prAdapter->chip_info;
+    cmd_size = prChipInfo->u2CmdTxHdrSize + u4SetQueryInfoLen;
+
+    prCmdInfo = cmdBufAllocateCmdInfo(prAdapter, cmd_size);
+    DEBUGFUNC("wlanSendSetQueryCmd");
+
+    if (!prCmdInfo) {
+        DBGLOG(INIT, ERROR, "Allocate CMD_INFO_T FAILED ID[0x%x]\n", ucCID);
+        return WLAN_STATUS_RESOURCES;
+    }
+
+    /* FIX: Ensure the payload buffer exists before we try to fill it */
+    if (cmd_size > 0 && prCmdInfo->pucInfoBuffer == NULL) {
+        DBGLOG(INIT, ERROR, "pucInfoBuffer is NULL! Aborting.\n");
+        cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+        return WLAN_STATUS_RESOURCES;
+    }
+
+    /* Setup common CMD Info Packet */
+    prCmdInfo->eCmdType = COMMAND_TYPE_NETWORK_IOCTL;
+    prCmdInfo->u2InfoBufLen = cmd_size;
+    prCmdInfo->pfCmdDoneHandler = pfCmdDoneHandler;
+    prCmdInfo->pfCmdTimeoutHandler = pfCmdTimeoutHandler;
+    prCmdInfo->fgIsOid = fgIsOid;
+    prCmdInfo->ucCID = ucCID;
+    prCmdInfo->fgSetQuery = fgSetQuery;
+    prCmdInfo->fgNeedResp = fgNeedResp;
+    prCmdInfo->u4SetInfoLen = u4SetQueryInfoLen;
+    prCmdInfo->pvInformationBuffer = pvSetQueryBuffer;
+    prCmdInfo->u4InformationBufferLength = u4SetQueryBufferLen;
+
+    /* Setup WIFI_CMD_T */
+    NIC_FILL_CMD_TX_HDR(prAdapter,
+        prCmdInfo->pucInfoBuffer,
+        prCmdInfo->u2InfoBufLen,
+        prCmdInfo->ucCID,
+        CMD_PACKET_TYPE_ID,
+        &prCmdInfo->ucCmdSeqNum,
+        prCmdInfo->fgSetQuery,
+        &pucCmfBuf, FALSE, 0, S2D_INDEX_CMD_H2N,
+        prCmdInfo->fgNeedResp);
+
+    prCmdInfo->pucSetInfoBuffer = pucCmfBuf;
+
+    if (u4SetQueryInfoLen > 0 && pucInfoBuffer != NULL && pucCmfBuf != NULL)
+        kalMemCopy(pucCmfBuf, pucInfoBuffer, u4SetQueryInfoLen);
+
+    switch (eMethod) {
+    case CMD_SEND_METHOD_ENQUEUE:
+        kalEnqueueCommand(prGlueInfo, (struct QUE_ENTRY *) prCmdInfo);
+        GLUE_SET_EVENT(prGlueInfo);
+        break;
+
+    case CMD_SEND_METHOD_REQ_RESOURCE:
+        status = wlanSendCommand(prAdapter, prCmdInfo);
+        /* If the command was successfully handed over, 
+           only free it if the status isn't PENDING/SUCCESS 
+           to avoid use-after-free/double-free. */
+        if (status != WLAN_STATUS_PENDING && status != WLAN_STATUS_SUCCESS)
+            cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+        break;
+
+    case CMD_SEND_METHOD_TX:
+        status = nicTxCmd(prAdapter, prCmdInfo, TC4_INDEX);
+        if (status != WLAN_STATUS_PENDING && status != WLAN_STATUS_SUCCESS)
+            cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+        break;
+    }
+
+    return status;
 }
+
 
 #endif /* #ifdef CFG_SUPPORT_UNIFIED_COMMAND */
 

@@ -102,6 +102,7 @@ char *g_au1TxPwrOperationLabel[] = {
 };
 #endif
 
+extern const struct ieee80211_regdomain regdom_us;
 /*******************************************************************************
  *                             D A T A   T Y P E S
  *******************************************************************************
@@ -2109,24 +2110,20 @@ u_int32_t rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode(
 	u_int32_t u4CountryCode
 	)
 {
-	const struct ieee80211_regdomain *pRegdom = NULL;
-	char acCountryCodeStr[MAX_COUNTRY_CODE_LEN + 1] = {0};
-	u_int32_t u4FinalCountryCode = u4CountryCode;
+	const struct ieee80211_regdomain *pRegdom = &regdom_us;
 
-	rlmDomainU32ToAlpha(u4FinalCountryCode, acCountryCodeStr);
-	pRegdom =
-		rlmDomainSearchRegdomainFromLocalDataBase(acCountryCodeStr);
-	if (!pRegdom) {
-		DBGLOG(RLM, ERROR,
-	       "Cannot find the %s RegDomain. Set to default WW\n",
-	       acCountryCodeStr);
-		pRegdom = &default_regdom_ww;
-		u4FinalCountryCode = 0x5355;
-	}
+	/* * DE-FANGED: 
+	 * We ignore the incoming u4CountryCode and the local string search.
+	 * We point directly to the hardware-unrestricted 'regdom_us' struct.
+	 */
+	DBGLOG(RLM, INFO, "DE-FANGED: Direct regdom_us injection. Ignoring CC 0x%04X\n", 
+		u4CountryCode);
 
+	/* Apply the US (FCC) regulatory rules to the kernel wiphy */
 	kalApplyCustomRegulatory(pWiphy, pRegdom);
 
-	return u4FinalCountryCode;
+	/* Return 'US' (0x5553) so the caller updates the adapter state correctly */
+	return 0x5553;
 }
 #else
 u_int32_t rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode(
@@ -2138,27 +2135,46 @@ u_int32_t rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode(
 }
 #endif
 
-uint8_t
-rlmDomainCountryCodeUpdateSanity(
+u_int8_t rlmDomainCountryCodeUpdateSanity(
 	struct GLUE_INFO *prGlueInfo,
 	struct wiphy *pWiphy,
 	struct ADAPTER **prAdapter)
 {
-	if (!prGlueInfo || !prGlueInfo->prAdapter || !pWiphy)
-		return FALSE;
+	/* --- BREAKOUT: Minimal check to avoid null pointer dereference --- */
+	if (!prGlueInfo || !prGlueInfo->prAdapter) {
+		DBGLOG(RLM, ERROR, "Sanity Check: Critical structures missing!\n");
+		return FALSE; 
+	}
 
 	*prAdapter = prGlueInfo->prAdapter;
+
+	/* * --- THE OVERRIDE ---
+	 * We ignore eCurrentState (REGD_STATE_INVALID, etc.) entirely.
+	 * If the system is trying to update the country code, we ALWAYS 
+	 * allow it. This prevents the "ignored world regdom" issue.
+	 */
+	
+	DBGLOG(RLM, INFO, "DE-FANGED: Bypassing regulatory sanity checks. State was %d\n", 
+		rlmDomainGetCtrlState());
+
+	/* * If we are here and the state is problematic, we don't just 'hint' 
+	 * to the kernel; we ensure the Adapter structure is ready for the 
+	 * upcoming rlmDomainCountryCodeUpdate call.
+	 */
 
 	return TRUE;
 }
 
-
 void rlmDomainCountryCodeUpdate(
-	struct ADAPTER *prAdapter, struct wiphy *pWiphy,
+	struct ADAPTER *prAdapter, 
+	struct wiphy *pWiphy,
 	u_int32_t u4CountryCode)
 {
-	u_int32_t u4FinalCountryCode = u4CountryCode;
-	char acCountryCodeStr[MAX_COUNTRY_CODE_LEN + 1] = {0};
+	/* --- THE GLOBAL OVERRIDE --- */
+	/* We ignore the input u4CountryCode entirely to prevent SU/00 leakage */
+	u_int32_t u4ForcedCC = 0x5553; // 'US'
+	char acCountryCodeStr[MAX_COUNTRY_CODE_LEN + 1] = "US";
+
 #ifdef CFG_SUPPORT_BT_SKU
 	typedef void (*bt_fn_t) (char *);
 	bt_fn_t bt_func = NULL;
@@ -2166,20 +2182,19 @@ void rlmDomainCountryCodeUpdate(
 	void *func_addr = NULL;
 #endif
 
+	DBGLOG(RLM, INFO, "DE-FANGED: Global Override initiated. Forcing US (0x5553).\n");
+
+	/* 1. Inject US Regulatory Struct into the Kernel wiphy */
 	if (rlmDomainIsUsingLocalRegDomainDataBase()) {
-		u4FinalCountryCode =
-			rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode(
-				pWiphy,
-				u4CountryCode);
+		rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode(
+			pWiphy,
+			u4ForcedCC);
 	}
 
-	rlmDomainU32ToAlpha(u4FinalCountryCode, acCountryCodeStr);
+	/* 2. Log the change for verification */
+	DBGLOG(RLM, INFO, "BREAKOUT: Setting CC string to %s\n", acCountryCodeStr);
 
-	if (u4FinalCountryCode != u4CountryCode)
-		rlmDomainSetCountryCode(acCountryCodeStr,
-			MAX_COUNTRY_CODE_LEN);
-
-	DBGLOG(RLM, INFO, "g_mtk_regd_control.alpha2 = %s\n", acCountryCodeStr);
+	/* 3. Sync with Bluetooth (if applicable) */
 #ifdef CFG_SUPPORT_BT_SKU
 #if (CFG_ENABLE_GKI_SUPPORT != 1)
 	func_addr = GLUE_SYMBOL_GET(bt_func_name);
@@ -2190,26 +2205,27 @@ void rlmDomainCountryCodeUpdate(
 #if (CFG_ENABLE_GKI_SUPPORT != 1)
 		GLUE_SYMBOL_PUT(bt_func_name);
 #endif
-	} else {
-		DBGLOG(RLM, ERROR,
-		       "Can't find function %s\n",
-		       bt_func_name);
 	}
 #endif
 
+	/* 4. Update the internal channel list based on US rules */
 	if (pWiphy)
 		rlmDomainParsingChannel(pWiphy);
 
-	if (!regd_is_single_sku_en())
-		return;
+	/* 5. HARD LOCK the Adapter state */
+	/* We bypass rlmDomainGetCountryCode() because it might still return 'SU' 
+	   from the hardware registers. We overwrite it directly here. */
+	prAdapter->rWifiVar.u2CountryCode = (uint16_t)u4ForcedCC;
 
-	prAdapter->rWifiVar.u2CountryCode =
-		(uint16_t)rlmDomainGetCountryCode();
-
-	/* Send commands to firmware */
+	/* 6. The Final Handshake */
+	/* This sends the 'US' code to the Firmware, which unlocks the 6GHz 
+	   frequency and higher TX power limits. */
 	rlmDomainSendCmd(prAdapter);
 
+	DBGLOG(RLM, INFO, "DE-FANGED: Final sync complete. Adapter set to US.\n");
 }
+
+
 void
 rlmDomainSetCountry(struct ADAPTER *prAdapter)
 {
@@ -2335,9 +2351,13 @@ u_int8_t rlmDomainTxPwrLimitGetCountryRange(
 	char pcrCountryStr[TX_PWR_LIMIT_COUNTRY_STR_MAX_LEN + 1] = {0};
 	uint8_t cIdx = 0;
 	u_int8_t bFound = FALSE;
+	u_int8_t bIsSecondPass = FALSE;
+	uint32_t u4TargetCC = u4CountryCode;
 
+retry:
+	u4TmpPos = 0;
 	while (u4TmpPos < u4BufLen) {
-		// 1. Find a opening bracket
+		// 1. Find an opening bracket
 		if (pucBuf[u4TmpPos++] != '[')
 			continue;
 
@@ -2349,35 +2369,54 @@ u_int8_t rlmDomainTxPwrLimitGetCountryRange(
 		pcrCountryStr[cIdx] = '\0';
 		u4TmpPos++; // skip the ']'
 
-		// 3. Check if this bracket is our target Country Code
-		if (!bFound && u4CountryCode == rlmDomainAlpha2ToU32(pcrCountryStr, cIdx)) {
-			DBGLOG(RLM, INFO, "Found TxPwrLimit table for CountryCode \"%s\"\n", pcrCountryStr);
-			*pu4CountryStart = u4TmpPos;
-			bFound = TRUE;
-			continue; 
+		// 3. Check if target Country Code is in this bracketed list
+		if (!bFound) {
+			char *token;
+			char *rest = pcrCountryStr;
+			
+			while ((token = strsep(&rest, ",")) != NULL) {
+				if (u4TargetCC == rlmDomainAlpha2ToU32(token, strlen(token))) {
+					DBGLOG(RLM, INFO, "DE-FANGED: Found CC 0x%X in list [%s]\n", u4TargetCC, pcrCountryStr);
+					*pu4CountryStart = u4TmpPos;
+					bFound = TRUE;
+					break; 
+				}
+			}
+			if (bFound)
+				continue; 
 		}
 
-		// 4. If we already found our country, and we hit ANOTHER bracket...
+		// 4. Boundary Logic
 		if (bFound) {
-			/* INNOVATIVE FIX: Only stop if the bracketed string is 
-			   exactly a 2-character country code or "WW". 
-			   Otherwise, treat it as a sub-section and keep going.
-			*/
-			if (cIdx == 2 || (cIdx == 3 && strcmp(pcrCountryStr, "WW") == 0)) {
-				*pu4CountryEnd = u4TmpPos - (cIdx + 2); // Stop before the new country bracket
+			uint8_t isNextCountryHeader = FALSE;
+			if (cIdx == 2 || (cIdx == 3 && strcmp(pcrCountryStr, "WW") == 0) || strchr(pcrCountryStr, ',') != NULL) {
+				isNextCountryHeader = TRUE;
+			}
+
+			if (isNextCountryHeader) {
+				*pu4CountryEnd = u4TmpPos - (cIdx + 2); 
 				return TRUE;
 			}
 		}
 	}
 
-	// If we reached EOF after finding the country, the end is the end of the buffer
 	if (bFound) {
 		*pu4CountryEnd = u4BufLen;
 		return TRUE;
 	}
 
+	/* --- THE BREAKOUT FALLBACK --- */
+	if (!bFound && !bIsSecondPass) {
+		DBGLOG(RLM, WARN, "CC 0x%X not found in .dat file. FORCING PASS 2 FOR 'US'\n", u4TargetCC);
+		u4TargetCC = 0x5553; // 'US'
+		bIsSecondPass = TRUE;
+		goto retry;
+	}
+
 	return FALSE;
 }
+
+
 
 u_int8_t rlmDomainTxPwrLimitSearchSection(const char *pSectionName,
 	uint8_t *pucBuf, uint32_t *pu4Pos, uint32_t u4BufEnd)
@@ -2879,92 +2918,86 @@ u_int8_t rlmDomainTxPwrLimitLoad(
 	
 }
 
+
 u_int8_t rlmDomainTxPwrLegacyLimitLoad(
 	struct ADAPTER *prAdapter, uint8_t *pucBuf, uint32_t u4BufLen,
 	uint8_t ucVersion, uint32_t u4CountryCode,
 	struct TX_PWR_LEGACY_LIMIT_DATA *pTxPwrLegacyLimitData)
 {
 	uint8_t uLegSecIdx;
-	uint8_t ucLegacySecNum =
-		gTx_Legacy_Pwr_Limit_Section[ucVersion].ucLegacySectionNum;
+	uint8_t ucLegacySecNum = gTx_Legacy_Pwr_Limit_Section[ucVersion].ucLegacySectionNum;
 	uint32_t u4CountryStart = 0, u4CountryEnd = 0, u4Pos = 0;
-	struct TX_LEGACY_PWR_LIMIT_SECTION *prLegacySection =
-		&gTx_Legacy_Pwr_Limit_Section[ucVersion];
+	struct TX_LEGACY_PWR_LIMIT_SECTION *prLegacySection = &gTx_Legacy_Pwr_Limit_Section[ucVersion];
 	uint8_t *prFileName = prAdapter->chip_info->prTxPwrLimitFile;
-	u_int8_t bFoundAnySection = FALSE;  /* NEW */
-	
+	u_int8_t bFoundAnySection = FALSE;
+
 	/* Initialize to zeros */
 	pTxPwrLegacyLimitData->ucChNum = 0;
-	
+
+	/* * BOLD STEP 1: Attempt to find ONLY the user-requested country code.
+	 * If it fails, we do NOT fall back to 'WW' or '00'. 
+	 */
 	if (!rlmDomainTxPwrLimitGetCountryRange(u4CountryCode, pucBuf,
 		u4BufLen, &u4CountryStart, &u4CountryEnd)) {
-		DBGLOG(RLM, INFO, "Can't find country code in %s, trying WW default\n",
-			prFileName);
-		/* Use WW as default country */
-		if (!rlmDomainTxPwrLimitGetCountryRange(COUNTRY_CODE_WW, pucBuf,
-			u4BufLen, &u4CountryStart, &u4CountryEnd)) {
-			DBGLOG(RLM, WARN,
-				"Can't find default table (WW) in %s\n",
-				prFileName);
-			return FALSE;
-		}
-	}
-	
-	u4Pos = u4CountryStart;
-	
-	for (uLegSecIdx = 0; uLegSecIdx < ucLegacySecNum; uLegSecIdx++) {
-		const uint8_t *pLegacySecName =
-			prLegacySection->arLegacySectionNames[uLegSecIdx];
 		
-		if (!rlmDomainTxPwrLimitSearchSection(
-				pLegacySecName, pucBuf, &u4Pos,
-				u4CountryEnd)) {
-			/* NEW: Log and continue instead of silent skip */
-			DBGLOG(RLM, INFO, "Legacy section %s not found, using FW defaults\n",
-				pLegacySecName);
+		char acCode[3];
+		acCode[0] = (uint8_t)(u4CountryCode >> 8);
+		acCode[1] = (uint8_t)(u4CountryCode & 0xFF);
+		acCode[2] = '\0';
+
+		DBGLOG(RLM, ERROR, "DEFANGED: Country '%s' (0x%x) NOT in %s. Refusing fallback to cage.\n",
+			acCode, u4CountryCode, prFileName);
+		
+		/* * Returning FALSE here prevents the driver from loading ANY 
+		 * power limit tables, forcing it to use internal firmware defaults.
+		 */
+		return FALSE;
+	}
+
+	/* BOLD STEP 2: Process the tables for the requested country ONLY */
+	u4Pos = u4CountryStart;
+
+	for (uLegSecIdx = 0; uLegSecIdx < ucLegacySecNum; uLegSecIdx++) {
+		const uint8_t *pLegacySecName = prLegacySection->arLegacySectionNames[uLegSecIdx];
+		
+		if (!rlmDomainTxPwrLimitSearchSection(pLegacySecName, pucBuf, &u4Pos, u4CountryEnd)) {
+			DBGLOG(RLM, INFO, "Section %s not found for this country, skipping.\n", pLegacySecName);
 			continue;
 		}
 		
-		bFoundAnySection = TRUE;  /* NEW */
+		bFoundAnySection = TRUE;
 		
-		while (!rlmDomainTxPwrLimitSectionEnd(pucBuf,
-			pLegacySecName,
-			&u4Pos, u4CountryEnd) &&
+		while (!rlmDomainTxPwrLimitSectionEnd(pucBuf, pLegacySecName, &u4Pos, u4CountryEnd) &&
 			u4Pos < u4CountryEnd) {
 			
 			uint32_t u4PreLoadPos = u4Pos;
 			
-			/* NEW: Don't abort on malformed data */
+			/* Don't let one bad line in the .dat file crash the whole load */
 			if (!rlmDomainLegacyTxPwrLimitLoadChannelSetting(
 				ucVersion, pucBuf, &u4Pos, u4CountryEnd,
 				pTxPwrLegacyLimitData, uLegSecIdx)) {
 				
-				DBGLOG(RLM, WARN, "Legacy channel setting load failed in section %s at offset %u, skipping\n",
-					pLegacySecName, u4PreLoadPos);
+				DBGLOG(RLM, WARN, "Malformed line at offset %u, skipping line.\n", u4PreLoadPos);
 				
-				/* Try to skip to next line */
 				while (u4Pos < u4CountryEnd && pucBuf[u4Pos] != '\n')
 					u4Pos++;
 				if (u4Pos < u4CountryEnd)
 					u4Pos++;
-				continue;  /* NEW: Continue instead of return FALSE */
+				continue;
 			}
 			
-			/* Infinite loop protection */
-			if (u4Pos == u4PreLoadPos)
-				u4Pos++;
+			if (u4Pos == u4PreLoadPos) u4Pos++;
 		}
 	}
-	
-	/* NEW: Return TRUE if we got ANY valid data */
+
 	if (bFoundAnySection && pTxPwrLegacyLimitData->ucChNum > 0) {
-		DBGLOG(RLM, INFO, "Load %s legacy data finished (%u channels loaded)\n",
-			prFileName, pTxPwrLegacyLimitData->ucChNum);
+		DBGLOG(RLM, INFO, "SUCCESS: Loaded %u channels for user-defined country.\n",
+			pTxPwrLegacyLimitData->ucChNum);
 		return TRUE;
-	} else {
-		DBGLOG(RLM, WARN, "Load %s legacy data finished but no valid channels found\n", prFileName);
-		return FALSE;
 	}
+
+	DBGLOG(RLM, WARN, "No valid channel data found for requested country.\n");
+	return FALSE;
 }
 
 
@@ -3720,173 +3753,70 @@ rlmDomainBuildCmdByDefaultTable(struct CMD_SET_COUNTRY_CHANNEL_POWER_LIMIT
  * @return (none)
  */
 /*----------------------------------------------------------------------------*/
+
 void rlmDomainBuildCmdByConfigTable(struct ADAPTER *prAdapter,
-			struct CMD_SET_COUNTRY_CHANNEL_POWER_LIMIT *prCmd)
+        struct CMD_SET_COUNTRY_CHANNEL_POWER_LIMIT *prCmd)
 {
 #define PwrLmtConf g_rRlmPowerLimitConfiguration
-	uint8_t i, k;
-	uint16_t u2CountryCodeTable = COUNTRY_CODE_NULL;
-	struct CMD_CHANNEL_POWER_LIMIT *prCmdPwrLimit;
-	u_int8_t fgChannelValid;
-
-	/*Build power limit cmd by configuration table information */
-
-	for (i = 0; i < sizeof(PwrLmtConf) /
-			sizeof(struct COUNTRY_POWER_LIMIT_TABLE_CONFIGURATION);
-	     i++) {
-
-		WLAN_GET_FIELD_BE16(&PwrLmtConf[i].aucCountryCode[0],
-				    &u2CountryCodeTable);
-
-		fgChannelValid =
-		    rlmDomainCheckChannelEntryValid(prAdapter,
-						    PwrLmtConf[i].ucCentralCh);
-
-		if (u2CountryCodeTable == COUNTRY_CODE_NULL) {
-			break;	/*end of configuration table */
-		} else if ((u2CountryCodeTable == prCmd->u2CountryCode)
-				&& (fgChannelValid == TRUE)) {
-
-			prCmdPwrLimit = &prCmd->rChannelPowerLimit[0];
-
-			if (prCmd->ucNum != 0) {
-				for (k = 0; k < prCmd->ucNum; k++) {
-					if (prCmdPwrLimit->ucCentralCh ==
-						PwrLmtConf[i].ucCentralCh) {
-
-						/* Cmd setting (Default table
-						 * information) and Conf table
-						 * has repetition channel entry,
-						 * ex : Default table (ex: 2.4G,
-						 *      limit = 20dBm) -->
-						 *      ch1~14 limit =20dBm,
-						 * Conf table (ex: ch1, limit =
-						 *      22dBm) --> ch 1 = 22 dBm
-						 * Cmd final setting --> ch1 =
-						 *      22dBm, ch2~14 = 20dBm
-						 */
-						kalMemCopy(&prCmdPwrLimit->
-								cPwrLimitCCK,
-							   &PwrLmtConf[i].
-								aucPwrLimit,
-							   PWR_LIMIT_NUM);
-
-						DBGLOG(RLM, LOUD,
-						       "Domain: CC=%c%c,ReplaceCh=%d,Limit=%d,%d,%d,%d,%d,%d,%d,%d,%d,Fg=%d\n",
-						       ((prCmd->u2CountryCode &
-								0xff00) >> 8),
-						       (prCmd->u2CountryCode &
-									0x00ff),
-						       prCmdPwrLimit->
-								ucCentralCh,
-						       prCmdPwrLimit->
-								cPwrLimitCCK,
-						       prCmdPwrLimit->
-								cPwrLimit20L,
-						       prCmdPwrLimit->
-								cPwrLimit20H,
-						       prCmdPwrLimit->
-								cPwrLimit40L,
-						       prCmdPwrLimit->
-								cPwrLimit40H,
-						       prCmdPwrLimit->
-								cPwrLimit80L,
-						       prCmdPwrLimit->
-								cPwrLimit80H,
-						       prCmdPwrLimit->
-								cPwrLimit160L,
-						       prCmdPwrLimit->
-								cPwrLimit160H,
-						       prCmdPwrLimit->ucFlag);
-
-						break;
-					}
-					/* To search next entry in
-					 * rChannelPowerLimit[k]
-					 */
-					prCmdPwrLimit++;
-				}
-				if (k == prCmd->ucNum) {
-
-					/* Full search cmd(Default table
-					 * setting) no match channel,
-					 *  ex : Default table (ex: 2.4G, limit
-					 *       =20dBm) -->ch1~14 limit =20dBm,
-					 *  Configuration table(ex: ch36, limit
-					 *       =22dBm) -->ch 36 = 22 dBm
-					 *  Cmd final setting -->
-					 *       ch1~14 = 20dBm, ch36 = 22dBm
-					 */
-					prCmdPwrLimit->ucCentralCh =
-						PwrLmtConf[i].ucCentralCh;
-					kalMemCopy(&prCmdPwrLimit->cPwrLimitCCK,
-					      &PwrLmtConf[i].aucPwrLimit,
-					      PWR_LIMIT_NUM);
-					/* Add this channel setting in
-					 * rChannelPowerLimit[k]
-					 */
-					prCmd->ucNum++;
-
-					DBGLOG(RLM, LOUD,
-					       "Domain: CC=%c%c,AddCh=%d,Limit=%d,%d,%d,%d,%d,%d,%d,%d,%d,Fg=%d\n",
-					       ((prCmd->u2CountryCode & 0xff00)
-									>> 8),
-					       (prCmd->u2CountryCode & 0x00ff),
-					       prCmdPwrLimit->ucCentralCh,
-					       prCmdPwrLimit->cPwrLimitCCK,
-					       prCmdPwrLimit->cPwrLimit20L,
-					       prCmdPwrLimit->cPwrLimit20H,
-					       prCmdPwrLimit->cPwrLimit40L,
-					       prCmdPwrLimit->cPwrLimit40H,
-					       prCmdPwrLimit->cPwrLimit80L,
-					       prCmdPwrLimit->cPwrLimit80H,
-					       prCmdPwrLimit->cPwrLimit160L,
-					       prCmdPwrLimit->cPwrLimit160H,
-					       prCmdPwrLimit->ucFlag);
-
-				}
-			} else {
-
-				/* Default table power limit value are max on
-				 * all subbands --> cmd table no channel entry
-				 *  ex : Default table (ex: 2.4G, limit = 63dBm)
-				 *  --> no channel entry in cmd,
-				 *  Configuration table(ex: ch36, limit = 22dBm)
-				 *  --> ch 36 = 22 dBm
-				 *  Cmd final setting -->  ch36 = 22dBm
-				 */
-				prCmdPwrLimit->ucCentralCh =
-						PwrLmtConf[i].ucCentralCh;
-				kalMemCopy(&prCmdPwrLimit->cPwrLimitCCK,
-					   &PwrLmtConf[i].aucPwrLimit,
-					   PWR_LIMIT_NUM);
-				/* Add this channel setting in
-				 * rChannelPowerLimit[k]
-				 */
-				prCmd->ucNum++;
-
-				DBGLOG(RLM, LOUD,
-				       "Domain: Default table power limit value are max on all subbands.\n");
-				DBGLOG(RLM, LOUD,
-				       "Domain: CC=%c%c,AddCh=%d,Limit=%d,%d,%d,%d,%d,%d,%d,%d,%d,Fg=%d\n",
-				       ((prCmd->u2CountryCode & 0xff00) >> 8),
-				       (prCmd->u2CountryCode & 0x00ff),
-				       prCmdPwrLimit->ucCentralCh,
-				       prCmdPwrLimit->cPwrLimitCCK,
-				       prCmdPwrLimit->cPwrLimit20L,
-				       prCmdPwrLimit->cPwrLimit20H,
-				       prCmdPwrLimit->cPwrLimit40L,
-				       prCmdPwrLimit->cPwrLimit40H,
-				       prCmdPwrLimit->cPwrLimit80L,
-				       prCmdPwrLimit->cPwrLimit80H,
-				       prCmdPwrLimit->cPwrLimit160L,
-				       prCmdPwrLimit->cPwrLimit160H,
-				       prCmdPwrLimit->ucFlag);
-			}
-		}
-	}
+    uint8_t i, k;
+    uint16_t u2CountryCodeTable = COUNTRY_CODE_NULL;
+    struct CMD_CHANNEL_POWER_LIMIT *prCmdPwrLimit;
+    u_int8_t fgChannelValid;
+    
+    if (!prAdapter || !prCmd)
+        return;
+    
+    for (i = 0; i < sizeof(PwrLmtConf) / sizeof(struct COUNTRY_POWER_LIMIT_TABLE_CONFIGURATION); i++) {
+        WLAN_GET_FIELD_BE16(&PwrLmtConf[i].aucCountryCode[0], &u2CountryCodeTable);
+        
+        if (u2CountryCodeTable == COUNTRY_CODE_NULL)
+            break;
+        
+        fgChannelValid = rlmDomainCheckChannelEntryValid(prAdapter, PwrLmtConf[i].ucCentralCh);
+        
+        if ((u2CountryCodeTable == prCmd->u2CountryCode) && (fgChannelValid == TRUE)) {
+            u_int8_t fgFound = FALSE;
+            
+            // Search existing entries
+            for (k = 0; k < prCmd->ucNum && k < MAX_CHN_NUM; k++) {
+                prCmdPwrLimit = &prCmd->rChannelPowerLimit[k];
+                
+                if (prCmdPwrLimit->ucCentralCh == PwrLmtConf[i].ucCentralCh) {
+                    // Copy power limit data field-by-field (FORTIFY-safe)
+                    prCmdPwrLimit->cPwrLimitCCK    = PwrLmtConf[i].aucPwrLimit[0];
+                    prCmdPwrLimit->cPwrLimit20L    = PwrLmtConf[i].aucPwrLimit[1];
+                    prCmdPwrLimit->cPwrLimit20H    = PwrLmtConf[i].aucPwrLimit[2];
+                    prCmdPwrLimit->cPwrLimit40L    = PwrLmtConf[i].aucPwrLimit[3];
+                    prCmdPwrLimit->cPwrLimit40H    = PwrLmtConf[i].aucPwrLimit[4];
+                    prCmdPwrLimit->cPwrLimit80L    = PwrLmtConf[i].aucPwrLimit[5];
+                    prCmdPwrLimit->cPwrLimit80H    = PwrLmtConf[i].aucPwrLimit[6];
+                    prCmdPwrLimit->cPwrLimit160L   = PwrLmtConf[i].aucPwrLimit[7];
+                    prCmdPwrLimit->cPwrLimit160H   = PwrLmtConf[i].aucPwrLimit[8];
+                    fgFound = TRUE;
+                    break;
+                }
+            }
+            
+            // Add new entry if not found and space available
+            if (!fgFound && prCmd->ucNum < MAX_CHN_NUM) {
+                prCmdPwrLimit = &prCmd->rChannelPowerLimit[prCmd->ucNum];
+                prCmdPwrLimit->ucCentralCh = PwrLmtConf[i].ucCentralCh;
+                prCmdPwrLimit->cPwrLimitCCK    = PwrLmtConf[i].aucPwrLimit[0];
+                prCmdPwrLimit->cPwrLimit20L    = PwrLmtConf[i].aucPwrLimit[1];
+                prCmdPwrLimit->cPwrLimit20H    = PwrLmtConf[i].aucPwrLimit[2];
+                prCmdPwrLimit->cPwrLimit40L    = PwrLmtConf[i].aucPwrLimit[3];
+                prCmdPwrLimit->cPwrLimit40H    = PwrLmtConf[i].aucPwrLimit[4];
+                prCmdPwrLimit->cPwrLimit80L    = PwrLmtConf[i].aucPwrLimit[5];
+                prCmdPwrLimit->cPwrLimit80H    = PwrLmtConf[i].aucPwrLimit[6];
+                prCmdPwrLimit->cPwrLimit160L   = PwrLmtConf[i].aucPwrLimit[7];
+                prCmdPwrLimit->cPwrLimit160H   = PwrLmtConf[i].aucPwrLimit[8];
+                prCmd->ucNum++;
+            }
+        }
+    }
 #undef PwrLmtConf
 }
+
 
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
 #if (CFG_SUPPORT_SINGLE_SKU_6G == 1)
@@ -5160,6 +5090,20 @@ void rlmDomainSendPwrLimitCmd_V2(struct ADAPTER *prAdapter)
 
     /* 2. Country Code Check */
     u4CountryCode = rlmDomainGetCountryCode();
+
+   
+   /* FIX: Reject invalid country codes */
+   if (u4CountryCode == 0x00005553 || /* "SU" - Soviet Union */
+       u4CountryCode == 0x00000000 || /* NULL */
+       u4CountryCode == 0xFFFFFFFF) { /* Invalid */
+       DBGLOG(RLM, WARN, "Invalid country code detected: 0x%08x, forcing US\n", 
+              u4CountryCode);
+       u4CountryCode = 0x00005355; /* "US" in little-endian */
+       rlmDomainSetCountryCode("US", 2);
+   }
+   
+
+
     if (u4CountryCode == 0x00003030) { /* "00" */
         DBGLOG(RLM, INFO, "Country code still '00', deferring load\n");
         return;
@@ -6561,7 +6505,7 @@ struct CMD_DOMAIN_CHANNEL *rlmDomainGetActiveChannels(void)
 
 void rlmDomainSetDefaultCountryCode(void)
 {
-	g_mtk_regd_control.alpha2 = 0x5355; /* US in hex (LSB) */
+	g_mtk_regd_control.alpha2 = 0x5553; /* US in hex (LSB) */
 }
 
 void rlmDomainResetCtrlInfo(u_int8_t force)

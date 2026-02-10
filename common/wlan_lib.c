@@ -483,6 +483,7 @@ static uint32_t g_csi_val[CSI_MAX_DATA_COUNT];
  *******************************************************************************
  */
 
+/* Robust wlanCfgGetStringSafe replacement */
 static int wlanCfgGetStringSafe(struct ADAPTER *prAdapter,
                                 const char *key,
                                 char *buf,
@@ -492,18 +493,61 @@ static int wlanCfgGetStringSafe(struct ADAPTER *prAdapter,
     char tmp[WLAN_CFG_VALUE_LEN_MAX];
     size_t len;
 
-    if (!buf || buflen == 0)
+    if (!buf || buflen == 0) {
+        DBGLOG(INIT, WARN, "wlanCfgGetStringSafe: invalid buffer (%p) or buflen=%zu\n",
+               buf, buflen);
         return -1;
+    }
 
-    if (wlanCfgGet(prAdapter, key, tmp, (char *)def, 0)
-        != WLAN_STATUS_SUCCESS)
+    /* Try to read from config store */
+    if (wlanCfgGet(prAdapter, key, tmp, (char *)def, 0) != WLAN_STATUS_SUCCESS) {
+        /* If the config read failed, fall back to def if provided */
+        if (def && def[0] != '\0') {
+            len = kalStrLen(def);
+            if (len >= buflen) {
+                DBGLOG(INIT, WARN,
+                       "wlanCfgGetStringSafe: fallback def for '%s' too long (%zu >= %zu)\n",
+                       key, len, buflen);
+                return -1;
+            }
+            kalMemCopy(buf, def, len + 1);
+            DBGLOG(INIT, INFO,
+                   "wlanCfgGetStringSafe: wlanCfgGet failed for '%s', using def '%s'\n",
+                   key, def);
+            return (int)len;
+        }
+
+        DBGLOG(INIT, INFO,
+               "wlanCfgGetStringSafe: wlanCfgGet failed for '%s' and no def provided\n",
+               key);
         return -1;
+    }
+
+    /* Ensure tmp is NUL-terminated (defensive) */
+    tmp[WLAN_CFG_VALUE_LEN_MAX - 1] = '\0';
 
     len = kalStrLen(tmp);
-    if (len >= buflen)
+
+    /* If the config returned an empty string, indicate length 0 (caller can treat as missing) */
+    if (len == 0) {
+        DBGLOG(INIT, LOUD,
+               "wlanCfgGetStringSafe: key '%s' present but empty\n", key);
+        buf[0] = '\0';
+        return 0;
+    }
+
+    if (len >= buflen) {
+        DBGLOG(INIT, WARN,
+               "wlanCfgGetStringSafe: key '%s' value too long (%zu >= %zu)\n",
+               key, len, buflen);
         return -1;
+    }
 
     kalMemCopy(buf, tmp, len + 1); /* include NUL */
+    DBGLOG(INIT, LOUD,
+           "wlanCfgGetStringSafe: key '%s' -> '%s' (len=%zu)\n",
+           key, buf, len);
+
     return (int)len;
 }
 
@@ -516,72 +560,112 @@ static inline int hexval(char c)
 	return -1;
 }
 
+/* improved, robust parser */
 static int parse_mac_address_string(struct ADAPTER *prAdapter,
                                     struct WIFI_VAR *prWifiVar)
 {
-    char macStr[32];
+    char macStr[WLAN_CFG_VALUE_LEN_MAX];
+    char hexbuf[13]; /* 12 hex chars + NUL */
     uint8_t mac[6];
-    int len;
-    uint32_t pos = 0, i = 0;
+    int len = -1, i, k;
+    const char *keys[] = { "MacAddr", "MacAddress" };
+    size_t dest_buf_len = WLAN_MAC_ADDR_STR_LEN; /* explicit, not sizeof(struct member) */
 
-    len = wlanCfgGetStringSafe(prAdapter,
-                               "MacAddr",
-                               macStr,
-                               sizeof(macStr),
-                               "00:11:22:33:44:55");
-    if (len < 0)
+    if (!prAdapter || !prWifiVar)
         return -1;
 
-    /* Expect exactly "xx:xx:xx:xx:xx:xx" */
-    if (len != 17)
+    if (prWifiVar->ucMacAddrOverride == 0)
         return -1;
 
-    /* Parse string to binary */
-    while (i < 6) {
-        int hi, lo;
-
-        while (pos < len &&
-               (macStr[pos] == ':' ||
-                macStr[pos] == '-' ||
-                macStr[pos] == ' '))
-            pos++;
-
-        if (pos + 2 > len)
-            return -1;
-
-        hi = hexval(macStr[pos++]);
-        lo = hexval(macStr[pos++]);
-
-        if (hi < 0 || lo < 0)
-            return -1;
-
-        mac[i++] = (hi << 4) | lo;
+    /* find key */
+    for (k = 0; k < (int)(sizeof(keys)/sizeof(keys[0])); k++) {
+        len = wlanCfgGetStringSafe(prAdapter, keys[k],
+                                  macStr, sizeof(macStr), "");
+        if (len > 0)
+            break;
+    }
+    if (len <= 0) {
+        DBGLOG(INIT, INFO, "parse_mac: no MacAddr/MacAddress entry\n");
+        return -1;
     }
 
-    if (i != 6)
+    /* trim leading/trailing whitespace (operate on unsigned char values) */
+    int start = 0, end = len - 1;
+    while (start <= end && (unsigned char)macStr[start] <= ' ' )
+        start++;
+    while (end >= start && (unsigned char)macStr[end] <= ' ')
+        end--;
+
+    /* collect exactly 12 hex digits */
+    int outpos = 0;
+    for (i = start; i <= end; i++) {
+        int v = hexval((unsigned char)macStr[i]);
+        if (v >= 0) {
+            if (outpos >= 12) { /* guard */
+                DBGLOG(INIT, WARN, "parse_mac: too many hex digits in \"%s\"\n", &macStr[start]);
+                return -1;
+            }
+            hexbuf[outpos++] = macStr[i];
+        } else {
+            /* allowed separators */
+            if (macStr[i] == ':' || macStr[i] == '-' || macStr[i] == ' ' || macStr[i] == '\t')
+                continue;
+            DBGLOG(INIT, WARN, "parse_mac: unexpected char '%c' in \"%s\"\n", macStr[i], &macStr[start]);
+            return -1;
+        }
+    }
+
+    if (outpos != 12) {
+        DBGLOG(INIT, WARN, "parse_mac: expected 12 hex digits, got %d in \"%s\"\n", outpos, &macStr[start]);
         return -1;
+    }
+    hexbuf[12] = '\0';
 
-    if (is_multicast_ether_addr(mac) ||
-        is_zero_ether_addr(mac))
+    /* parse into bytes */
+    for (i = 0; i < 6; i++) {
+        int hi = hexval((unsigned char)hexbuf[2 * i]);
+        int lo = hexval((unsigned char)hexbuf[2 * i + 1]);
+        if (hi < 0 || lo < 0) {
+            DBGLOG(INIT, WARN, "parse_mac: invalid hex when parsing \"%s\"\n", hexbuf);
+            return -1;
+        }
+        mac[i] = (uint8_t)((hi << 4) | lo);
+    }
+
+    /* reject multicast or all-zero */
+    if (is_multicast_ether_addr(mac) || is_zero_ether_addr(mac)) {
+        DBGLOG(INIT, WARN, "parse_mac: multicast or zero MAC rejected\n");
         return -1;
+    }
 
-    /* No trailing garbage */
-    while (pos < len &&
-           (macStr[pos] == ':' ||
-            macStr[pos] == '-' ||
-            macStr[pos] == ' '))
-        pos++;
-
-    if (pos != len)
+    /* IMPORTANT: use an explicit, known size constant, not sizeof(member) */
+    if (dest_buf_len < WLAN_MAC_ADDR_STR_LEN) {
+        DBGLOG(INIT, WARN, "parse_mac: configured WLAN_MAC_ADDR_STR_LEN too small\n");
         return -1;
+    }
 
-    /* Destination must be real storage, not a pointer */
-    if (sizeof(prWifiVar->aucMacAddrStr) <= len)
-        return -1;
+    /* write canonical lower-case colon-separated string */
+    kalSnprintf(prWifiVar->aucMacAddrStr, dest_buf_len,
+                "%02x:%02x:%02x:%02x:%02x:%02x",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    kalMemCopy(prWifiVar->aucMacAddrStr, macStr, len + 1);
+    /* optional: store raw bytes if struct has space (helpful) */
+#ifdef WIFI_VAR_HAS_RAW_MAC /* put this macro in your struct header if you add this */
+    memcpy(prWifiVar->aucMacAddr, mac, sizeof(mac));
+#endif
 
-    DBGLOG(INIT, INFO, "MAC override applied\n");
+    /* write canonical lower-case colon-separated string */
+    kalSnprintf(prWifiVar->aucMacAddrStr, dest_buf_len,
+                "%02x:%02x:%02x:%02x:%02x:%02x",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    /* Change this line: */
+    memcpy(prWifiVar->aucMacAddress, mac, 6); 
+
+    DBGLOG(INIT, INFO, "MAC override applied: %s (raw %02x:%02x:%02x:%02x:%02x:%02x)\n",
+           prWifiVar->aucMacAddrStr,
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
     return 0;
 }
 
@@ -1928,9 +2012,11 @@ uint32_t wlanProcessCommandQueue(IN struct ADAPTER
 
 				if (rStatus == WLAN_STATUS_SUCCESS) {
 					if (prCmdInfo->pfCmdDoneHandler) {
-						prCmdInfo->pfCmdDoneHandler(
+        prCmdInfo->pfCmdDoneHandler(
 						    prAdapter, prCmdInfo,
 						    prCmdInfo->pucInfoBuffer);
+    }
+}
 					}
 				} else {
 					if (prCmdInfo->fgIsOid) {
@@ -1995,57 +2081,54 @@ uint32_t wlanProcessCommandQueue(IN struct ADAPTER
  */
 /*----------------------------------------------------------------------------*/
 uint32_t wlanSendCommand(IN struct ADAPTER *prAdapter,
-			 IN struct CMD_INFO *prCmdInfo)
+             IN struct CMD_INFO *prCmdInfo)
 {
-	struct TX_CTRL *prTxCtrl;
-	uint8_t ucTC;		/* "Traffic Class" SW(Driver) resource
-				 * classification
-				 */
-	uint32_t rStatus = WLAN_STATUS_SUCCESS;
+    struct TX_CTRL *prTxCtrl;
+    uint8_t ucTC;
+    uint32_t rStatus = WLAN_STATUS_SUCCESS;
 
-	ASSERT(prAdapter);
-	ASSERT(prCmdInfo);
-	prTxCtrl = &prAdapter->rTxCtrl;
+    /* Safety first: If prCmdInfo is junk, exit immediately */
+    if (!prAdapter || !prCmdInfo)
+        return WLAN_STATUS_FAILURE;
 
-	do {
-		/* <0> card removal check */
-		if (kalIsCardRemoved(prAdapter->prGlueInfo) == TRUE
-		    || fgIsBusAccessFailed == TRUE) {
-			rStatus = WLAN_STATUS_FAILURE;
-			break;
-		}
+    prTxCtrl = &prAdapter->rTxCtrl;
 
-		/* <1.1> Assign Traffic Class(TC) */
-		ucTC = nicTxGetCmdResourceType(prCmdInfo);
+    do {
+        if (kalIsCardRemoved(prAdapter->prGlueInfo) == TRUE
+            || fgIsBusAccessFailed == TRUE) {
+            rStatus = WLAN_STATUS_FAILURE;
+            break;
+        }
 
-		/* <1.2> Check if pending packet or resource was exhausted */
+        ucTC = nicTxGetCmdResourceType(prCmdInfo);
+
 #if defined(_HIF_USB) || defined(_HIF_PCIE) || defined(_HIF_AXI)
-		if (halTxGetFreeCmdCnt(prAdapter) <= 0)
-			rStatus = WLAN_STATUS_RESOURCES;
-#else /* SDIO */
-		rStatus = nicTxAcquireResource(prAdapter, ucTC,
-			       nicTxGetCmdPageCount(prAdapter, prCmdInfo),
-			       TRUE);
+        if (halTxGetFreeCmdCnt(prAdapter) <= 0) {
+            rStatus = WLAN_STATUS_RESOURCES;
+        }
+#else
+        rStatus = nicTxAcquireResource(prAdapter, ucTC,
+               nicTxGetCmdPageCount(prAdapter, prCmdInfo),
+               TRUE);
 #endif
-		if (rStatus == WLAN_STATUS_RESOURCES) {
-			DBGLOG(INIT, INFO, "NO Resource:%d\n", ucTC);
-			break;
-		}
-		/* <1.3> Forward CMD_INFO_T to NIC Layer */
-		rStatus = nicTxCmd(prAdapter, prCmdInfo, ucTC);
 
-		/* <1.4> Set Pending in response to Query Command/Need Response
-		 */
-		if (rStatus == WLAN_STATUS_SUCCESS) {
-			if ((!prCmdInfo->fgSetQuery) || (prCmdInfo->fgNeedResp))
-				rStatus = WLAN_STATUS_PENDING;
-		}
+        if (rStatus == WLAN_STATUS_RESOURCES) {
+            DBGLOG(INIT, INFO, "NO Resource:%d\n", ucTC);
+            break;
+        }
 
-	} while (FALSE);
+        /* Forward to NIC Layer */
+        rStatus = nicTxCmd(prAdapter, prCmdInfo, ucTC);
 
-	return rStatus;
-}				/* end of wlanSendCommand() */
+        if (rStatus == WLAN_STATUS_SUCCESS) {
+            if ((!prCmdInfo->fgSetQuery) || (prCmdInfo->fgNeedResp))
+                rStatus = WLAN_STATUS_PENDING;
+        }
 
+    } while (FALSE);
+
+    return rStatus;
+} /* end of wlanSendCommand */
 #if CFG_SUPPORT_MULTITHREAD
 
 /*----------------------------------------------------------------------------*/
@@ -2345,9 +2428,12 @@ uint32_t wlanTxCmdDoneMthread(IN struct ADAPTER *prAdapter)
 	while (prQueueEntry) {
 		prCmdInfo = (struct CMD_INFO *) prQueueEntry;
 
-		if (prCmdInfo->pfCmdDoneHandler)
-			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+		if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
 						    prCmdInfo->pucInfoBuffer);
+    }
+}
 		/* Not pending cmd, free it after TX succeed! */
 		cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
 
@@ -2495,9 +2581,12 @@ void wlanClearTxCommandDoneQueue(IN struct ADAPTER
 	while (prQueueEntry) {
 		prCmdInfo = (struct CMD_INFO *) prQueueEntry;
 
-		if (prCmdInfo->pfCmdDoneHandler)
-			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+		if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
 						    prCmdInfo->pucInfoBuffer);
+    }
+}
 		/* Not pending cmd, free it after TX succeed! */
 		cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
 
@@ -7648,10 +7737,13 @@ void wlanInitFeatureOption(IN struct ADAPTER *prAdapter)
 	prWifiVar->ucMacAddrOverride =
 	    (uint8_t) wlanCfgGetInt32(prAdapter, "MacOverride", 1);
 
-	if (parse_mac_address_string(prAdapter, prWifiVar) != 0) {
-	    DBGLOG(INIT, WARN, "Invalid MacAddr override, using default\n");
+	if (prWifiVar->ucMacAddrOverride) {
+	    if (parse_mac_address_string(prAdapter, prWifiVar) != 0) {
+		DBGLOG(INIT, INFO, "No valid MacAddr override found, using default or embedded\n");
+	    }
+	} else {
+	    DBGLOG(INIT, INFO, "Mac override disabled by config\n");
 	}
-
 
 
 	prWifiVar->ucCtiaMode = (uint8_t) wlanCfgGetUint32(
@@ -8692,109 +8784,90 @@ int32_t wlanCfgGetInt32(IN struct ADAPTER *prAdapter,
 	return i4Value;
 }
 
+
+
+
 uint32_t wlanCfgSet(IN struct ADAPTER *prAdapter,
 		    const int8_t *pucKey, int8_t *pucValue, uint32_t u4Flags)
 {
-
 	struct WLAN_CFG_ENTRY *prWlanCfgEntry;
 	struct WLAN_CFG *prWlanCfg = NULL;
 	struct WLAN_CFG_REC *prWlanCfgRec = NULL;
-	uint32_t u4EntryIndex;
 	uint32_t i;
-	uint8_t ucExist;
-	u_int8_t fgGetCfgRec = FALSE;
-
-
-	fgGetCfgRec = u4Flags & WLAN_CFG_REC_FLAG_BIT;
+	uint8_t ucExist = 0;
+	u_int8_t fgGetCfgRec = (u4Flags & WLAN_CFG_REC_FLAG_BIT);
 
 	ASSERT(pucKey);
 
-	/* Find the exist */
-	ucExist = 0;
+	/* --- BOLD INTERCEPT: Force User Responsibility --- */
+	if (kalStrniCmp(pucKey, "CountryCode", 11) == 0) {
+		int8_t *pVal = pucValue;
+
+		/* Handle the 'CountryCode=US' case from the config file */
+		if (pVal && pVal[0] == '=')
+			pVal++;
+
+		if (pVal && pVal[0] != '\0' && pVal[1] != '\0') {
+			uint32_t u4CC = (pVal[0] << 8) | pVal[1];
+			struct wiphy *pWiphy = wlanGetWiphy();
+
+			DBGLOG(INIT, WARN, "BOLD: wifi.cfg setting CountryCode to [%c%c]\n", 
+			       pVal[0], pVal[1]);
+
+			/* 1. Update the internal RLM domain state */
+			rlmDomainSetCountryCode(pVal, 2);
+
+			/* 2. Force the update through the adapter logic */
+			rlmDomainCountryCodeUpdate(prAdapter, pWiphy, u4CC);
+
+			/* Return success to skip standard table storage for this key */
+			return WLAN_STATUS_SUCCESS;
+		}
+	}
+
+	/* --- Standard Storage Logic --- */
 	if (fgGetCfgRec) {
-		prWlanCfgEntry = wlanCfgGetEntry(prAdapter, pucKey, TRUE);
+		prWlanCfgEntry = wlanCfgGetEntry(prAdapter, (uint8_t *)pucKey, TRUE);
 		prWlanCfgRec = prAdapter->prWlanCfgRec;
-		ASSERT(prWlanCfgRec);
 	} else {
-		prWlanCfgEntry = wlanCfgGetEntry(prAdapter, pucKey, FALSE);
+		prWlanCfgEntry = wlanCfgGetEntry(prAdapter, (uint8_t *)pucKey, FALSE);
 		prWlanCfg = prAdapter->prWlanCfg;
-		ASSERT(prWlanCfg);
 	}
 
 	if (!prWlanCfgEntry) {
-		/* Find the empty */
 		for (i = 0; i < WLAN_CFG_ENTRY_NUM_MAX; i++) {
-			if (fgGetCfgRec)
-				prWlanCfgEntry = &prWlanCfgRec->arWlanCfgBuf[i];
-			else
-				prWlanCfgEntry = &prWlanCfg->arWlanCfgBuf[i];
+			prWlanCfgEntry = fgGetCfgRec ? 
+				&prWlanCfgRec->arWlanCfgBuf[i] : &prWlanCfg->arWlanCfgBuf[i];
 			if (prWlanCfgEntry->aucKey[0] == '\0')
 				break;
 		}
 
-		u4EntryIndex = i;
-		if (u4EntryIndex < WLAN_CFG_ENTRY_NUM_MAX) {
-			if (fgGetCfgRec)
-				prWlanCfgEntry =
-				    &prWlanCfgRec->arWlanCfgBuf[u4EntryIndex];
-			else
-				prWlanCfgEntry =
-				    &prWlanCfg->arWlanCfgBuf[u4EntryIndex];
-			kalMemZero(prWlanCfgEntry,
-				   sizeof(struct WLAN_CFG_ENTRY));
+		if (i < WLAN_CFG_ENTRY_NUM_MAX) {
+			kalMemZero(prWlanCfgEntry, sizeof(struct WLAN_CFG_ENTRY));
+			kalStrnCpy(prWlanCfgEntry->aucKey, pucKey, WLAN_CFG_KEY_LEN_MAX - 1);
 		} else {
-			prWlanCfgEntry = NULL;
-			DBGLOG(INIT, ERROR,
-			       "wifi config there is no empty entry\n");
+			DBGLOG(INIT, ERROR, "wifi config: no empty entry\n");
+			return WLAN_STATUS_FAILURE;
 		}
-	} /* !prWlanCfgEntry */
-	else
+	} else {
 		ucExist = 1;
-
-	if (prWlanCfgEntry) {
-		if (ucExist == 0) {
-			kalStrnCpy(prWlanCfgEntry->aucKey, pucKey,
-				   WLAN_CFG_KEY_LEN_MAX - 1);
-			prWlanCfgEntry->aucKey[WLAN_CFG_KEY_LEN_MAX - 1] = '\0';
-		}
-
-		if (pucValue && pucValue[0] != '\0') {
-			kalStrnCpy(prWlanCfgEntry->aucValue, pucValue,
-				   WLAN_CFG_VALUE_LEN_MAX - 1);
-			prWlanCfgEntry->aucValue[WLAN_CFG_VALUE_LEN_MAX - 1] =
-									'\0';
-
-			if (ucExist) {
-				if (prWlanCfgEntry->pfSetCb)
-					prWlanCfgEntry->pfSetCb(prAdapter,
-						prWlanCfgEntry->aucKey,
-						prWlanCfgEntry->aucValue,
-						prWlanCfgEntry->pPrivate, 0);
-			}
-		} else {
-			/* Call the pfSetCb if value is empty ? */
-			/* remove the entry if value is empty */
-			kalMemZero(prWlanCfgEntry,
-				   sizeof(struct WLAN_CFG_ENTRY));
-		}
-
 	}
-	/* prWlanCfgEntry */
-	if (prWlanCfgEntry) {
-		return WLAN_STATUS_SUCCESS;
+
+	if (pucValue && pucValue[0] != '\0') {
+		kalStrnCpy(prWlanCfgEntry->aucValue, pucValue, WLAN_CFG_VALUE_LEN_MAX - 1);
+		if (ucExist && prWlanCfgEntry->pfSetCb) {
+			prWlanCfgEntry->pfSetCb(prAdapter, prWlanCfgEntry->aucKey,
+					       prWlanCfgEntry->aucValue, prWlanCfgEntry->pPrivate, 0);
+		}
+	} else {
+		kalMemZero(prWlanCfgEntry, sizeof(struct WLAN_CFG_ENTRY));
 	}
-	if (pucKey)
-		DBGLOG(INIT, ERROR, "Set wifi config error key \'%s\'\n",
-		       pucKey);
 
-	if (pucValue)
-		DBGLOG(INIT, ERROR, "Set wifi config error value \'%s\'\n",
-		       pucValue);
-
-	return WLAN_STATUS_FAILURE;
-
-
+	return WLAN_STATUS_SUCCESS;
 }
+
+
+
 
 uint32_t
 wlanCfgSetCb(IN struct ADAPTER *prAdapter,
@@ -8847,7 +8920,6 @@ wlanCfgParseAddEntry(IN struct ADAPTER *prAdapter,
 		     uint8_t *pucKeyHead, uint8_t *pucKeyTail,
 		     uint8_t *pucValueHead, uint8_t *pucValueTail)
 {
-
 	uint8_t aucKey[WLAN_CFG_KEY_LEN_MAX];
 	uint8_t aucValue[WLAN_CFG_VALUE_LEN_MAX];
 	uint32_t u4Len;
@@ -8855,37 +8927,29 @@ wlanCfgParseAddEntry(IN struct ADAPTER *prAdapter,
 	kalMemZero(aucKey, sizeof(aucKey));
 	kalMemZero(aucValue, sizeof(aucValue));
 
-	if ((pucKeyHead == NULL)
-	    || (pucValueHead == NULL)
-	   )
+	if (!pucKeyHead || !pucValueHead)
 		return WLAN_STATUS_FAILURE;
 
-	if (pucKeyTail) {
-		if (pucKeyHead > pucKeyTail)
-			return WLAN_STATUS_FAILURE;
+	/* Extract Key */
+	if (pucKeyTail)
 		u4Len = pucKeyTail - pucKeyHead + 1;
-	} else
+	else
 		u4Len = kalStrnLen(pucKeyHead, WLAN_CFG_KEY_LEN_MAX - 1);
 
-	if (u4Len >= WLAN_CFG_KEY_LEN_MAX)
-		u4Len = WLAN_CFG_KEY_LEN_MAX - 1;
-
+	u4Len = (u4Len >= WLAN_CFG_KEY_LEN_MAX) ? WLAN_CFG_KEY_LEN_MAX - 1 : u4Len;
 	kalStrnCpy(aucKey, pucKeyHead, u4Len);
 
-	if (pucValueTail) {
-		if (pucValueHead > pucValueTail)
-			return WLAN_STATUS_FAILURE;
+	/* Extract Value */
+	if (pucValueTail)
 		u4Len = pucValueTail - pucValueHead + 1;
-	} else
-		u4Len = kalStrnLen(pucValueHead,
-				   WLAN_CFG_VALUE_LEN_MAX - 1);
+	else
+		u4Len = kalStrnLen(pucValueHead, WLAN_CFG_VALUE_LEN_MAX - 1);
 
-	if (u4Len >= WLAN_CFG_VALUE_LEN_MAX)
-		u4Len = WLAN_CFG_VALUE_LEN_MAX - 1;
-
+	u4Len = (u4Len >= WLAN_CFG_VALUE_LEN_MAX) ? WLAN_CFG_VALUE_LEN_MAX - 1 : u4Len;
 	kalStrnCpy(aucValue, pucValueHead, u4Len);
 
-	return wlanCfgSet(prAdapter, aucKey, aucValue, 0);
+	/* Hand off to wlanCfgSet for enforcement */
+	return wlanCfgSet(prAdapter, (int8_t *)aucKey, (int8_t *)aucValue, 0);
 }
 
 enum {

@@ -3660,9 +3660,12 @@ void nicEventLinkQuality(IN struct ADAPTER *prAdapter,
 					 prEvent->ucSeqNum);
 
 	if (prCmdInfo != NULL) {
-		if (prCmdInfo->pfCmdDoneHandler)
-			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+		if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
 						    prEvent->aucBuffer);
+    }
+}
 		else if (prCmdInfo->fgIsOid)
 			kalOidComplete(prAdapter->prGlueInfo,
 				prCmdInfo->fgSetQuery,
@@ -4515,10 +4518,12 @@ void nicEventLayer0ExtMagic(IN struct ADAPTER *prAdapter,
 		prCmdInfo = nicGetPendingCmdInfo(prAdapter, prEvent->ucSeqNum);
 		if (prCmdInfo != NULL && prCmdInfo->pfCmdDoneHandler) {
 			struct EXT_EVENT_BF_STATUS_T *prExtBfStatus =
-			(struct EXT_EVENT_BF_STATUS_T *)prEvent->aucBuffer;
-
-			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+			(struct EXT_EVENT_BF_STATUS_T *)prEvent->aucBuffer; {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
 						    prExtBfStatus->aucBuf);
+    }
+}
 		}
 		break;
 #endif
@@ -4678,9 +4683,12 @@ void nicEventLayer0ExtMagic(IN struct ADAPTER *prAdapter,
 						 prEvent->ucSeqNum);
 
 		if (prCmdInfo != NULL) {
-			if (prCmdInfo->pfCmdDoneHandler)
-				prCmdInfo->pfCmdDoneHandler(prAdapter,
+			if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter,
 					prCmdInfo, prEvent->aucBuffer);
+    }
+}
 			else if (prCmdInfo->fgIsOid)
 				kalOidComplete(prAdapter->prGlueInfo,
 					prCmdInfo->fgSetQuery,
@@ -4698,12 +4706,15 @@ void nicEventLayer0ExtMagic(IN struct ADAPTER *prAdapter,
 				prEvent->ucSeqNum);
 
 		if (prCmdInfo != NULL) {
-			if (prCmdInfo->pfCmdDoneHandler) {
-				prCmdInfo->pfCmdDoneHandler(
+			if (prCmdInfo->pfCmdDoneHandler) { {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(
 					prAdapter,
 					prCmdInfo,
 					prEvent->aucBuffer
 				);
+    }
+}
 			} else if ((prCmdInfo->fgIsOid) != 0)
 				kalOidComplete(
 					prAdapter->prGlueInfo,
@@ -4720,12 +4731,15 @@ void nicEventLayer0ExtMagic(IN struct ADAPTER *prAdapter,
 			prEvent->ucSeqNum);
 
 		if (prCmdInfo != NULL) {
-			if (prCmdInfo->pfCmdDoneHandler) {
-				prCmdInfo->pfCmdDoneHandler(
+			if (prCmdInfo->pfCmdDoneHandler) { {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(
 					prAdapter,
 					prCmdInfo,
 					prEvent->aucBuffer
 				);
+    }
+}
 			} else if ((prCmdInfo->fgIsOid) != 0)
 				kalOidComplete(
 					prAdapter->prGlueInfo,
@@ -4742,12 +4756,15 @@ void nicEventLayer0ExtMagic(IN struct ADAPTER *prAdapter,
 						 prEvent->ucSeqNum);
 
 		if (prCmdInfo != NULL) {
-			if (prCmdInfo->pfCmdDoneHandler)
-				prCmdInfo->pfCmdDoneHandler(
+			if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(
 					prAdapter,
 					prCmdInfo,
 					prEvent->aucBuffer
 				);
+    }
+}
 			else if ((prCmdInfo->fgIsOid) != 0)
 				kalOidComplete(
 					prAdapter->prGlueInfo,
@@ -4920,9 +4937,12 @@ void nicEventStatistics(IN struct ADAPTER *prAdapter,
 					 prEvent->ucSeqNum);
 
 	if (prCmdInfo != NULL) {
-		if (prCmdInfo->pfCmdDoneHandler)
-			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+		if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
 						    prEvent->aucBuffer);
+    }
+}
 		else if (prCmdInfo->fgIsOid)
 			kalOidComplete(prAdapter->prGlueInfo,
 				prCmdInfo->fgSetQuery,
@@ -4948,9 +4968,12 @@ void nicEventWlanInfo(IN struct ADAPTER *prAdapter,
 					 prEvent->ucSeqNum);
 
 	if (prCmdInfo != NULL) {
-		if (prCmdInfo->pfCmdDoneHandler)
-			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+		if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
 						    prEvent->aucBuffer);
+    }
+}
 		else if (prCmdInfo->fgIsOid)
 			kalOidComplete(prAdapter->prGlueInfo,
 							prCmdInfo->fgSetQuery,
@@ -4976,9 +4999,12 @@ void nicEventMibInfo(IN struct ADAPTER *prAdapter,
 					 prEvent->ucSeqNum);
 
 	if (prCmdInfo != NULL) {
-		if (prCmdInfo->pfCmdDoneHandler)
-			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+		if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
 						    prEvent->aucBuffer);
+    }
+}
 		else if (prCmdInfo->fgIsOid)
 			kalOidComplete(prAdapter->prGlueInfo,
 				prCmdInfo->fgSetQuery,
@@ -5501,9 +5527,12 @@ void nicEventDumpMem(IN struct ADAPTER *prAdapter,
 
 	if (prCmdInfo != NULL) {
 		DBGLOG(NIC, INFO, ": ==> 1\n");
-		if (prCmdInfo->pfCmdDoneHandler)
-			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+		if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
 						    prEvent->aucBuffer);
+    }
+}
 		else if (prCmdInfo->fgIsOid)
 			kalOidComplete(prAdapter->prGlueInfo,
 				prCmdInfo->fgSetQuery, 0, WLAN_STATUS_SUCCESS);
@@ -5803,9 +5832,12 @@ void nicEventCoexCtrl(IN struct ADAPTER *prAdapter,
 					 prEvent->ucSeqNum);
 
 	if (prCmdInfo != NULL) {
-		if (prCmdInfo->pfCmdDoneHandler)
-			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+		if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
 						    prEvent->aucBuffer);
+    }
+}
 		else if (prCmdInfo->fgIsOid)
 			kalOidComplete(prAdapter->prGlueInfo,
 					prCmdInfo->fgSetQuery,
@@ -5826,9 +5858,12 @@ void nicEventCnmInfo(IN struct ADAPTER *prAdapter,
 					 prEvent->ucSeqNum);
 
 	if (prCmdInfo != NULL) {
-		if (prCmdInfo->pfCmdDoneHandler)
-			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+		if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
 						    prEvent->aucBuffer);
+    }
+}
 		else if (prCmdInfo->fgIsOid)
 			kalOidComplete(prAdapter->prGlueInfo,
 							prCmdInfo->fgSetQuery,
@@ -6592,9 +6627,12 @@ void nicEventTxMcsInfo(IN struct ADAPTER *prAdapter,
 					 prEvent->ucSeqNum);
 
 	if (prCmdInfo != NULL) {
-		if (prCmdInfo->pfCmdDoneHandler)
-			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+		if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
 				prEvent->aucBuffer);
+    }
+}
 		else if (prCmdInfo->fgIsOid)
 			kalOidComplete(prAdapter->prGlueInfo,
 				prCmdInfo->fgSetQuery,
@@ -6742,9 +6780,12 @@ void nicNanEventTestProcess(IN struct ADAPTER *prAdapter,
 	prCmdInfo = nicGetPendingCmdInfo(prAdapter, prEvent->ucSeqNum);
 
 	if (prCmdInfo != NULL) {
-		if (prCmdInfo->pfCmdDoneHandler)
-			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+		if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
 						    prEvent->aucBuffer);
+    }
+}
 		else if (prCmdInfo->fgIsOid)
 			kalOidComplete(prAdapter->prGlueInfo,
 				       prCmdInfo->fgSetQuery, 0,

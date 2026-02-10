@@ -3701,9 +3701,12 @@ void cnmDbdcEventHwSwitchDone(IN struct ADAPTER
 					 prEvent->ucSeqNum);
 
 	if (prCmdInfo != NULL) {
-		if (prCmdInfo->pfCmdDoneHandler)
-			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+		if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
 						    prEvent->aucBuffer);
+    }
+}
 		else if (prCmdInfo->fgIsOid)
 			kalOidComplete(prAdapter->prGlueInfo,
 				       prCmdInfo->fgSetQuery,

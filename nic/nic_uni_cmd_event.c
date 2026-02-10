@@ -2867,10 +2867,13 @@ void nicRxProcessUniEventPacket(IN struct ADAPTER *prAdapter,
 						 prEvent->ucSeqNum);
 
 		if (prCmdInfo != NULL) {
-			if (prCmdInfo->pfCmdDoneHandler)
-				prCmdInfo->pfCmdDoneHandler(
+			if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(
 					prAdapter, prCmdInfo,
 					prEvent->aucBuffer);
+    }
+}
 			else if (prCmdInfo->fgIsOid)
 				kalOidComplete(
 					prAdapter->prGlueInfo,

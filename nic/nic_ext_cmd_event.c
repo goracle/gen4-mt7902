@@ -107,27 +107,49 @@ wlanSendSetQueryExtCmd2WA(
 {
 	struct GLUE_INFO *prGlueInfo;
 	struct CMD_INFO *prCmdInfo;
-	uint8_t *pucCmdBuf;
+	uint8_t *pucCmdBuf = NULL;
 	struct mt66xx_chip_info *prChipInfo;
+	uint32_t u4AllocLen;
+
+	ASSERT(prAdapter);
+	if (!prAdapter)
+		return WLAN_STATUS_FAILURE;
 
 	prGlueInfo = prAdapter->prGlueInfo;
 	prChipInfo = prAdapter->chip_info;
-	prCmdInfo = cmdBufAllocateCmdInfo(prAdapter,
-		(prChipInfo->u2CmdTxHdrSize + u4SetQueryInfoLen));
 
-	DEBUGFUNC("wlanSendSetQueryCmd");
+	/* 1. Calculate required buffer length */
+	u4AllocLen = (uint32_t)prChipInfo->u2CmdTxHdrSize + u4SetQueryInfoLen;
+
+	/* 2. Allocate the command structure */
+	prCmdInfo = cmdBufAllocateCmdInfo(prAdapter, u4AllocLen);
 
 	if (!prCmdInfo) {
 		DBGLOG(INIT, ERROR, "Allocate CMD_INFO_T ==> FAILED.\n");
-		return WLAN_STATUS_FAILURE;
+		return WLAN_STATUS_RESOURCES;
 	}
 
-	/* Setup common CMD Info Packet */
+	/* 3. Buffer Integrity Check: 
+	 * Ensure the allocated buffer is actually present to avoid NULL deref in kalMemCopy
+	 */
+	if (u4AllocLen > 0 && prCmdInfo->pucInfoBuffer == NULL) {
+		DBGLOG(INIT, ERROR, "pucInfoBuffer is NULL! Aborting.\n");
+		/* Use the appropriate free function for your driver version */
+		cmdBufFreeCmdInfo(prAdapter, prCmdInfo); 
+		return WLAN_STATUS_RESOURCES;
+	}
+
+	/* 4. Initialize Command structure */
 	prCmdInfo->eCmdType = COMMAND_TYPE_NETWORK_IOCTL;
-	prCmdInfo->u2InfoBufLen =
-		(uint16_t)(prChipInfo->u2CmdTxHdrSize + u4SetQueryInfoLen);
+	prCmdInfo->u2InfoBufLen = (uint16_t)u4AllocLen;
+	
+	/* * DEFENSE: Explicitly set handlers. 
+	 * If pfCmdDoneHandler is NULL (common in country code updates), 
+	 * ensuring it is NULL here prevents the dispatcher from jumping to a junk address.
+	 */
 	prCmdInfo->pfCmdDoneHandler = pfCmdDoneHandler;
 	prCmdInfo->pfCmdTimeoutHandler = pfCmdTimeoutHandler;
+	
 	prCmdInfo->fgIsOid = fgIsOid;
 	prCmdInfo->ucCID = ucCID;
 	prCmdInfo->fgSetQuery = fgSetQuery;
@@ -136,7 +158,7 @@ wlanSendSetQueryExtCmd2WA(
 	prCmdInfo->pvInformationBuffer = pvSetQueryBuffer;
 	prCmdInfo->u4InformationBufferLength = u4SetQueryBufferLen;
 
-	/* Setup WIFI_CMD_T (no payload) */
+	/* 5. Fill the hardware-specific Command Header */
 	NIC_FILL_CMD_TX_HDR(prAdapter,
 		prCmdInfo->pucInfoBuffer,
 		prCmdInfo->u2InfoBufLen,
@@ -144,18 +166,30 @@ wlanSendSetQueryExtCmd2WA(
 		CMD_PACKET_TYPE_ID,
 		&prCmdInfo->ucCmdSeqNum,
 		prCmdInfo->fgSetQuery,
-		&pucCmdBuf, FALSE, ucExtCID, S2D_INDEX_CMD_H2C,
+		&pucCmdBuf, 
+		FALSE, 
+		ucExtCID, 
+		S2D_INDEX_CMD_H2C,
 		prCmdInfo->fgNeedResp);
-	if (u4SetQueryInfoLen > 0 && pucInfoBuffer != NULL)
-		kalMemCopy(pucCmdBuf, pucInfoBuffer, u4SetQueryInfoLen);
 
-	/* insert into prCmdQueue */
+	/* 6. Copy payload data with safety checks */
+	if (u4SetQueryInfoLen > 0 && pucInfoBuffer != NULL && pucCmdBuf != NULL) {
+		kalMemCopy(pucCmdBuf, pucInfoBuffer, u4SetQueryInfoLen);
+	}
+
+	/* * 7. THE POINT OF NO RETURN:
+	 * Once enqueued, the command can be processed by the TX thread or interrupt
+	 * at any microsecond. Do NOT access prCmdInfo after this call.
+	 */
 	kalEnqueueCommand(prGlueInfo, (struct QUE_ENTRY *) prCmdInfo);
 
-	/* wakeup txServiceThread later */
+	/* 8. Wakeup the transmission thread */
 	GLUE_SET_EVENT(prGlueInfo);
+
 	return WLAN_STATUS_PENDING;
 }
+
+
 
 static uint32_t StaRecUpdateBasic(
 	struct ADAPTER *pAd,

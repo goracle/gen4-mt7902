@@ -144,6 +144,10 @@
 /* Support Random P2P MAC */
 #define WIFI_FEATURE_P2P_RAND_MAC  (0x80000000)
 
+/* put in a header visible to this file */
+#define WLAN_MAC_ADDR_STR_LEN (MAC_ADDR_STR_LEN + 1)  /* "xx:xx:xx:xx:xx:xx" + NUL = 18 */
+
+
 /* note: WIFI_FEATURE_GSCAN be enabled just for ACTS test item: scanner */
 #if CFG_SUPPORT_DYNAMIC_PWR_LIMIT
 #define WIFI_HAL_FEATURE_SET ((WIFI_FEATURE_P2P) |\

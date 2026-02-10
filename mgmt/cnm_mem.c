@@ -353,44 +353,41 @@ void *cnmMemAlloc(IN struct ADAPTER *prAdapter, IN enum ENUM_RAM_TYPE eRamType,
 	uint32_t rRequiredBitmap;
 	uint32_t u4BlockNum;
 	uint32_t i, u4BlkSzInPower;
-	void *pvMemory;
+	void *pvMemory = NULL;
 	enum ENUM_SPIN_LOCK_CATEGORY_E eLockBufCat;
 
 	KAL_SPIN_LOCK_DECLARATION();
 
-	ASSERT(prAdapter);
-
-	if (u4Length == 0) {
-		log_dbg(MEM, WARN,
-			"%s: Length to be allocated is ZERO, skip!\n",
-			__func__);
+	/* 1. Fundamental safety check */
+	if (!prAdapter) {
+		printk(KERN_ERR "[wlan] cnmMemAlloc: prAdapter is NULL!\n");
 		return NULL;
 	}
 
+	if (u4Length == 0) {
+		log_dbg(MEM, WARN, "%s: Length to be allocated is ZERO, skip!\n", __func__);
+		return NULL;
+	}
+
+	/* 2. Determine pool and parameters */
 	if (eRamType == RAM_TYPE_MSG && u4Length <= 256) {
 		prBufInfo = &prAdapter->rMsgBufInfo;
 		u4BlkSzInPower = MSG_BUF_BLOCK_SIZE_IN_POWER_OF_2;
-
-		u4BlockNum = (u4Length + MSG_BUF_BLOCK_SIZE - 1)
-			>> MSG_BUF_BLOCK_SIZE_IN_POWER_OF_2;
-
-		ASSERT(u4BlockNum <= MAX_NUM_OF_BUF_BLOCKS);
+		u4BlockNum = (u4Length + MSG_BUF_BLOCK_SIZE - 1) >> MSG_BUF_BLOCK_SIZE_IN_POWER_OF_2;
+		eLockBufCat = SPIN_LOCK_MSG_BUF;
 	} else {
 		eRamType = RAM_TYPE_BUF;
-
 		prBufInfo = &prAdapter->rMgtBufInfo;
 		u4BlkSzInPower = MGT_BUF_BLOCK_SIZE_IN_POWER_OF_2;
-
-		u4BlockNum = (u4Length + MGT_BUF_BLOCK_SIZE - 1)
-			>> MGT_BUF_BLOCK_SIZE_IN_POWER_OF_2;
-
-		ASSERT(u4BlockNum <= MAX_NUM_OF_BUF_BLOCKS);
+		u4BlockNum = (u4Length + MGT_BUF_BLOCK_SIZE - 1) >> MGT_BUF_BLOCK_SIZE_IN_POWER_OF_2;
+		eLockBufCat = SPIN_LOCK_MGT_BUF;
 	}
 
-	if (eRamType == RAM_TYPE_MSG)
-		eLockBufCat = SPIN_LOCK_MSG_BUF;
-	else
-		eLockBufCat = SPIN_LOCK_MGT_BUF;
+	/* 3. CRITICAL: Check if pool is initialized before taking lock or calculating offsets */
+	if (!prBufInfo->pucBuf) {
+		/* Pool not initialized yet (early probe), skip bitmask logic */
+		goto FALLBACK_KMALLOC;
+	}
 
 	KAL_ACQUIRE_SPIN_LOCK(prAdapter, eLockBufCat);
 
@@ -398,36 +395,19 @@ void *cnmMemAlloc(IN struct ADAPTER *prAdapter, IN enum ENUM_RAM_TYPE eRamType,
 	prBufInfo->u4AllocCount++;
 #endif
 
+	/* 4. Try to allocate from pre-allocated bitmapped pool */
 	if ((u4BlockNum > 0) && (u4BlockNum <= MAX_NUM_OF_BUF_BLOCKS)) {
-
-		/* Convert number of block into bit cluster */
 		rRequiredBitmap = BITS(0, u4BlockNum - 1);
 
 		for (i = 0; i <= (MAX_NUM_OF_BUF_BLOCKS - u4BlockNum); i++) {
-
-			/* Have available memory blocks */
-			if ((prBufInfo->rFreeBlocksBitmap & rRequiredBitmap)
-				== rRequiredBitmap) {
-
-				/* Clear corresponding bits of allocated
-				 * memory blocks
-				 */
-				prBufInfo->rFreeBlocksBitmap
-					&= ~rRequiredBitmap;
-
-				/* Store how many blocks be allocated */
-				prBufInfo->aucAllocatedBlockNum[i]
-					= (uint8_t) u4BlockNum;
+			if ((prBufInfo->rFreeBlocksBitmap & rRequiredBitmap) == rRequiredBitmap) {
+				/* Found free blocks: mark as used */
+				prBufInfo->rFreeBlocksBitmap &= ~rRequiredBitmap;
+				prBufInfo->aucAllocatedBlockNum[i] = (uint8_t) u4BlockNum;
 
 				KAL_RELEASE_SPIN_LOCK(prAdapter, eLockBufCat);
-
-				/* Return the start address of
-				 * allocated memory
-				 */
-				return (void *) (prBufInfo->pucBuf
-					+ (i << u4BlkSzInPower));
+				return (void *) (prBufInfo->pucBuf + (i << u4BlkSzInPower));
 			}
-
 			rRequiredBitmap <<= 1;
 		}
 	}
@@ -436,20 +416,31 @@ void *cnmMemAlloc(IN struct ADAPTER *prAdapter, IN enum ENUM_RAM_TYPE eRamType,
 	prBufInfo->u4AllocNullCount++;
 #endif
 
-	/* kalMemAlloc() shall not included in spin_lock */
 	KAL_RELEASE_SPIN_LOCK(prAdapter, eLockBufCat);
+
+	/* 5. Fallback: Allocate from system memory (Heap) */
+/* 5. Fallback: Allocate from system memory (Heap) */
+FALLBACK_KMALLOC:
 
 #ifdef LINUX
 #if CFG_DBG_MGT_BUF
-	pvMemory = (void *) kalMemAlloc(u4Length + sizeof(struct MEM_TRACK),
-		PHY_MEM_TYPE);
+	pvMemory = (void *) kalMemAlloc(u4Length + sizeof(struct MEM_TRACK), PHY_MEM_TYPE);
 	if (pvMemory) {
 		struct MEM_TRACK *prMemTrack = (struct MEM_TRACK *)pvMemory;
 
-		KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_MGT_BUF);
-		LINK_INSERT_TAIL(
-			&prAdapter->rMemTrackLink, &prMemTrack->rLinkEntry);
-		KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_MGT_BUF);
+		/* * SAFETY CHECK: Only attempt to link if the list has been initialized.
+		 * If prNext is NULL, the list head is still raw zeros.
+		 */
+		if (prAdapter->rMemTrackLink.prNext != NULL && prAdapter->rMemTrackLink.prNext != (struct LINK_ENTRY *)&prAdapter->rMemTrackLink) {
+			KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_MGT_BUF);
+			LINK_INSERT_TAIL(&prAdapter->rMemTrackLink, &prMemTrack->rLinkEntry);
+			KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_MGT_BUF);
+		} else {
+			/* Just zero the link entry so we don't have garbage pointers */
+			prMemTrack->rLinkEntry.prNext = NULL;
+			prMemTrack->rLinkEntry.prPrev = NULL;
+		}
+		
 		prMemTrack->pucFileAndLine = fileAndLine;
 		prMemTrack->u2CmdIdAndWhere = 0x0000;
 		pvMemory = (void *)(prMemTrack + 1);
@@ -458,7 +449,7 @@ void *cnmMemAlloc(IN struct ADAPTER *prAdapter, IN enum ENUM_RAM_TYPE eRamType,
 #else
 	pvMemory = (void *) kalMemAlloc(u4Length, PHY_MEM_TYPE);
 	if (!pvMemory)
-		DBGLOG(MEM, WARN, "kmalloc fail: %u\n", u4Length);
+		DBGLOG(MEM, WARN, "kalMemAlloc (kmalloc) fail: %u\n", u4Length);
 #endif
 #else
 	pvMemory = (void *) NULL;
@@ -471,7 +462,8 @@ void *cnmMemAlloc(IN struct ADAPTER *prAdapter, IN enum ENUM_RAM_TYPE eRamType,
 
 	return pvMemory;
 
-}	/* end of cnmMemAlloc() */
+} /* end of cnmMemAlloc/cnmMemAllocX */
+
 
 /*----------------------------------------------------------------------------*/
 /*!

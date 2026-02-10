@@ -1744,10 +1744,13 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
 						 prEvent->ucSeqNum);
 
 		if (prCmdInfo != NULL) {
-			if (prCmdInfo->pfCmdDoneHandler)
-				prCmdInfo->pfCmdDoneHandler(
+			if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(
 					prAdapter, prCmdInfo,
 					prEvent->aucBuffer);
+    }
+}
 			else if (prCmdInfo->fgIsOid)
 				kalOidComplete(
 					prAdapter->prGlueInfo,
@@ -1856,10 +1859,13 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
 
 				if (prCmdResult->ucStatus == 0) {
 					/* success */
-					if (prCmdInfo->pfCmdDoneHandler) {
-						prCmdInfo->pfCmdDoneHandler(
+					if (prCmdInfo->pfCmdDoneHandler) { {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(
 							prAdapter, prCmdInfo,
 							prEvent->aucBuffer);
+    }
+}
 					} else if (prCmdInfo->fgIsOid == TRUE) {
 						kalOidComplete(
 							prAdapter->prGlueInfo,
@@ -2069,10 +2075,13 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
 							 prEvent->ucSeqNum);
 
 			if (prCmdInfo != NULL) {
-				if (prCmdInfo->pfCmdDoneHandler)
-					prCmdInfo->pfCmdDoneHandler(
+				if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(
 						prAdapter, prCmdInfo,
 						prEvent->aucBuffer);
+    }
+}
 				else if (prCmdInfo->fgIsOid)
 					kalOidComplete(
 						prAdapter->prGlueInfo,
@@ -2462,10 +2471,13 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
 							 prEvent->ucSeqNum);
 
 			if (prCmdInfo != NULL) {
-				if (prCmdInfo->pfCmdDoneHandler)
-					prCmdInfo->pfCmdDoneHandler(
+				if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(
 						prAdapter, prCmdInfo,
 						prEvent->aucBuffer);
+    }
+}
 				else if (prCmdInfo->fgIsOid)
 					kalOidComplete(prAdapter->prGlueInfo,
 						prCmdInfo->fgSetQuery,
@@ -2491,10 +2503,13 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
 							 prEvent->ucSeqNum);
 
 			if (prCmdInfo != NULL) {
-				if (prCmdInfo->pfCmdDoneHandler)
-					prCmdInfo->pfCmdDoneHandler(
+				if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(
 						prAdapter, prCmdInfo,
 						prEvent->aucBuffer);
+    }
+}
 				else if (prCmdInfo->fgIsOid)
 					kalOidComplete(prAdapter->prGlueInfo,
 						prCmdInfo->fgSetQuery,
@@ -2516,10 +2531,13 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
 							 prEvent->ucSeqNum);
 
 			if (prCmdInfo != NULL) {
-				if (prCmdInfo->pfCmdDoneHandler)
-					prCmdInfo->pfCmdDoneHandler(prAdapter,
+				if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter,
 						prCmdInfo,
 						prEvent->aucBuffer);
+    }
+}
 				else if (prCmdInfo->fgIsOid)
 					kalOidComplete(prAdapter->prGlueInfo,
 						prCmdInfo->fgSetQuery,
@@ -2885,10 +2903,13 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
 							 prEvent->ucSeqNum);
 
 			if (prCmdInfo != NULL) {
-				if (prCmdInfo->pfCmdDoneHandler)
-					prCmdInfo->pfCmdDoneHandler(prAdapter,
+				if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter,
 						prCmdInfo,
 						prEvent->aucBuffer);
+    }
+}
 				else if (prCmdInfo->fgIsOid)
 					kalOidComplete(prAdapter->prGlueInfo,
 						prCmdInfo->fgSetQuery,
@@ -2917,10 +2938,13 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
 
 			if (prCmdInfo != NULL) {
 				DBGLOG(INIT, INFO, ": ==> 1\n");
-				if (prCmdInfo->pfCmdDoneHandler)
-					prCmdInfo->pfCmdDoneHandler(prAdapter,
+				if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter,
 						prCmdInfo,
 						prEvent->aucBuffer);
+    }
+}
 				else if (prCmdInfo->fgIsOid)
 					kalOidComplete(prAdapter->prGlueInfo,
 						prCmdInfo->fgSetQuery,
@@ -3041,10 +3065,13 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
 							 prEvent->ucSeqNum);
 
 			if (prCmdInfo != NULL) {
-				if (prCmdInfo->pfCmdDoneHandler)
-					prCmdInfo->pfCmdDoneHandler(prAdapter,
+				if (prCmdInfo->pfCmdDoneHandler) {
+    if (prCmdInfo->pfCmdDoneHandler) {
+        prCmdInfo->pfCmdDoneHandler(prAdapter,
 						prCmdInfo,
 						prEvent->aucBuffer);
+    }
+}
 				else if (prCmdInfo->fgIsOid)
 					kalOidComplete(prAdapter->prGlueInfo,
 						prCmdInfo->fgSetQuery,

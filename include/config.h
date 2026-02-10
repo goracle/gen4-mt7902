@@ -609,9 +609,9 @@
 #define CFG_TX_MAX_PKT_NUM                      1024
 
 /*! Maximum number of SW TX CMD packet buffer */
-#define CFG_TX_MAX_CMD_PKT_NUM                  32
+#define CFG_TX_MAX_CMD_PKT_NUM                  256
 
-#define CFG_TX_DYN_CMD_SUPPORT                  0
+#define CFG_TX_DYN_CMD_SUPPORT                  1
 
 /* QM_CMD_RESERVED_THRESHOLD should less than the cmd tx resource */
 #ifndef QM_CMD_RESERVED_THRESHOLD
