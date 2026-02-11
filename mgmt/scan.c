@@ -608,7 +608,13 @@ DBGLOG(SCN, ERROR, "scanSetRequestChannel called: u4ScanChannelNum=%u, arChannel
 #endif
 				pau4ChBitMap = prScanInfo->au4ChannelBitMap;
 
-			if (prScanReqMsg->eScanChannel == SCAN_CHANNEL_2G4 && eBand != BAND_2G4){
+			/* Only apply band filtering when scanning specific bands.
+			 * When eScanChannel is SCAN_CHANNEL_SPECIFIED (explicit channel list),
+			 * accept all bands - critical for RNR 6GHz discovery.
+			 */
+			if (prScanReqMsg->eScanChannel == SCAN_CHANNEL_SPECIFIED) {
+				/* Explicit channels: skip band filtering */
+			} else 			if (prScanReqMsg->eScanChannel == SCAN_CHANNEL_2G4 && eBand != BAND_2G4){
 			  DBGLOG(SCN, ERROR, "Channel %u (band=%u) filtered: reasone ScanChannel=SCAN_CHANNEL_2G4 && eBand != BAND_2G4\n", u4Channel, eBand);
 			  continue;}
 			else if (prScanReqMsg->eScanChannel ==
@@ -1648,6 +1654,7 @@ uint8_t scanSearchBssidInCurrentList(
  * @return   NULL, if has no space.
  */
 /*----------------------------------------------------------------------------*/
+
 void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 	IN struct BSS_DESC *prBssDesc, IN uint8_t *pucIE)
 {
@@ -1839,6 +1846,16 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 			continue;
 		}
 
+		/* CRITICAL FIX #1: Process RNR channel BEFORE parsing TBTTs.
+		 * Even if the channel can't be added (e.g., 6GHz unsupported),
+		 * we still want to queue any valid 2.4/5GHz BSSIDs found in the TBTTs.
+		 * This prevents discarding all results when only the channel fails.
+		 */
+		scanProcessRnrChannel(ucRnrChNum,
+			prNeighborAPInfoField->ucOpClass,
+			prScanRequest);
+
+		/* Iterate through all TBTT Information fields in this RNR entry */
 		for (i = 0; i < u2TbttInfoCount; i++) {
 			j = i * u2TbttInfoLength;
 
@@ -1850,6 +1867,7 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 				break;
 			}
 
+			/* Determine field offsets based on TBTT Info length */
 			switch (u2TbttInfoLength) {
 				case 7:
 					ucShortSsidOffset = 0;
@@ -1874,9 +1892,7 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 					ucHasBssid = TRUE;
 					break;
 				default:
-					/* only support neighbor AP info with
-					*  BSSID
-					*/
+					/* only support neighbor AP info with BSSID */
 					continue;
 			}
 
@@ -1925,6 +1941,7 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 				break;
 			}
 
+			/* Add BSSID to scan request */
 			if (ucBssidNum < CFG_SCAN_OOB_MAX_NUM) {
 				if (prScanRequest->ucScnFuncMask &
 					ENUM_SCN_USE_PADDING_AS_BSSID) {
@@ -1938,6 +1955,7 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 				}
 			}
 
+			/* Handle Short SSID if present */
 			if (ucShortSsidOffset != 0) {
 				/* CRITICAL BOUNDS CHECK: Verify Short SSID array has space */
 				if (ucShortSsidNum >= CFG_SCAN_OOB_MAX_NUM) {
@@ -1969,9 +1987,7 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 					break;
 				}
 
-				/*
-				*  calculate the index to save ShortSsid
-				*/
+				/* Copy Short SSID to IE buffer */
 				kalMemCopy(&prIeShortSsidList->
 					aucShortSsidList[ucShortSsidNum * 4],
 					&prNeighborAPInfoField->
@@ -1993,6 +2009,7 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 				prScanRequest->ucShortSsidNum++;
 			}
 
+			/* Handle BSS Parameters if present */
 			if (ucBssParamOffset != 0 &&
 				(prScanRequest->ucScnFuncMask &
 				 ENUM_SCN_USE_PADDING_AS_BSSID) &&
@@ -2012,58 +2029,58 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 					scanHandleRnrSsid(prScanRequest, prBssDesc,
 							ucBssidNum);
 			}
-		}
+		} /* end TBTT loop */
+
 		/* Calculate next NeighborAPInfo's index if exists */
 		ucCurrentLength += 4 + (u2TbttInfoCount * u2TbttInfoLength);
 
-		/* Only handle RnR with BSSID */
-		if (ucHasBssid && ucScanEnable) {
-
-    u_int8_t fgChannelAdded = scanProcessRnrChannel(ucRnrChNum,
-        prNeighborAPInfoField->ucOpClass,
-        prScanRequest);
-    
-    /* Only add to RNR queue if we actually have channels to scan */
-    if (fgChannelAdded && ucNewLink) {
-        LINK_INSERT_TAIL(&prAdapter->rNeighborAPInfoList,
-            &prNeighborAPInfo->rLinkEntry);
-
-
-
+		/* CRITICAL FIX #1: Queue scan request if we have ANY valid data.
+		 * Changed from "u4ChannelNum > 0" to also check "ucBssidNum > 0".
+		 * This ensures we don't discard valid 2.4/5GHz BSSIDs when
+		 * 6GHz channel processing fails.
+		 */
+		if ((ucBssidNum > 0 || prScanRequest->u4ChannelNum > 0) && ucNewLink) {
+			LINK_INSERT_TAIL(&prAdapter->rNeighborAPInfoList,
+				&prNeighborAPInfo->rLinkEntry);
 
 #if (CFG_SUPPORT_WIFI_RNR == 1)
-	/* Mark that this scan sequence has a pending RNR follow-up.
-	 * scnEventScanDone will defer scan-done reporting until
-	 * aisFsmRunEventScanDone clears this after the follow-up
-	 * completes.
-	 */
-	prAdapter->rWifiVar.rScanInfo.rScanParam.fgHasPendingRnrScan = TRUE;
+			/* Mark that this scan sequence has a pending RNR follow-up.
+			 * scnEventScanDone will defer scan-done reporting until
+			 * aisFsmRunEventScanDone clears this after the follow-up
+			 * completes.
+			 */
+			prAdapter->rWifiVar.rScanInfo.rScanParam.fgHasPendingRnrScan = TRUE;
 #endif
 
-				ucNewLink = FALSE;
-			}
-			prScanRequest->fg6gOobRnrParseEn = FALSE;
-			log_dbg(SCN, INFO, "6G RnR for ch[%d,%d,%d,%d]Match[%d %d %d %d][%d %d %d %d] (IE Length:%d)into list(%d)\n",
-				    prScanRequest->arChannel[0].ucChannelNum,
-				    prScanRequest->arChannel[1].ucChannelNum,
-				    prScanRequest->arChannel[2].ucChannelNum,
-				    prScanRequest->arChannel[3].ucChannelNum,
-				    prScanRequest->ucBssidMatchCh[0],
-				    prScanRequest->ucBssidMatchCh[1],
-				    prScanRequest->ucBssidMatchCh[2],
-				    prScanRequest->ucBssidMatchCh[3],
-				    prScanRequest->ucBssidMatchSsidInd[0],
-				    prScanRequest->ucBssidMatchSsidInd[1],
-				    prScanRequest->ucBssidMatchSsidInd[2],
-				    prScanRequest->ucBssidMatchSsidInd[3],
-				    prScanRequest->u4IELength,
-				    prAdapter->rNeighborAPInfoList.u4NumElem);
-			ucHasBssid = FALSE;
+			ucNewLink = FALSE;
 		}
-		if (LINK_IS_EMPTY(&prAdapter->rNeighborAPInfoList))
-			cnmMemFree(prAdapter, prNeighborAPInfo);
-	}
+
+		prScanRequest->fg6gOobRnrParseEn = FALSE;
+		
+		log_dbg(SCN, INFO, "6G RnR for ch[%d,%d,%d,%d]Match[%d %d %d %d][%d %d %d %d] (IE Length:%d)into list(%d)\n",
+			    prScanRequest->arChannel[0].ucChannelNum,
+			    prScanRequest->arChannel[1].ucChannelNum,
+			    prScanRequest->arChannel[2].ucChannelNum,
+			    prScanRequest->arChannel[3].ucChannelNum,
+			    prScanRequest->ucBssidMatchCh[0],
+			    prScanRequest->ucBssidMatchCh[1],
+			    prScanRequest->ucBssidMatchCh[2],
+			    prScanRequest->ucBssidMatchCh[3],
+			    prScanRequest->ucBssidMatchSsidInd[0],
+			    prScanRequest->ucBssidMatchSsidInd[1],
+			    prScanRequest->ucBssidMatchSsidInd[2],
+			    prScanRequest->ucBssidMatchSsidInd[3],
+			    prScanRequest->u4IELength,
+			    prAdapter->rNeighborAPInfoList.u4NumElem);
+		
+		ucHasBssid = FALSE;
+	} /* end while loop */
+
+	/* Cleanup: free allocated memory if nothing was queued */
+	if (LINK_IS_EMPTY(&prAdapter->rNeighborAPInfoList) && prNeighborAPInfo)
+		cnmMemFree(prAdapter, prNeighborAPInfo);
 }
+
 #endif
 /*----------------------------------------------------------------------------*/
 /*!

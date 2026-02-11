@@ -2003,7 +2003,13 @@ void aisFsmSteps(IN struct ADAPTER *prAdapter,
 #if CFG_SUPPORT_802_11K
 			if (rrmFillScanMsg(prAdapter, prScanReqMsg)) {
 				DBGLOG(AIS, LOUD, "[AIS%d] SCAN: 802.11k scan message filled\n", ucBssIndex);
-				mboxSendMsg(prAdapter, MBOX_ID_0,
+				if (prScanRequest->u4ChannelNum > 0) {
+				prScanReqMsg->eScanChannel = SCAN_CHANNEL_SPECIFIED;
+				prScanReqMsg->ucChannelListNum = (uint8_t)prScanRequest->u4ChannelNum;
+				kalMemCopy(prScanReqMsg->arChnlInfoList, prScanRequest->arChannel, prScanReqMsg->ucChannelListNum * sizeof(struct RF_CHANNEL_INFO));
+				DBGLOG(AIS, INFO, "[MT7902] RNR Fix: Overriding eScanChannel to SPECIFIED for %d channels\n", prScanReqMsg->ucChannelListNum);
+			}
+			mboxSendMsg(prAdapter, MBOX_ID_0,
 					    (struct MSG_HDR *)prScanReqMsg,
 					    MSG_SEND_METHOD_BUF);
 				break;
@@ -2359,6 +2365,12 @@ void aisFsmSteps(IN struct ADAPTER *prAdapter,
 			DBGLOG(AIS, LOUD, "[AIS%d] SCAN: Sending scan request to mailbox, seqNum=%d\n",
 				ucBssIndex, prScanReqMsg->ucSeqNum);
 
+			if (prScanRequest->u4ChannelNum > 0) {
+				prScanReqMsg->eScanChannel = SCAN_CHANNEL_SPECIFIED;
+				prScanReqMsg->ucChannelListNum = (uint8_t)prScanRequest->u4ChannelNum;
+				kalMemCopy(prScanReqMsg->arChnlInfoList, prScanRequest->arChannel, prScanReqMsg->ucChannelListNum * sizeof(struct RF_CHANNEL_INFO));
+				DBGLOG(AIS, INFO, "[MT7902] RNR Fix: Overriding eScanChannel to SPECIFIED for %d channels\n", prScanReqMsg->ucChannelListNum);
+			}
 			mboxSendMsg(prAdapter, MBOX_ID_0,
 				    (struct MSG_HDR *)prScanReqMsg,
 				    MSG_SEND_METHOD_BUF);
@@ -3001,6 +3013,12 @@ void aisFsmRunEventScanDone(IN struct ADAPTER *prAdapter,
 		cnmTimerStartTimer(prAdapter,
 			aisGetScanDoneTimer(prAdapter, ucBssIndex),
 			SEC_TO_MSEC(AIS_SCN_DONE_TIMEOUT_SEC));
+
+// Force the driver to realize this is a specific channel scan (allows 6GHz)
+// Use the Function Mask to tell the driver this is a specific channel scan
+//prNeighborAPInfo->rScanRequest.ucScnFuncMask |= ENUM_SCN_SPECIFIC_CH_SCAN;
+//prNeighborAPInfo->rScanRequest.eScanChannel = SCAN_CHANNEL_SPECIFIED;
+
 		aisFsmScanRequestAdv(prAdapter,
 			&prNeighborAPInfo->rScanRequest);
 		cnmMemFree(prAdapter, prNeighborAPInfo);
@@ -5401,8 +5419,7 @@ void aisFsmScanRequest(IN struct ADAPTER *prAdapter,
  * \return none
  */
 /*----------------------------------------------------------------------------*/
-void
-aisFsmScanRequestAdv(IN struct ADAPTER *prAdapter,
+void aisFsmScanRequestAdv(IN struct ADAPTER *prAdapter,
 		     IN struct PARAM_SCAN_REQUEST_ADV *prRequestIn)
 {
 	struct CONNECTION_SETTINGS *prConnSettings;
