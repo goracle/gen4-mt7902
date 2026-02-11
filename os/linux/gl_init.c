@@ -145,6 +145,16 @@ struct WLANDEV_INFO {
  *******************************************************************************
  */
 
+
+static const struct ieee80211_regdomain mt79xx_regdom_us = {
+	.n_reg_rules = 1,
+	.alpha2 = "US",
+	.reg_rules = {
+        REG_RULE(2402, 7125, 320, 0, 3000, 0),
+
+	},
+};
+
 MODULE_AUTHOR(NIC_AUTHOR);
 MODULE_DESCRIPTION(NIC_DESC);
 #if KERNEL_VERSION(5, 12, 0) > LINUX_VERSION_CODE
@@ -191,6 +201,11 @@ u4WlanDevNum;	/* How many NICs coexist now */
 u_int8_t	g_fgIsCalDataBackuped = FALSE;
 #endif
 
+/* Add this near the other 'extern' or 'include' lines at the top of gl_init.c */
+extern const struct ieee80211_regdomain regdom_us;
+
+
+
 /* 20150205 added work queue for sched_scan to avoid cfg80211 stop schedule scan
  *          dead loack
  */
@@ -214,6 +229,60 @@ EXPORT_SYMBOL(gConEmiPhyBase);
 unsigned long long gConEmiSize;
 EXPORT_SYMBOL(gConEmiSize);
 #endif
+
+
+
+
+
+
+
+
+#include <net/cfg80211.h>
+
+static void mt79xx_reg_notifier(struct wiphy *wiphy,
+                               struct regulatory_request *request)
+{
+    struct ieee80211_supported_band *sband;
+    int b, i;
+
+    DBGLOG(INIT, INFO,
+        "REG NOTIFIER: alpha2=%c%c initiator=%d\n",
+        request->alpha2[0], request->alpha2[1], request->initiator);
+
+
+    /* Force-accept US regardless of initiator */
+    if (request->alpha2[0] != 'U' || request->alpha2[1] != 'S') {
+        request->alpha2[0] = 'U';
+        request->alpha2[1] = 'S';
+    }
+
+    /* Re-enable IR on *all* channels */
+    for (b = 0; b < ARRAY_SIZE(wiphy->bands); b++) {
+        sband = wiphy->bands[b];
+        if (!sband)
+            continue;
+
+        for (i = 0; i < sband->n_channels; i++) {
+            struct ieee80211_channel *c = &sband->channels[i];
+
+            c->flags &= ~(IEEE80211_CHAN_NO_IR |
+                          IEEE80211_CHAN_DISABLED |
+                          IEEE80211_CHAN_RADAR);
+
+            c->max_reg_power = 3000;
+            c->max_power     = 3000;
+        }
+    }
+}
+
+
+
+
+
+
+
+
+
 
 /*  For DTV Ref project -> Default enable */
 #if CFG_DC_USB_WOW_CALLBACK || CFG_POWER_OFF_CTRL_SUPPORT
@@ -2738,45 +2807,49 @@ static void wlanCreateWirelessDevice(void)
 {
 	struct wiphy *prWiphy = NULL;
 	struct GLUE_INFO *prGlueInfo = NULL;
-	struct wireless_dev *prWdev[KAL_AIS_NUM] = {NULL};
-	//unsigned int u4SupportSchedScanFlag = 0;
-	uint32_t u4Idx = 0;
+	struct wireless_dev *prWdev[KAL_AIS_NUM] = { NULL };
+	unsigned int u4Idx;
+	int ret = 0;
 
-	/* 1. Allocate wireless_dev */
+	/* --- Defensive: ensure global halt semaphore exists early (prevents NULL down()) --- */
+	sema_init(&g_halt_sem, 1);
+
+	/* 1) Allocate wireless_dev structs first */
 	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
 		prWdev[u4Idx] = kzalloc(sizeof(struct wireless_dev), GFP_KERNEL);
 		if (!prWdev[u4Idx]) {
-			DBGLOG(INIT, ERROR, "Allocating wireless_dev failed\n");
+			DBGLOG(INIT, ERROR, "Allocating wireless_dev[%u] failed\n", u4Idx);
+			ret = -ENOMEM;
 			goto free_wdev;
 		}
 		prWdev[u4Idx]->iftype = NL80211_IFTYPE_STATION;
 	}
 
-	/* 2. Create wiphy */
+	/* 2) Create wiphy using appropriate ops and priv size */
 #if CFG_ENABLE_UNIFY_WIPHY
 	prWiphy = wiphy_new(&mtk_cfg_ops, sizeof(struct GLUE_INFO));
 #else
 	prWiphy = wiphy_new(&mtk_wlan_ops, sizeof(struct GLUE_INFO));
 #endif
-
 	if (!prWiphy) {
 		DBGLOG(INIT, ERROR, "wiphy_new failed\n");
+		ret = -ENOMEM;
 		goto free_wdev;
 	}
 
-	/* --- FIX: Parent Device Link (Solves iwd /sys/class errors) --- */
+	/* 3) Retrieve private glue info and set parent device if available */
 	prGlueInfo = (struct GLUE_INFO *)wiphy_priv(prWiphy);
 	if (prGlueInfo && prGlueInfo->prDev)
 		prWiphy->dev.parent = prGlueInfo->prDev;
 
-	/* 3. Basic Configuration & Identity */
+	/* 4) Basic identity and limits (iwd-friendly) */
 	prWiphy->iface_combinations = p_mtk_iface_combinations_sta;
 	prWiphy->n_iface_combinations = mtk_iface_combinations_sta_num;
 	prWiphy->max_scan_ssids = SCN_SSID_MAX_NUM + 1;
 	prWiphy->max_scan_ie_len = 512;
-
-	/* FIX: Identity Hardening for iwd */
 	prWiphy->n_addresses = 1;
+
+	/* Ensure perm_addr exists (avoid zero MAC issues with iwd) */
 	if (is_zero_ether_addr(prWiphy->perm_addr)) {
 		prWiphy->perm_addr[0] = 0x00;
 		prWiphy->perm_addr[1] = 0x0C;
@@ -2786,7 +2859,7 @@ static void wlanCreateWirelessDevice(void)
 		prWiphy->perm_addr[5] = 0x01;
 	}
 
-	/* 4. Scanning & Sched Scan (Fixes -22 error) */
+	/* 5) Scanning / sched-scan */
 #if CFG_SUPPORT_SCHED_SCAN
 	prWiphy->max_sched_scan_ssids = CFG_SCAN_HIDDEN_SSID_MAX_NUM;
 	prWiphy->max_match_sets = CFG_SCAN_SSID_MATCH_MAX_NUM;
@@ -2794,40 +2867,40 @@ static void wlanCreateWirelessDevice(void)
 	prWiphy->max_sched_scan_reqs = 1;
 #endif
 
-	prWiphy->interface_modes = BIT(NL80211_IFTYPE_STATION) | BIT(NL80211_IFTYPE_ADHOC);
-/* --- ADD THIS LINE HERE --- */
-	prWiphy->interface_modes |= BIT(NL80211_IFTYPE_STATION);
+	/* 6) Interface modes and bands */
+	prWiphy->interface_modes = BIT(NL80211_IFTYPE_STATION) |
+	                          BIT(NL80211_IFTYPE_ADHOC);
 	prWiphy->bands[KAL_BAND_2GHZ] = &mtk_band_2ghz;
 	prWiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
 #if (CFG_SUPPORT_WIFI_6G == 1)
 	prWiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
 #endif
 
-	/* 5. Ciphers & AKM Suites */
+	/* 7) Crypto, signal and features */
 	prWiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
 	prWiphy->cipher_suites = (const u32 *)mtk_cipher_suites;
 	prWiphy->n_cipher_suites = ARRAY_SIZE(mtk_cipher_suites);
 	prWiphy->akm_suites = (const u32 *)mtk_akm_suites;
 	prWiphy->n_akm_suites = ARRAY_SIZE(mtk_akm_suites);
 
-	/* 6. Flags (DFS, Roaming, TDLS) */
 	prWiphy->flags = WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL;
 #if (CFG_SUPPORT_ROAMING == 1) && (CFG_SUPPORT_SUPPLICANT_SME == 0)
 	prWiphy->flags |= WIPHY_FLAG_SUPPORTS_FW_ROAM;
 #endif
-	prWiphy->regulatory_flags |= REGULATORY_CUSTOM_REG;
 #if (CFG_SUPPORT_DFS_MASTER == 1)
 	prWiphy->flags |= WIPHY_FLAG_HAS_CHANNEL_SWITCH;
 	prWiphy->max_num_csa_counters = 2;
 #endif
-#if (CFG_SUPPORT_TDLS == 1)
-	TDLSEX_WIPHY_FLAGS_INIT(prWiphy->flags);
-#endif
 #if CFG_ENABLE_OFFCHANNEL_TX
 	prWiphy->flags |= WIPHY_FLAG_OFFCHAN_TX;
 #endif
+#if CFG_SUPPORT_TDLS == 1
+	TDLSEX_WIPHY_FLAGS_INIT(prWiphy->flags);
+#endif
 
-	/* 7. Features (SAE, Random MAC, Inactivity) */
+	//prWiphy->regulatory_flags |= REGULATORY_IGNORE_STALE_KICKOFF;
+	prWiphy->regulatory_flags |= REGULATORY_CUSTOM_REG;
+
 	prWiphy->features |= NL80211_FEATURE_SAE;
 	prWiphy->features |= NL80211_FEATURE_SCAN_RANDOM_MAC_ADDR;
 	prWiphy->features |= NL80211_FEATURE_INACTIVITY_TIMER;
@@ -2838,75 +2911,106 @@ static void wlanCreateWirelessDevice(void)
 	prWiphy->max_remain_on_channel_duration = 5000;
 	prWiphy->mgmt_stypes = mtk_cfg80211_ais_default_mgmt_stypes;
 
-	/* 8. Vendor Commands & Events (CRITICAL for MTK Tools) */
+	/* 8) Vendor commands/events */
 	prWiphy->vendor_commands = mtk_wlan_vendor_ops;
 	prWiphy->n_vendor_commands = ARRAY_SIZE(mtk_wlan_vendor_ops);
 	prWiphy->vendor_events = mtk_wlan_vendor_events;
 	prWiphy->n_vendor_events = ARRAY_SIZE(mtk_wlan_vendor_events);
 
-	/* 9. Power Management (WOWLAN) */
 #ifdef CONFIG_PM
 	prWiphy->wowlan = &mtk_wlan_wowlan_support;
 #endif
 
-	/* 10. Unified P2P Modes (If enabled) */
 #if CFG_ENABLE_UNIFY_WIPHY
+	/* Add AP/P2P modes when unify wiphy enabled */
 	prWiphy->iface_combinations = p_mtk_iface_combinations_p2p;
 	prWiphy->n_iface_combinations = mtk_iface_combinations_p2p_num;
-	prWiphy->interface_modes |= BIT(NL80211_IFTYPE_AP) | 
-				    BIT(NL80211_IFTYPE_P2P_CLIENT) |
-				    BIT(NL80211_IFTYPE_P2P_GO);
+	prWiphy->interface_modes |= BIT(NL80211_IFTYPE_AP) |
+	                            BIT(NL80211_IFTYPE_P2P_CLIENT) |
+	                            BIT(NL80211_IFTYPE_P2P_GO);
 	prWiphy->software_iftypes |= BIT(NL80211_IFTYPE_P2P_DEVICE);
 	prWiphy->flags |= WIPHY_FLAG_HAVE_AP_SME;
 	prWiphy->ap_sme_capa = 1;
 #endif
 
-	/* 11. Final Initialization & Registration */
-	sema_init(&g_halt_sem, 1);
-	cfg80211_regd_set_wiphy(prWiphy);
+	/* 9) Register our regulatory notifier BEFORE registration so cfg80211 will call back into us */
+	prWiphy->reg_notifier = mt79xx_reg_notifier;
 
-/* Add this right before wiphy_register(prWiphy); */
-/* Force the kernel to see enabled channels right before registration */
+	/* 10) Conservative regulatory flags: declare driver-managed reg domain but avoid STRICT by default */
+	prWiphy->regulatory_flags = REGULATORY_CUSTOM_REG | REGULATORY_DISABLE_BEACON_HINTS;
+	/* If you have/declare a custom regdomain object, you may apply it here via wiphy_apply_custom_regulatory().
+	 * NOTE: do not attempt to write into non-existent wiphy fields (eg reg_alpha2) — use helpers. */
+
+	/* --- NUCLEAR SCRUB: conservative scrub BEFORE wiphy_register() --- */
+	rtnl_lock();
 	{
-		int i, b;
-		for (b = 0; b < NUM_NL80211_BANDS; b++) {
-			if (prWiphy->bands[b]) {
-				for (i = 0; i < prWiphy->bands[b]->n_channels; i++) {
-					prWiphy->bands[b]->channels[i].flags &= 
-						~(IEEE80211_CHAN_DISABLED | IEEE80211_CHAN_NO_IR);
-				}
+		int b, i, sanitized = 0;
+		struct ieee80211_supported_band *sband;
+
+		DBGLOG(INIT, INFO, "NUCLEAR SCRUB: pre-register channel scrub\n");
+
+		for (b = 0; b < ARRAY_SIZE(prWiphy->bands); b++) {
+			sband = prWiphy->bands[b];
+			if (!sband || !sband->n_channels)
+				continue;
+
+			for (i = 0; i < sband->n_channels; i++) {
+				struct ieee80211_channel *chan = &sband->channels[i];
+
+				/* Clear problematic bits that make userspace mark them NO-IR/disabled.
+				 * Be conservative: clear RADAR/DISABLED/NO_IR only, keep other flags. */
+				chan->flags &= ~(IEEE80211_CHAN_RADAR |
+				                 IEEE80211_CHAN_DISABLED |
+				                 IEEE80211_CHAN_NO_IR);
+
+				/* Set maximums to a sane, firmware-supported value (mBm) */
+				chan->max_power = 3000;
+				chan->max_reg_power = 3000;
+
+				/* avoid beacon-triggered country enforcement */
+				chan->beacon_found = 0;
+
+				sanitized++;
 			}
 		}
+		DBGLOG(INIT, INFO, "NUCLEAR SCRUB: %d channels sanitized\n", sanitized);
 	}
+	rtnl_unlock();
 
-	/* Force station mode to be advertised */
-	prWiphy->interface_modes |= BIT(NL80211_IFTYPE_STATION);
-
-
- if (wiphy_register(prWiphy) < 0) {
+	/* 11) Register the wiphy with cfg80211 */
+	if (wiphy_register(prWiphy) < 0) {
 		DBGLOG(INIT, ERROR, "wiphy_register failed\n");
+		ret = -EIO;
 		goto free_wiphy;
 	}
 
+	/* 12) Attach wireless_dev instances to the registered wiphy */
 	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
 		prWdev[u4Idx]->wiphy = prWiphy;
 		gprWdev[u4Idx] = prWdev[u4Idx];
 	}
 
 #if CFG_WLAN_ASSISTANT_NVRAM
-	register_file_buf_handler(wlanNvramBufHandler, (void *)NULL, ENUM_BUF_TYPE_NVRAM);
+	register_file_buf_handler(wlanNvramBufHandler, NULL, ENUM_BUF_TYPE_NVRAM);
 #endif
+
 
 	DBGLOG(INIT, INFO, "wlanCreateWirelessDevice success\n");
 	return;
 
+/* error handling */
 free_wiphy:
 	wiphy_free(prWiphy);
 free_wdev:
 	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
-		if (prWdev[u4Idx]) kfree(prWdev[u4Idx]);
+		if (prWdev[u4Idx]) {
+			kfree(prWdev[u4Idx]);
+			prWdev[u4Idx] = NULL;
+		}
 	}
 }
+
+
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief Destroy all wdev (including the P2P device), and unregister wiphy

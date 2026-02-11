@@ -2175,35 +2175,42 @@ void rlmDomainSetCountry(struct ADAPTER *prAdapter)
 }
 
 
+
+
 void rlmDomainCountryCodeUpdate(struct ADAPTER *prAdapter, 
                                struct wiphy *pWiphy,
                                u_int32_t u4CountryCode)
 {
-    /* The only value we care about: 'US' (0x5553) */
-    u_int32_t u4ForcedCC = 0x5553; 
+    /* The fallback/default value we want if nothing else is set */
+    u_int32_t u4ForcedCC = 0x5553; // 'US'
 
     if (!prAdapter)
         return;
 
+    /* * FUTURE PROOFING: If the incoming u4CountryCode is valid (not 0 or '00'), 
+     * and it's not the default, we might want to use it. 
+     * For now, we print it to see if NVRAM is actually talking to us.
+     */
+    if (u4CountryCode != 0 && u4CountryCode != 0x3030) {
+         DBGLOG(RLM, INFO, "NVRAM SIGHTING: Received CC 0x%04x from source.\n", u4CountryCode);
+         /* If you want to trust NVRAM one day, you'd do: u4ForcedCC = u4CountryCode; */
+    }
+
     /* --- STAGE 1: Defer if FW is not yet alive --- */
     if (!prAdapter->fgIsFwDownloaded || !prAdapter->prGlueInfo) {
-        DBGLOG(RLM, INFO, "DE-FANGED: Caching US (0x5553) - FW/Glue not ready.\n");
+        DBGLOG(RLM, INFO, "DE-FANGED: Caching CC 0x%04x - FW/Glue not ready.\n", u4ForcedCC);
         prAdapter->rWifiVar.u2CountryCode = (uint16_t)u4ForcedCC;
         return;
     }
 
-    /* --- STAGE 2: Execute Force-US --- */
-    DBGLOG(RLM, INFO, "DE-FANGED: Forcing US (0x5553) to Firmware.\n");
+    /* --- STAGE 2: Execute Update --- */
+    DBGLOG(RLM, INFO, "DE-FANGED: Applying CC 0x%04x to Firmware.\n", u4ForcedCC);
 
-    /* Sync with Linux Regulatory DB if wiphy is linked */
     if (pWiphy && rlmDomainIsUsingLocalRegDomainDataBase()) {
         rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode(pWiphy, u4ForcedCC);
     }
 
-    /* Update the adapter variable */
     prAdapter->rWifiVar.u2CountryCode = (uint16_t)u4ForcedCC;
-
-    /* Send the command to the MT7902 MCU */
     rlmDomainSendCmd(prAdapter);
 
     DBGLOG(RLM, INFO, "DE-FANGED: FW command sent successfully.\n");

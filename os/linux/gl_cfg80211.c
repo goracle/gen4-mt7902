@@ -5956,17 +5956,25 @@ void
 mtk_reg_notify(IN struct wiphy *pWiphy,
                IN struct regulatory_request *pRequest)
 {
-    /* 1. We still need the GlueInfo for the log, but we don't care if it's ready */
-    DBGLOG(RLM, INFO, "DEFANGED: Ignored regdom request alpha2=%s, initiator=%x\n",
-        pRequest->alpha2, pRequest->initiator);
+    struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *)wiphy_priv(pWiphy);
 
-    /* * 2. BOLD MOVE: We do absolutely nothing.
-     * We don't call rlmDomainSetCountryCode.
-     * We don't call rlmDomainCountryCodeUpdate.
-     * We don't cache the alpha2 for later.
+    if (!prGlueInfo || !prGlueInfo->prAdapter)
+        return;
+
+    /* * RE-FANGED: If the kernel tries to set '00', we intercept and 
+     * tell the kernel "No, this hardware is strictly US."
      */
+    if (pRequest->alpha2[0] == '0' && pRequest->alpha2[1] == '0') {
+        DBGLOG(RLM, INFO, "RE-FANGED: Intercepting '00' request. Asserting Driver Hint: US\n");
+        regulatory_hint(pWiphy, "US");
+        return; 
+    }
 
-    return;
+    DBGLOG(RLM, INFO, "RE-FANGED: Passing through regdom request alpha2=%c%c\n",
+           pRequest->alpha2[0], pRequest->alpha2[1]);
+
+    /* This keeps the firmware and internal state in sync */
+    rlmDomainCountryCodeUpdate(prGlueInfo->prAdapter, pWiphy, 0x5553);
 }
 
 void
