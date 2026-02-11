@@ -1271,6 +1271,37 @@ void wlanOnPostFirmwareReady(IN struct ADAPTER *prAdapter,
  * \retval WLAN_STATUS_FAILURE: Failed
  */
 /*----------------------------------------------------------------------------*/
+void mt79xx_force_channels_late(struct wiphy *wiphy)
+{
+	int b, i;
+
+	if (!wiphy)
+		return;
+
+	wiphy_lock(wiphy);
+
+	for (b = 0; b < ARRAY_SIZE(wiphy->bands); b++) {
+		struct ieee80211_supported_band *sband = wiphy->bands[b];
+		if (!sband)
+			continue;
+
+		for (i = 0; i < sband->n_channels; i++) {
+			struct ieee80211_channel *c = &sband->channels[i];
+
+			c->flags &= ~(IEEE80211_CHAN_DISABLED |
+				      IEEE80211_CHAN_NO_IR |
+				      IEEE80211_CHAN_RADAR);
+
+			c->max_power = 30;
+			c->max_reg_power = 30;
+		}
+	}
+
+	wiphy_unlock(wiphy);
+
+	DBGLOG(INIT, INFO, "Late channel force applied\n");
+}
+
 uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 					IN struct REG_INFO *prRegInfo,
 					IN const u_int8_t bAtResetFlow)
@@ -1574,12 +1605,17 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 	glCustomGenlInit();
 #endif
 
+
+
+	struct wiphy *prWiphy = wlanGetWiphy();
+	mt79xx_force_channels_late(prWiphy);
+
 /* --- FINAL STEP: Apply deferred Country Code --- */
 	/* * We check u4Status to ensure FW is ready.
 	 * We use the u2CountryCode we cached during the "defanged" early call.
 	 */
+
 	if (u4Status == WLAN_STATUS_SUCCESS && prAdapter->rWifiVar.u2CountryCode == 0x5553) {
-		struct wiphy *prWiphy = wlanGetWiphy();
 		
 		DBGLOG(INIT, INFO, "Applying deferred US CountryCode override after FW ready\n");
 		
@@ -1588,6 +1624,7 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 		 */
 		rlmDomainCountryCodeUpdate(prAdapter, prWiphy, 0x5553);
 	}
+
 
 	return u4Status;
 }				/* wlanAdapterStart */

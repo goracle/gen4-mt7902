@@ -2,6 +2,7 @@
 
 # MT7902 WiFi Driver Loading Script - Refactored
 set -e
+sudo iw reg set US
 
 MODULE_NAME="mt7902"
 # Use absolute path to ensure sudo doesn't lose the location
