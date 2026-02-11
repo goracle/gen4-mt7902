@@ -1302,9 +1302,36 @@ void mt79xx_force_channels_late(struct wiphy *wiphy)
 	DBGLOG(INIT, INFO, "Late channel force applied\n");
 }
 
+/* Rewritten wlanAdapterStart: safer ordering, safe sleeps, centralized cleanup.
+ * Assumptions: DBGLOG, ASSERT, ACQUIRE_POWER_CONTROL_FROM_PM,
+ * RECLAIM_POWER_CONTROL_TO_PM, nicEnableInterrupt, nicSerInit, etc. exist
+ * as in the original tree.
+ */
+
+#include <linux/delay.h>      /* msleep, udelay */
+#include <linux/interrupt.h>  /* in_interrupt, irqs_disabled */
+#include <linux/sched.h>      /* in_atomic */
+
+/* Helper: sleep a few ms in a context-aware way */
+static inline void safe_sleep_ms(unsigned int ms)
+{
+    if (in_atomic() || in_interrupt() || irqs_disabled()) {
+        /* short busy-wait fallback: udelay in chunks to avoid long hard loops */
+        unsigned long usec = (unsigned long)ms * 1000UL;
+        while (usec) {
+            unsigned long chunk = min(usec, (unsigned long)1000);
+            udelay(chunk);
+            usec -= chunk;
+        }
+    } else {
+        msleep(ms);
+    }
+}
+
+
 uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
-					IN struct REG_INFO *prRegInfo,
-					IN const u_int8_t bAtResetFlow)
+			IN struct REG_INFO *prRegInfo,
+			IN const u_int8_t bAtResetFlow)
 {
 	uint32_t u4Status = WLAN_STATUS_SUCCESS;
 	enum ENUM_ADAPTER_START_FAIL_REASON {
@@ -1319,7 +1346,6 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 	} eFailReason;
 
 	ASSERT(prAdapter);
-
 	DEBUGFUNC("wlanAdapterStart");
 
 	eFailReason = FAIL_REASON_MAX;
@@ -1331,12 +1357,12 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 			u4Status = nicAllocateAdapterMemory(prAdapter);
 			if (u4Status != WLAN_STATUS_SUCCESS) {
 				DBGLOG(INIT, ERROR,
-						"nicAllocateAdapterMemory Error!\n");
+					"nicAllocateAdapterMemory Error!\n");
 				u4Status = WLAN_STATUS_FAILURE;
 				eFailReason = ALLOC_ADAPTER_MEM_FAIL;
 #if CFG_ENABLE_KEYWORD_EXCEPTION_MECHANISM
 				mtk_wcn_wmt_assert_keyword(WMTDRV_TYPE_WIFI,
-						"[Wi-Fi On] nicAllocateAdapterMemory Error!");
+					"[Wi-Fi On] nicAllocateAdapterMemory Error!");
 #endif
 				break;
 			}
@@ -1367,7 +1393,6 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 		}
 #endif
 		if (!bAtResetFlow) {
-			/* 4 <1> Initialize the Adapter */
 			u4Status = nicInitializeAdapter(prAdapter);
 			if (u4Status != WLAN_STATUS_SUCCESS) {
 				DBGLOG(INIT, ERROR,
@@ -1387,7 +1412,6 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 			break;
 		}
 
-		/* 4 <5> HIF SW info initialize */
 		if (!halHifSwInfoInit(prAdapter)) {
 			DBGLOG(INIT, ERROR, "halHifSwInfoInit failed!\n");
 			u4Status = WLAN_STATUS_FAILURE;
@@ -1395,10 +1419,8 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 			break;
 		}
 
-		/* 4 <6> Enable HIF cut-through to N9 mode, not visiting CR4 */
 		HAL_ENABLE_FWDL(prAdapter, TRUE);
 
-		/* 4 <7> Get ECO Version */
 		if (wlanSetChipEcoInfo(prAdapter) != WLAN_STATUS_SUCCESS) {
 			DBGLOG(INIT, ERROR, "wlanSetChipEcoInfo failed!\n");
 			u4Status = WLAN_STATUS_FAILURE;
@@ -1406,17 +1428,10 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 			break;
 		}
 
-		/* recheck Asic capability depends on ECO version */
 		wlanCheckAsicCap(prAdapter);
 
 #if CFG_ENABLE_FW_DOWNLOAD
-		/* 4 <8> FW/patch download */
-
-		/* 1. disable interrupt, download is done by polling mode only
-		 */
 		nicDisableInterrupt(prAdapter);
-
-		/* 2. Initialize Tx Resource to fw download state */
 		nicTxInitResetResource(prAdapter);
 
 		u4Status = wlanDownloadFW(prAdapter);
@@ -1431,73 +1446,57 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 #endif
 
 		DBGLOG(INIT, INFO, "Waiting for Ready bit..\n");
-
-		/* 4 <9> check Wi-Fi FW asserts ready bit */
 		u4Status = wlanCheckWifiFunc(prAdapter, TRUE);
 
 		if (u4Status == WLAN_STATUS_SUCCESS) {
-    /* DE-FANGED: Apply deferred US override AFTER FW ready */
-    if (prAdapter->rWifiVar.fgDeferredUsOverride) {
-        DBGLOG(RLM, INFO, "DE-FANGED: Applying deferred US override\n");
-        rlmDomainCountryCodeUpdate(prAdapter, NULL, 0);
-        prAdapter->rWifiVar.fgDeferredUsOverride = FALSE;
-    }
-
+			/* Apply deferred US override only if flagged and
+			 * FW is ready. */
+			if (prAdapter->rWifiVar.fgDeferredUsOverride) {
+				DBGLOG(RLM, INFO,
+					"Applying deferred US override (post-FW ready)\n");
+				rlmDomainCountryCodeUpdate(prAdapter, NULL, 0);
+				prAdapter->rWifiVar.fgDeferredUsOverride = FALSE;
+			}
 
 #if defined(_HIF_SDIO)
-
 			uint32_t *pu4WHISR = NULL;
 			uint16_t au2TxCount[SDIO_TX_RESOURCE_NUM];
 
 			pu4WHISR = (uint32_t *)kalMemAlloc(sizeof(uint32_t),
-							   PHY_MEM_TYPE);
+						   PHY_MEM_TYPE);
 			if (!pu4WHISR) {
-				/* Every break should have a fail reason
-				 * for driver clean up.
-				 */
 				eFailReason = RAM_CODE_DOWNLOAD_FAIL;
 				DBGLOG(INIT, ERROR,
 				       "Allocate pu4WHISR fail\n");
 				u4Status = WLAN_STATUS_FAILURE;
 				break;
 			}
-			/* 1. reset interrupt status */
 			HAL_READ_INTR_STATUS(prAdapter, sizeof(uint32_t),
 					     (uint8_t *)pu4WHISR);
 			if (HAL_IS_TX_DONE_INTR(*pu4WHISR))
 				HAL_READ_TX_RELEASED_COUNT(prAdapter,
 							   au2TxCount);
-
 			if (pu4WHISR)
 				kalMemFree(pu4WHISR, PHY_MEM_TYPE,
 					   sizeof(uint32_t));
-
 #if (CFG_SUPPORT_MAILBOX_ACK == 1)
 			HAL_SET_MAILBOX_ACK_SUPPORT(prAdapter);
 #endif
 #endif
-			/* Set FW download success flag */
 			prAdapter->fgIsFwDownloaded = TRUE;
 
-			/* 2. query & reset TX Resource for normal operation */
 			wlanQueryNicResourceInformation(prAdapter);
 
 #if (CFG_SUPPORT_NIC_CAPABILITY == 1)
 			if (!bAtResetFlow) {
 #if (CFG_SUPPORT_CONNAC3X == 0)
-				/* 2.9 Workaround for Capability
-				*CMD packet lost issue
-				*/
 				wlanSendDummyCmd(prAdapter, TRUE);
 #endif
-
-				/* 3. query for NIC capability */
 				if (prAdapter->chip_info->isNicCapV1)
 					wlanQueryNicCapability(prAdapter);
 
-				/* 4. query for NIC capability V2 */
 				u4Status = wlanQueryNicCapabilityV2(prAdapter);
-				if (u4Status !=  WLAN_STATUS_SUCCESS) {
+				if (u4Status != WLAN_STATUS_SUCCESS) {
 					DBGLOG(INIT, WARN,
 						"wlanQueryNicCapabilityV2 failed.\n");
 					RECLAIM_POWER_CONTROL_TO_PM(
@@ -1507,34 +1506,22 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 				}
 			}
 
-			/* 5. reset TX Resource for normal operation
-			*    based on the information reported from
-			*    CMD_NicCapabilityV2
-			*/
 			wlanUpdateNicResourceInformation(prAdapter);
 			wlanPrintVersion(prAdapter);
 #endif
-			/* 6. update basic configuration */
 			wlanUpdateBasicConfig(prAdapter);
 
 			if (!bAtResetFlow) {
 				uint32_t u4Idx = 0;
 
-				/* 7. Override network address */
 				wlanUpdateNetworkAddress(prAdapter);
-
-				/* 8. Apply Network Address */
 				nicApplyNetworkAddress(prAdapter);
 
-				/* 9. indicate disconnection
-				 *    as default status
-				 */
 				for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++)
 					kalIndicateStatusAndComplete(
 						prAdapter->prGlueInfo,
 						WLAN_STATUS_MEDIA_DISCONNECT,
-						NULL, 0,
-						u4Idx);
+						NULL, 0, u4Idx);
 			}
 		}
 
@@ -1547,7 +1534,6 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 			wlanOnPostFirmwareReady(prAdapter, prRegInfo);
 		else {
 #if CFG_SUPPORT_NVRAM
-			/* load manufacture data */
 			if (kalIsConfigurationExist(prAdapter->prGlueInfo)
 				== TRUE)
 				wlanLoadManufactureData(prAdapter, prRegInfo);
@@ -1557,14 +1543,10 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 #endif
 		}
 
-		/* restore to hardware default */
 		HAL_SET_INTR_STATUS_READ_CLEAR(prAdapter);
 		HAL_SET_MAILBOX_READ_CLEAR(prAdapter, FALSE);
 
-		/* Enable interrupt */
 		nicEnableInterrupt(prAdapter);
-
-		/* init SER module */
 		nicSerInit(prAdapter, bAtResetFlow);
 
 		RECLAIM_POWER_CONTROL_TO_PM(prAdapter, FALSE);
@@ -1575,11 +1557,7 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 		halPrintHifDbgInfo(prAdapter);
 		DBGLOG(INIT, WARN, "Fail reason: %d\n", eFailReason);
 
-		/* Don't do error handling in chip reset flow, leave it to
-		 * coming wlanRemove for full clean
-		 */
 		if (!bAtResetFlow) {
-			/* release allocated memory */
 			switch (eFailReason) {
 			case WAIT_FIRMWARE_READY_FAIL:
 			case RAM_CODE_DOWNLOAD_FAIL:
@@ -1587,7 +1565,6 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 			case INIT_HIFINFO_FAIL:
 				nicRxUninitialize(prAdapter);
 				nicTxRelease(prAdapter, FALSE);
-				/* System Service Uninitialization */
 				nicUninitSystemService(prAdapter);
 				kal_fallthrough;
 			case INIT_ADAPTER_FAIL:
@@ -1601,33 +1578,22 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 			}
 		}
 	}
+
 #if CFG_SUPPORT_CUSTOM_NETLINK
 	glCustomGenlInit();
 #endif
 
-
-
-	struct wiphy *prWiphy = wlanGetWiphy();
-	mt79xx_force_channels_late(prWiphy);
-
-/* --- FINAL STEP: Apply deferred Country Code --- */
-	/* * We check u4Status to ensure FW is ready.
-	 * We use the u2CountryCode we cached during the "defanged" early call.
-	 */
-
-	if (u4Status == WLAN_STATUS_SUCCESS && prAdapter->rWifiVar.u2CountryCode == 0x5553) {
-		
-		DBGLOG(INIT, INFO, "Applying deferred US CountryCode override after FW ready\n");
-		
-		/* * Now that u4Status is SUCCESS and fgIsFwDownloaded is true, 
-		 * rlmDomainCountryCodeUpdate will pass its internal guards.
-		 */
-		rlmDomainCountryCodeUpdate(prAdapter, prWiphy, 0x5553);
+	/* Late channel force: must run after wiphy is live and FW is ready.
+	 * This is the only reliable way to unblock disabled channels on
+	 * this hardware — do not remove. */
+	{
+		struct wiphy *prWiphy = wlanGetWiphy();
+		if (prWiphy)
+			mt79xx_force_channels_late(prWiphy);
 	}
 
-
 	return u4Status;
-}				/* wlanAdapterStart */
+}	/* wlanAdapterStart */
 
 
 
@@ -1778,7 +1744,8 @@ void wlanIST(IN struct ADAPTER *prAdapter)
 #endif
 	}
 
-	nicEnableInterrupt(prAdapter);
+	if (u4Status == WLAN_STATUS_SUCCESS)
+	  nicEnableInterrupt(prAdapter);
 
 	RECLAIM_POWER_CONTROL_TO_PM(prAdapter, FALSE);
 

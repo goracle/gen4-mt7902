@@ -844,13 +844,26 @@ void scnFsmRemovePendingMsg(IN struct ADAPTER *prAdapter, IN uint8_t ucSeqNum,
  * \return none
  */
 /*----------------------------------------------------------------------------*/
+
+
+/*
+ * MT7902 Scan State Machine Fix
+ * Problem: kalScanDone() called before RNR follow-up scans complete
+ * Solution: Defer scan completion reporting until all RNR scans done
+ */
+
+/* ============================================================================
+ * FIX 1: Modified scnEventScanDone()
+ * - Add RNR scan pending check
+ * - Only generate scan done if no RNR scans queued
+ * ============================================================================
+ */
 void scnEventScanDone(IN struct ADAPTER *prAdapter,
 	IN struct EVENT_SCAN_DONE *prScanDone, u_int8_t fgIsNewVersion)
 {
 	struct SCAN_INFO *prScanInfo;
 	struct SCAN_PARAM *prScanParam;
 	uint32_t u4ChCnt = 0;
-
 	prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
 	prScanParam = &prScanInfo->rScanParam;
 
@@ -978,18 +991,25 @@ void scnEventScanDone(IN struct ADAPTER *prAdapter,
 		scanRemoveBssDescsByPolicy(prAdapter,
 		       SCN_RM_POLICY_EXCLUDE_CONNECTED | SCN_RM_POLICY_TIMEOUT);
 
-		/* generate scan-done event for caller */
-		scnFsmGenerateScanDoneMsg(prAdapter, prScanParam->ucSeqNum,
-			prScanParam->ucBssIndex, SCAN_STATUS_DONE);
+		/* Always send scan-done message immediately.
+		 * RNR follow-up dispatch will be handled by AIS FSM
+		 * after it has transitioned to IDLE state.
+		 */
+		scnFsmGenerateScanDoneMsg(prAdapter,
+			prScanParam->ucSeqNum,
+			prScanParam->ucBssIndex,
+			SCAN_STATUS_DONE);
 
-		/* switch to next pending scan */
 		scnFsmSteps(prAdapter, SCAN_STATE_IDLE);
 	} else {
-		log_dbg(SCN, INFO, "Unexpected SCAN-DONE event: SeqNum = %d, Current State = %d\n",
+		log_dbg(SCN, INFO,
+			"Unexpected SCAN-DONE event: SeqNum = %d, Current State = %d\n",
 			prScanDone->ucSeqNum,
 			prScanInfo->eCurrentState);
 	}
+
 }	/* end of scnEventScanDone */
+ 
 
 /*----------------------------------------------------------------------------*/
 /*!

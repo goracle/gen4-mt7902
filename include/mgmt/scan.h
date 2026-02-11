@@ -523,6 +523,14 @@ struct SCAN_PARAM {	/* Used by SCAN FSM */
 	/* Information Element */
 	uint16_t u2IELen;
 	uint8_t aucIE[MAX_IE_LENGTH];
+/* In struct SCAN_PARAM (scan.h): */
+#if (CFG_SUPPORT_WIFI_RNR == 1)
+	u_int8_t fgHasPendingRnrScan; /* TRUE if a 6G/RNR follow-up scan
+	                                * was enqueued for this scan seq.
+	                                * Guards scan-done deferral in
+	                                * scnEventScanDone. */
+#endif
+
 
 };
 

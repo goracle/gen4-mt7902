@@ -2941,42 +2941,6 @@ static void wlanCreateWirelessDevice(void)
 	/* If you have/declare a custom regdomain object, you may apply it here via wiphy_apply_custom_regulatory().
 	 * NOTE: do not attempt to write into non-existent wiphy fields (eg reg_alpha2) — use helpers. */
 
-	/* --- NUCLEAR SCRUB: conservative scrub BEFORE wiphy_register() --- */
-	rtnl_lock();
-	{
-		int b, i, sanitized = 0;
-		struct ieee80211_supported_band *sband;
-
-		DBGLOG(INIT, INFO, "NUCLEAR SCRUB: pre-register channel scrub\n");
-
-		for (b = 0; b < ARRAY_SIZE(prWiphy->bands); b++) {
-			sband = prWiphy->bands[b];
-			if (!sband || !sband->n_channels)
-				continue;
-
-			for (i = 0; i < sband->n_channels; i++) {
-				struct ieee80211_channel *chan = &sband->channels[i];
-
-				/* Clear problematic bits that make userspace mark them NO-IR/disabled.
-				 * Be conservative: clear RADAR/DISABLED/NO_IR only, keep other flags. */
-				chan->flags &= ~(IEEE80211_CHAN_RADAR |
-				                 IEEE80211_CHAN_DISABLED |
-				                 IEEE80211_CHAN_NO_IR);
-
-				/* Set maximums to a sane, firmware-supported value (mBm) */
-				chan->max_power = 3000;
-				chan->max_reg_power = 3000;
-
-				/* avoid beacon-triggered country enforcement */
-				chan->beacon_found = 0;
-
-				sanitized++;
-			}
-		}
-		DBGLOG(INIT, INFO, "NUCLEAR SCRUB: %d channels sanitized\n", sanitized);
-	}
-	rtnl_unlock();
-
 	/* 11) Register the wiphy with cfg80211 */
 	if (wiphy_register(prWiphy) < 0) {
 		DBGLOG(INIT, ERROR, "wiphy_register failed\n");

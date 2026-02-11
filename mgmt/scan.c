@@ -474,6 +474,13 @@ uint32_t scanCountBits(IN uint32_t bitMap[], IN uint32_t bitMapSize)
  * @return
  */
 /*----------------------------------------------------------------------------*/
+
+/*
+ * MT7902 scanSetRequestChannel() Fix
+ * Problem: Full2Partial filter purges 6GHz RNR-discovered channels
+ * Solution: Exempt 6GHz channels from full2partial filtering
+ */
+
 void scanSetRequestChannel(IN struct ADAPTER *prAdapter,
 		IN uint32_t u4ScanChannelNum,
 		IN struct RF_CHANNEL_INFO arChannel[],
@@ -491,6 +498,11 @@ void scanSetRequestChannel(IN struct ADAPTER *prAdapter,
 
 	GET_CURRENT_SYSTIME(&rCurrentTime);
 #endif /* CFG_SUPPORT_FULL2PARTIAL_SCAN */
+
+DBGLOG(SCN, ERROR, "scanSetRequestChannel called: u4ScanChannelNum=%u, arChannel[0].ucChannelNum=%u, arChannel[0].eBand=%u\n",
+    u4ScanChannelNum,
+    u4ScanChannelNum > 0 ? arChannel[0].ucChannelNum : 0,
+    u4ScanChannelNum > 0 ? arChannel[0].eBand : 0);
 
 	ASSERT(u4ScanChannelNum <= MAXIMUM_OPERATION_CHANNEL_LIST);
 
@@ -596,23 +608,47 @@ void scanSetRequestChannel(IN struct ADAPTER *prAdapter,
 #endif
 				pau4ChBitMap = prScanInfo->au4ChannelBitMap;
 
-			if (prScanReqMsg->eScanChannel == SCAN_CHANNEL_2G4 &&
-				eBand != BAND_2G4)
-				continue;
+			if (prScanReqMsg->eScanChannel == SCAN_CHANNEL_2G4 && eBand != BAND_2G4){
+			  DBGLOG(SCN, ERROR, "Channel %u (band=%u) filtered: reasone ScanChannel=SCAN_CHANNEL_2G4 && eBand != BAND_2G4\n", u4Channel, eBand);
+			  continue;}
 			else if (prScanReqMsg->eScanChannel ==
 				SCAN_CHANNEL_5G && eBand != BAND_5G)
-				continue;
+			  {
+			  DBGLOG(SCN, ERROR, "Channel %u (band=%u) filtered: reason eScanChannel=SCAN_CHANNEL_5G && eBand != BAND_5G...\n", u4Channel, eBand);
+			  continue;}
 #if (CFG_SUPPORT_WIFI_6G == 1)
 			else if (prScanReqMsg->eScanChannel ==
 				SCAN_CHANNEL_6G && eBand != BAND_6G)
-				continue;
+			  {DBGLOG(SCN, ERROR, "Channel %u (band=%u) filtered: reason eScanChannel=SCAN_CHANNEL_6G && eBand != BAND_6G\n", u4Channel, eBand);
+			    continue;}
 #endif
+
 #if CFG_SUPPORT_FULL2PARTIAL_SCAN
-			if (fgIsFull2Partial && !scanIsBitSet(u4Channel,
-				pau4ChBitMap,
-				sizeof(prScanInfo->au4ChannelBitMap)))
-				continue;
+			/* Apply full2partial filter, but EXEMPT 6GHz channels.
+			 * 
+			 * 6GHz channels come from RNR (Reduced Neighbor Report)
+			 * elements in 2.4/5GHz beacons, not from historical
+			 * channel sweeps. They won't be in the bitmap yet, so
+			 * filtering them would break 6GHz discovery entirely.
+			 * 
+			 * Only apply the bitmap filter to 2.4/5GHz channels.
+			 */
+			if (fgIsFull2Partial) {
+#if (CFG_SUPPORT_WIFI_6G == 1)
+				/* 6GHz bypass: if it's 6GHz, skip the bitmap check */
+				if (eBand != BAND_6G)
+#endif
+				/* 2.4/5GHz filter: check if channel is in bitmap */
+				if (!scanIsBitSet(u4Channel, pau4ChBitMap,
+					sizeof(prScanInfo->au4ChannelBitMap))) {
+					log_dbg(SCN, TRACE,
+						"Ch %u filtered by full2partial\n",
+						u4Channel);
+					continue;
+				}
+			}
 #endif /* CFG_SUPPORT_FULL2PARTIAL_SCAN */
+
 			kalMemCopy(&prScanReqMsg->arChnlInfoList[u4Index],
 					&arChannel[i],
 					sizeof(struct RF_CHANNEL_INFO));
@@ -661,6 +697,7 @@ void scanSetRequestChannel(IN struct ADAPTER *prAdapter,
 		au4ChannelBitMap[1], au4ChannelBitMap[0]);
 #endif
 }
+
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -1494,55 +1531,72 @@ uint8_t scanGetRnrChannel(IN struct ADAPTER *prAdapter,
 	return ucRnrChNum;
 }
 
-void scanProcessRnrChannel(IN uint8_t ucRnrChNum,
+u_int8_t scanProcessRnrChannel(IN uint8_t ucRnrChNum,
 	IN uint8_t ucOpClass,
 	IN struct PARAM_SCAN_REQUEST_ADV *prScanRequest)
 {
-	uint8_t i, ucHasSameCh = FALSE;
+	uint8_t i;
+	struct RF_CHANNEL_INFO *prRfChnlInfo;
+	enum ENUM_BAND eBand;
 #if KERNEL_VERSION(4, 7, 0) <= CFG80211_VERSION_CODE
 	enum nl80211_band band = KAL_NUM_BANDS;
 #else
 	enum ieee80211_band band = KAL_NUM_BANDS;
 #endif
 
-	/* get channel number for this neighborAPInfo */
-	ieee80211_operating_class_to_band(ucOpClass, &band);
-	/* Check this NeighborAPInfo's reported 6G channel has recorded
-	 * or not.
-	 */
-	for (i = 0; i < prScanRequest->u4ChannelNum; i++) {
-		if (ucRnrChNum == prScanRequest->arChannel[i].ucChannelNum) {
-			ucHasSameCh = TRUE;
-
-			break;
-		}
+#if (CFG_SUPPORT_WIFI_6G != 1)
+	if (ucOpClass >= 131 && ucOpClass <= 135) {
+		log_dbg(SCN, LOUD,
+			"RnrCh=%d opClass=%d: 6G unsupported, skipping\n",
+			ucRnrChNum, ucOpClass);
+		return FALSE;  // <-- RETURN FALSE
 	}
-	if (!ucHasSameCh) {
-		struct RF_CHANNEL_INFO *prRfChnlInfo;
-
-		prRfChnlInfo = &prScanRequest->arChannel[prScanRequest->
-						u4ChannelNum];
-		prScanRequest->u4ChannelNum++;
-		switch (band) {
-		case KAL_BAND_2GHZ:
-			prRfChnlInfo->eBand = BAND_2G4;
-			break;
-		case KAL_BAND_5GHZ:
-			prRfChnlInfo->eBand = BAND_5G;
-			break;
-#if (CFG_SUPPORT_WIFI_6G == 1)
-		case KAL_BAND_6GHZ:
-			prRfChnlInfo->eBand = BAND_6G;
-			break;
 #endif
-		default:
-			prRfChnlInfo->eBand = BAND_2G4;
-			break;
-		}
-		prRfChnlInfo->ucChannelNum = ucRnrChNum;
+
+	ieee80211_operating_class_to_band(ucOpClass, &band);
+
+	switch (band) {
+	case KAL_BAND_2GHZ:
+		eBand = BAND_2G4;
+		break;
+	case KAL_BAND_5GHZ:
+		eBand = BAND_5G;
+		break;
+#if (CFG_SUPPORT_WIFI_6G == 1)
+	case KAL_BAND_6GHZ:
+		eBand = BAND_6G;
+		break;
+#endif
+	default:
+		log_dbg(SCN, WARN,
+			"RnrCh=%d opClass=%d: unresolvable band, skipping\n",
+			ucRnrChNum, ucOpClass);
+		return FALSE;  // <-- RETURN FALSE
 	}
-	log_dbg(SCN, LOUD, "RnrCh=%d\n", ucRnrChNum);
+
+	/* Skip if this channel is already queued in the scan request. */
+	for (i = 0; i < prScanRequest->u4ChannelNum; i++) {
+		if (ucRnrChNum == prScanRequest->arChannel[i].ucChannelNum
+		    && eBand == prScanRequest->arChannel[i].eBand) {
+			log_dbg(SCN, LOUD,
+				"RnrCh=%d already in scan request, skipping\n",
+				ucRnrChNum);
+			return FALSE;  // <-- RETURN FALSE (already have it)
+		}
+	}
+
+	prRfChnlInfo =
+		&prScanRequest->arChannel[prScanRequest->u4ChannelNum];
+	prRfChnlInfo->eBand = eBand;
+	prRfChnlInfo->ucChannelNum = ucRnrChNum;
+	prScanRequest->u4ChannelNum++;
+	log_dbg(SCN, LOUD, "RnrCh=%d band=%d added to scan request\n",
+		ucRnrChNum, eBand);
+	
+	return TRUE;  // <-- RETURN TRUE (successfully added)
 }
+
+
 
 uint8_t scanValidRnrTbttInfo(IN uint16_t u2TbttInfoLength)
 {
@@ -1611,6 +1665,12 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 	struct IE_SHORT_SSID_LIST *prIeShortSsidList;
 	struct BSS_DESC *prBssDescTemp = NULL;
 
+	/* Input validation */
+	if (!prAdapter || !prBssDesc || !pucIE) {
+		DBGLOG(SCN, ERROR, "Invalid input parameters\n");
+		return;
+	}
+
 	prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
 
 	if (prScanInfo->eCurrentState != SCAN_STATE_SCANNING
@@ -1619,7 +1679,21 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 		return;
 	}
 
+	/* Validate IE length before processing */
+	if (IE_LEN(pucIE) == 0) {
+		DBGLOG(SCN, WARN, "RNR IE has zero length\n");
+		return;
+	}
+
 	while (ucCurrentLength < IE_LEN(pucIE)) {
+		/* Bounds check: ensure we have at least the header */
+		if (ucCurrentLength + 4 > IE_LEN(pucIE)) {
+			DBGLOG(SCN, WARN, 
+				"RNR IE truncated at offset %d (len %d)\n",
+				ucCurrentLength, IE_LEN(pucIE));
+			break;
+		}
+
 		pucProfileIE = &IE_ID_EXT(pucIE) + ucCurrentLength;
 		prNeighborAPInfoField =
 			(struct NEIGHBOR_AP_INFO_FIELD *)pucProfileIE;
@@ -1642,6 +1716,15 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 				u2TbttInfoLength);
 			return;
 		}
+
+		/* Validate that the TBTT info doesn't exceed IE bounds */
+		if (ucCurrentLength + 4 + (u2TbttInfoCount * u2TbttInfoLength) > IE_LEN(pucIE)) {
+			DBGLOG(SCN, ERROR,
+				"TBTT info exceeds IE bounds: offset=%d count=%d len=%d ie_len=%d\n",
+				ucCurrentLength, u2TbttInfoCount, u2TbttInfoLength, IE_LEN(pucIE));
+			break;
+		}
+
 		/* If opClass is not 6G, no need to do extra scan
 		 * directly check next neighborAPInfo if exist
 		 */
@@ -1677,6 +1760,7 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 					break;
 				}
 		}
+
 		/* If list is empty or tail NeighborAPInfo BssidNum = MAX,
 		*  generate a new NeighborAPInfo.
 		*/
@@ -1694,6 +1778,7 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 					sizeof(struct NEIGHBOR_AP_INFO));
 			ucNewLink = TRUE;
 		}
+
 		prIeShortSsidList = (struct IE_SHORT_SSID_LIST *)
 					prNeighborAPInfo->aucScanIEBuf;
 
@@ -1757,6 +1842,14 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 		for (i = 0; i < u2TbttInfoCount; i++) {
 			j = i * u2TbttInfoLength;
 
+			/* Bounds check: ensure TBTT info is within bounds */
+			if (j + u2TbttInfoLength > u2TbttInfoCount * u2TbttInfoLength) {
+				DBGLOG(SCN, ERROR,
+					"TBTT info array access out of bounds: j=%d len=%d\n",
+					j, u2TbttInfoLength);
+				break;
+			}
+
 			switch (u2TbttInfoLength) {
 				case 7:
 					ucShortSsidOffset = 0;
@@ -1785,6 +1878,13 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 					*  BSSID
 					*/
 					continue;
+			}
+
+			/* Validate BSSID offset doesn't overflow */
+			if (j + 1 + MAC_ADDR_LEN > u2TbttInfoCount * u2TbttInfoLength) {
+				DBGLOG(SCN, ERROR,
+					"BSSID offset exceeds TBTT bounds: j=%d\n", j);
+				continue;
 			}
 
 			log_dbg(SCN, INFO, "RnrIe[%x][" MACSTR "]\n", i,
@@ -1817,6 +1917,14 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 			if (!ucScanEnable)
 				continue;
 
+			/* CRITICAL BOUNDS CHECK: Verify BSSID array has space */
+			if (ucBssidNum >= CFG_SCAN_OOB_MAX_NUM) {
+				DBGLOG(SCN, WARN,
+					"BSSID array full (%d), skipping remaining TBTTs\n",
+					CFG_SCAN_OOB_MAX_NUM);
+				break;
+			}
+
 			if (ucBssidNum < CFG_SCAN_OOB_MAX_NUM) {
 				if (prScanRequest->ucScnFuncMask &
 					ENUM_SCN_USE_PADDING_AS_BSSID) {
@@ -1828,16 +1936,39 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 						ucRnrChNum;
 					ucBssidNum++;
 				}
-			} else {
-				/* This NeighborAPInfo saved BSSID = MAX,
-				*  re-generate one. Remaining TBTT Info in this
-				*  neighbor AP Info will be handled in next
-				*  time.
-				*/
-				break;
 			}
 
 			if (ucShortSsidOffset != 0) {
+				/* CRITICAL BOUNDS CHECK: Verify Short SSID array has space */
+				if (ucShortSsidNum >= CFG_SCAN_OOB_MAX_NUM) {
+					DBGLOG(SCN, WARN,
+						"Short SSID array full (%d), skipping remaining TBTTs\n",
+						CFG_SCAN_OOB_MAX_NUM);
+					break;
+				}
+
+				/* Validate the short SSID offset doesn't overflow TBTT data */
+				if (j + ucShortSsidOffset + 4 > u2TbttInfoCount * u2TbttInfoLength) {
+					DBGLOG(SCN, ERROR,
+						"Short SSID offset exceeds TBTT bounds: j=%d offset=%d\n",
+						j, ucShortSsidOffset);
+					continue;
+				}
+
+				/* Validate we won't overflow the IE buffer
+				 * aucScanIEBuf needs to hold:
+				 * - 3 bytes header (ucId, ucLength, ucIdExt)
+				 * - ucShortSsidNum * 4 bytes of short SSIDs
+				 * - 4 bytes for this new short SSID
+				 */
+				if (3 + (ucShortSsidNum + 1) * 4 > sizeof(prNeighborAPInfo->aucScanIEBuf)) {
+					DBGLOG(SCN, ERROR,
+						"IE buffer overflow: would need %d bytes, have %zu\n",
+						3 + (ucShortSsidNum + 1) * 4,
+						sizeof(prNeighborAPInfo->aucScanIEBuf));
+					break;
+				}
+
 				/*
 				*  calculate the index to save ShortSsid
 				*/
@@ -1861,27 +1992,54 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 				prScanRequest->u4IELength += 4;
 				prScanRequest->ucShortSsidNum++;
 			}
+
 			if (ucBssParamOffset != 0 &&
 				(prScanRequest->ucScnFuncMask &
 				 ENUM_SCN_USE_PADDING_AS_BSSID) &&
-				prScanRequest->u4SsidNum < CFG_SCAN_OOB_MAX_NUM
-				&& (prNeighborAPInfoField->aucTbttInfoSet[j +
-				ucBssParamOffset] &
-				TBTT_INFO_BSS_PARAM_SAME_SSID))
-				scanHandleRnrSsid(prScanRequest, prBssDesc,
-						ucBssidNum);
+				prScanRequest->u4SsidNum < CFG_SCAN_OOB_MAX_NUM) {
+				
+				/* Validate BSS param offset doesn't overflow */
+				if (j + ucBssParamOffset >= u2TbttInfoCount * u2TbttInfoLength) {
+					DBGLOG(SCN, ERROR,
+						"BSS param offset exceeds TBTT bounds: j=%d offset=%d\n",
+						j, ucBssParamOffset);
+					continue;
+				}
+
+				if (prNeighborAPInfoField->aucTbttInfoSet[j +
+					ucBssParamOffset] &
+					TBTT_INFO_BSS_PARAM_SAME_SSID)
+					scanHandleRnrSsid(prScanRequest, prBssDesc,
+							ucBssidNum);
+			}
 		}
 		/* Calculate next NeighborAPInfo's index if exists */
 		ucCurrentLength += 4 + (u2TbttInfoCount * u2TbttInfoLength);
 
 		/* Only handle RnR with BSSID */
 		if (ucHasBssid && ucScanEnable) {
-			scanProcessRnrChannel(ucRnrChNum,
-				prNeighborAPInfoField->ucOpClass,
-				prScanRequest);
-			if (ucNewLink) {
-			      LINK_INSERT_TAIL(&prAdapter->rNeighborAPInfoList,
-						&prNeighborAPInfo->rLinkEntry);
+
+    u_int8_t fgChannelAdded = scanProcessRnrChannel(ucRnrChNum,
+        prNeighborAPInfoField->ucOpClass,
+        prScanRequest);
+    
+    /* Only add to RNR queue if we actually have channels to scan */
+    if (fgChannelAdded && ucNewLink) {
+        LINK_INSERT_TAIL(&prAdapter->rNeighborAPInfoList,
+            &prNeighborAPInfo->rLinkEntry);
+
+
+
+
+#if (CFG_SUPPORT_WIFI_RNR == 1)
+	/* Mark that this scan sequence has a pending RNR follow-up.
+	 * scnEventScanDone will defer scan-done reporting until
+	 * aisFsmRunEventScanDone clears this after the follow-up
+	 * completes.
+	 */
+	prAdapter->rWifiVar.rScanInfo.rScanParam.fgHasPendingRnrScan = TRUE;
+#endif
+
 				ucNewLink = FALSE;
 			}
 			prScanRequest->fg6gOobRnrParseEn = FALSE;
@@ -1906,7 +2064,6 @@ void scanParsingRnrElement(IN struct ADAPTER *prAdapter,
 			cnmMemFree(prAdapter, prNeighborAPInfo);
 	}
 }
-
 #endif
 /*----------------------------------------------------------------------------*/
 /*!
@@ -2421,9 +2578,20 @@ scanParseIEs(struct ADAPTER *prAdapter,
 #endif
 #if (CFG_SUPPORT_WIFI_RNR == 1)
         case ELEM_ID_RNR:
-            scanParsingRnrElement(prAdapter, prBssDesc, pucIE);
-            break;
+
+    /* Validate RNR IE before parsing */
+    if (IE_LEN(pucIE) < 4) {
+        DBGLOG(SCN, WARN, "RNR IE too short: %d bytes\n", IE_LEN(pucIE));
+        break;
+    }
+    if (IE_LEN(pucIE) > 255) {
+        DBGLOG(SCN, WARN, "RNR IE too long: %d bytes\n", IE_LEN(pucIE));
+        break;
+    }
+    scanParsingRnrElement(prAdapter, prBssDesc, pucIE);
+    break;
 #endif
+
         }
     }
 
