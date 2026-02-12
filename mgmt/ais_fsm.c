@@ -2336,18 +2336,34 @@ void aisFsmSteps(IN struct ADAPTER *prAdapter,
 			case SCAN_CHANNEL_2G4:
 			case SCAN_CHANNEL_5G:
 			case SCAN_CHANNEL_6G:
-				DBGLOG(AIS, LOUD, "[AIS%d] SCAN: Setting request channel, scanCh=%d reqChNum=%d\n",
-					ucBssIndex, prScanReqMsg->eScanChannel, prScanRequest->u4ChannelNum);
+				/* CRITICAL: Apply the RNR Fix BEFORE scanSetRequestChannel
+				 * so the filtering logic in scan.c knows this is a SPECIFIED scan.
+				 */
+				if (prScanRequest->u4ChannelNum > 0) {
+					prScanReqMsg->eScanChannel = SCAN_CHANNEL_SPECIFIED;
+					// ADD THIS LINE:
+					//prScanReqMsg->fgIs6GScanner = TRUE;
+					/* Bit 3 (0x8) is the 6GHz Functional flag for MT7902 ScanReqV2 */
+					//prScanReqMsg->u4Func |= 0x8;
+					prScanReqMsg->ucChannelListNum = (uint8_t)prScanRequest->u4ChannelNum;
+					kalMemCopy(prScanReqMsg->arChnlInfoList, 
+						   prScanRequest->arChannel, 
+						   prScanReqMsg->ucChannelListNum * sizeof(struct RF_CHANNEL_INFO));
+					DBGLOG(AIS, INFO, "[MT7902] RNR Fix Applied Early for %d channels\n", 
+						prScanReqMsg->ucChannelListNum);
+				}
+
+				/* Build the bitmask with the correct eScanChannel context */
 				scanSetRequestChannel(prAdapter,
 					prScanRequest->u4ChannelNum,
 					prScanRequest->arChannel,
-					(prAisFsmInfo->eCurrentState ==
-					AIS_STATE_ONLINE_SCAN),
+					(prAisFsmInfo->eCurrentState == AIS_STATE_ONLINE_SCAN), // Don't forget this!
 					prScanReqMsg);
 				break;
 			default:
 				break;
 			}
+
 			if (u2ScanIELen > 0) {
 				kalMemCopy(prScanReqMsg->aucIE,
 					   prScanRequest->pucIE, u2ScanIELen);

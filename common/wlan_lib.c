@@ -8585,53 +8585,57 @@ void wlanCfgSetDebugLevel(IN struct ADAPTER *prAdapter)
 	}
 }
 
-
 void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 {
 	int8_t aucValue[WLAN_CFG_VALUE_LEN_MAX];
-	uint16_t u2NewCode;
+	uint16_t u2NewCode = 0;
 
-	/* 1. Try to get the code from 'CountryCode' (your override) or 'Country' */
-	if (wlanCfgGet(prAdapter, "CountryCode", aucValue, "", 0) != WLAN_STATUS_SUCCESS) {
-		if (wlanCfgGet(prAdapter, "Country", aucValue, "", 0) != WLAN_STATUS_SUCCESS) {
-			return; /* No country configuration found, exit quietly */
+	if (!prAdapter)
+		return;
+
+	/* 1. Try the cached 'Good CC' first */
+	if (prAdapter->rWifiVar.u2CountryCode != 0x0000) {
+		u2NewCode = prAdapter->rWifiVar.u2CountryCode;
+		DBGLOG(INIT, WARN, "BOLD: Using existing CC cache: 0x%04x\n", u2NewCode);
+	} 
+	else {
+		/* 2. If zero, try config, but FALLBACK to US (0x5553) instead of exiting */
+		if (wlanCfgGet(prAdapter, "CountryCode", aucValue, "", 0) != WLAN_STATUS_SUCCESS &&
+		    wlanCfgGet(prAdapter, "Country", aucValue, "", 0) != WLAN_STATUS_SUCCESS) {
+			
+			u2NewCode = 0x5553; /* 'US' */
+			prAdapter->rWifiVar.u2CountryCode = u2NewCode;
+			DBGLOG(INIT, WARN, "BOLD: No source found. FORCING CC to 0x%04x [US]\n", u2NewCode);
+		} else {
+			u2NewCode = (((uint16_t)aucValue[0]) << 8) | ((uint16_t)aucValue[1]);
+			prAdapter->rWifiVar.u2CountryCode = u2NewCode;
+			DBGLOG(INIT, WARN, "BOLD: Loaded CC from Config: 0x%04x\n", u2NewCode);
 		}
 	}
 
-	u2NewCode = (((uint16_t)aucValue[0]) << 8) | ((uint16_t)aucValue[1]);
+	/* Map the code back to bytes for the FW commands */
+	aucValue[0] = (int8_t)((u2NewCode >> 8) & 0xFF);
+	aucValue[1] = (int8_t)(u2NewCode & 0xFF);
 
-	/* 2. Store the code in the Adapter structure so it's not lost */
-	prAdapter->rWifiVar.u2CountryCode = u2NewCode;
-
-	DBGLOG(INIT, WARN, "BOLD: CountryCode detected: [%c%c] (0x%04x)\n", 
-		aucValue[0], aucValue[1], u2NewCode);
-
-	/* 3. SAFETY GATE: Check if the Command Path/HIF is ready 
-	 * We check if FW is downloaded and if the Glue layer is initialized.
-	 */
+	/* 3. Safety Check - If FW is not ready, we at least saved the 'Good CC' for later */
 	if (!prAdapter->fgIsFwDownloaded || !prAdapter->prGlueInfo) {
-		DBGLOG(INIT, WARN, "BOLD: FW not downloaded or Glue NULL. Caching CC.\n");
+		DBGLOG(INIT, WARN, "BOLD: Exit B - FW not ready. CC 0x%04x is now cached.\n", 
+			prAdapter->rWifiVar.u2CountryCode);
 		return; 
 	}
 
-	/* 4. If we reach here, we are in ADAPTER_STATE_READY (Safe to send commands) */
+	/* 4. The Push to Firmware */
+	DBGLOG(INIT, WARN, "BOLD: Pushing CC 0x%04x [%c%c] to hardware.\n", 
+		u2NewCode, aucValue[0], aucValue[1]);
+
 	if (regd_is_single_sku_en()) {
-		rlmDomainOidSetCountry(prAdapter, aucValue, 2);
+		rlmDomainOidSetCountry(prAdapter, (uint8_t *)aucValue, 2);
 	} else {
-		/* Force to re-search country code in regulatory domains */
 		prAdapter->prDomainInfo = NULL;
 		rlmDomainSendCmd(prAdapter);
-
-		/* Update supported channel list based on the new domain */
-		if (prAdapter->prGlueInfo)
-			wlanUpdateChannelTable(prAdapter->prGlueInfo);
+		wlanUpdateChannelTable(prAdapter->prGlueInfo);
 	}
-
-	DBGLOG(INIT, WARN, "BOLD: CountryCode [%c%c] successfully pushed to firmware.\n",
-		aucValue[0], aucValue[1]);
 }
-
-
 
 struct WLAN_CFG_ENTRY *wlanCfgGetEntry(IN struct ADAPTER *prAdapter,
 				       const int8_t *pucKey,

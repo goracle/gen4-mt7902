@@ -590,11 +590,19 @@ static struct ieee80211_channel mtk_6ghz_channels[] = {
 	.tx_mcs_80p80 = CPU_TO_LE16(HE_MCS_DONOT_SUPP),		\
 }
 
-#define WLAN_HE_CAP						\
-{								\
-	.has_he        = true,					\
-	.he_mcs_nss_supp = HE_MCS_NSS_SUPP,			\
+
+#define WLAN_HE_CAP                                                \
+{                                                                  \
+    .has_he = true,                                                \
+    .he_cap_elem = {                                               \
+        .mac_cap_info = { 0x08, 0x01, 0x40, 0x00, 0x00, 0x00 },    \
+        .phy_cap_info = { 0x3d, 0x00, 0x01, 0x00, 0x0a,            \
+                          0x40, 0x01, 0x00, 0x00, 0x00, 0x00 },    \
+    },                                                             \
+    .he_mcs_nss_supp = HE_MCS_NSS_SUPP,                            \
 }
+
+
 
 #define IFTYPE6G(_maskbit)					\
 {								\
@@ -716,6 +724,8 @@ struct ieee80211_supported_band mtk_band_6ghz = {
 	.n_iftype_data = ARRAY_SIZE(mtk_6ghz_iftype_data),
 	.iftype_data = mtk_6ghz_iftype_data,
 #endif
+
+
 };
 #endif
 
@@ -2846,7 +2856,7 @@ static void wlanCreateWirelessDevice(void)
 	prWiphy->iface_combinations = p_mtk_iface_combinations_sta;
 	prWiphy->n_iface_combinations = mtk_iface_combinations_sta_num;
 	prWiphy->max_scan_ssids = SCN_SSID_MAX_NUM + 1;
-	prWiphy->max_scan_ie_len = 512;
+	prWiphy->max_scan_ie_len = 2048;
 	prWiphy->n_addresses = 1;
 
 	/* Ensure perm_addr exists (avoid zero MAC issues with iwd) */
