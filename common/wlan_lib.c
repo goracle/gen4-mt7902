@@ -1451,12 +1451,12 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 		if (u4Status == WLAN_STATUS_SUCCESS) {
 			/* Apply deferred US override only if flagged and
 			 * FW is ready. */
-			if (prAdapter->rWifiVar.fgDeferredUsOverride) {
-				DBGLOG(RLM, INFO,
-					"Applying deferred US override (post-FW ready)\n");
-				rlmDomainCountryCodeUpdate(prAdapter, NULL, 0);
-				prAdapter->rWifiVar.fgDeferredUsOverride = FALSE;
-			}
+if (prAdapter->rWifiVar.fgDeferredUsOverride) {
+    uint32_t u4CachedCC = prAdapter->rWifiVar.u2CountryCode; // This should be 0x5553
+    DBGLOG(RLM, INFO, "Applying deferred US override: 0x%04x\n", u4CachedCC);
+    rlmDomainCountryCodeUpdate(prAdapter, wlanGetWiphy(), u4CachedCC);
+    prAdapter->rWifiVar.fgDeferredUsOverride = FALSE;
+}
 
 #if defined(_HIF_SDIO)
 			uint32_t *pu4WHISR = NULL;
