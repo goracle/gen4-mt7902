@@ -1302,8 +1302,6 @@ void mt79xx_force_channels_late(struct wiphy *wiphy)
 	DBGLOG(INIT, INFO, "Late channel force applied\n");
 }
 
-<<<<<<< HEAD
-=======
 /* Rewritten wlanAdapterStart: safer ordering, safe sleeps, centralized cleanup.
  * Assumptions: DBGLOG, ASSERT, ACQUIRE_POWER_CONTROL_FROM_PM,
  * RECLAIM_POWER_CONTROL_TO_PM, nicEnableInterrupt, nicSerInit, etc. exist
@@ -1331,7 +1329,6 @@ static inline void safe_sleep_ms(unsigned int ms)
 }
 
 
->>>>>>> mt7902-next
 uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 			IN struct REG_INFO *prRegInfo,
 			IN const u_int8_t bAtResetFlow)
@@ -1586,26 +1583,6 @@ if (prAdapter->rWifiVar.fgDeferredUsOverride) {
 	glCustomGenlInit();
 #endif
 
-<<<<<<< HEAD
-
-
-	struct wiphy *prWiphy = wlanGetWiphy();
-	mt79xx_force_channels_late(prWiphy);
-
-/* --- FINAL STEP: Apply deferred Country Code --- */
-	/* * We check u4Status to ensure FW is ready.
-	 * We use the u2CountryCode we cached during the "defanged" early call.
-	 */
-
-	if (u4Status == WLAN_STATUS_SUCCESS && prAdapter->rWifiVar.u2CountryCode == 0x5553) {
-		
-		DBGLOG(INIT, INFO, "Applying deferred US CountryCode override after FW ready\n");
-		
-		/* * Now that u4Status is SUCCESS and fgIsFwDownloaded is true, 
-		 * rlmDomainCountryCodeUpdate will pass its internal guards.
-		 */
-		rlmDomainCountryCodeUpdate(prAdapter, prWiphy, 0x5553);
-=======
 	/* Late channel force: must run after wiphy is live and FW is ready.
 	 * This is the only reliable way to unblock disabled channels on
 	 * this hardware — do not remove. */
@@ -1613,9 +1590,7 @@ if (prAdapter->rWifiVar.fgDeferredUsOverride) {
 		struct wiphy *prWiphy = wlanGetWiphy();
 		if (prWiphy)
 			mt79xx_force_channels_late(prWiphy);
->>>>>>> mt7902-next
 	}
-
 
 	return u4Status;
 }	/* wlanAdapterStart */
