@@ -2376,6 +2376,7 @@ uint32_t nicUniCmdStaRecTagHeBasic(struct ADAPTER *ad,
 			sizeof(tag->aucHeMacCapInfo));
 	kalMemCopy(tag->aucHePhyCapInfo, cmd->ucHePhyCapInfo,
 			sizeof(tag->aucHePhyCapInfo));
+
 	tag->ucPktExt = 2; /* mobile */
 	tag->au2RxMaxNssMcs[0] = cmd->u2HeRxMcsMapBW80;
 	tag->au2RxMaxNssMcs[1] = cmd->u2HeRxMcsMapBW160;

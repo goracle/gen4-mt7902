@@ -239,6 +239,7 @@ EXPORT_SYMBOL(gConEmiSize);
 
 #include <net/cfg80211.h>
 
+<<<<<<< HEAD
 static void mt79xx_reg_notifier(struct wiphy *wiphy,
                                struct regulatory_request *request)
 {
@@ -273,6 +274,82 @@ static void mt79xx_reg_notifier(struct wiphy *wiphy,
             c->max_power     = 3000;
         }
     }
+=======
+/* LEGAL regulatory domain configuration for MT79xx chips
+ * This respects actual regulatory domains instead of forcing US everywhere
+ */
+
+static const struct ieee80211_regdomain mt79xx_regdom_world = {
+	.n_reg_rules = 5,
+	.alpha2 = "00",  /* World regulatory domain */
+	.reg_rules = {
+		/* 2.4 GHz - channels 1-11 (most permissive globally) */
+		REG_RULE(2412, 2462, 40, 0, 2000, 0),
+		
+		/* 5 GHz lower band (UNII-1) - generally allowed worldwide */
+		REG_RULE(5170, 5250, 80, 0, 2000, 0),
+		
+		/* 5 GHz middle band (UNII-2A) - DFS required in most regions */
+		REG_RULE(5250, 5330, 80, 0, 2000, NL80211_RRF_DFS),
+		
+		/* 5 GHz upper band (UNII-2C) - DFS required */
+		REG_RULE(5490, 5730, 80, 0, 2000, NL80211_RRF_DFS),
+		
+		/* 5 GHz highest band (UNII-3) - generally allowed */
+		REG_RULE(5735, 5835, 80, 0, 2000, 0),
+	},
+};
+
+static void mt79xx_reg_notifier(struct wiphy *wiphy,
+                               struct regulatory_request *request)
+{
+	struct ieee80211_supported_band *sband;
+	int b, i;
+
+	DBGLOG(INIT, INFO,
+	    "REG NOTIFIER: alpha2=%c%c initiator=%d\n",
+	    request->alpha2[0], request->alpha2[1], request->initiator);
+
+	/* DO NOT force country codes - respect what was requested
+	 * The kernel's regulatory system will handle this properly
+	 */
+
+	/* Let the regulatory core handle channel flags appropriately
+	 * based on the actual regulatory domain.
+	 * 
+	 * We can do some cleanup here, but we should NOT:
+	 * - Clear NO_IR flags (those prevent illegal transmissions)
+	 * - Clear RADAR flags (those require DFS, which we may not support)
+	 * - Set excessive power levels
+	 */
+
+	for (b = 0; b < ARRAY_SIZE(wiphy->bands); b++) {
+		sband = wiphy->bands[b];
+		if (!sband)
+			continue;
+
+		for (i = 0; i < sband->n_channels; i++) {
+			struct ieee80211_channel *c = &sband->channels[i];
+			
+			/* Only adjust power if it seems unreasonably high
+			 * Most regulatory domains allow 20-23 dBm (100-200 mW)
+			 * The regulatory core will further limit this based on
+			 * the actual country rules
+			 */
+			if (c->max_power > 2300) {
+				c->max_power = 2300;  /* 23 dBm = ~200mW */
+			}
+			
+			/* DO NOT touch:
+			 * - IEEE80211_CHAN_DISABLED (channel not available)
+			 * - IEEE80211_CHAN_NO_IR (can't initiate radiation)
+			 * - IEEE80211_CHAN_RADAR (requires DFS)
+			 * 
+			 * The regulatory core sets these based on legal requirements
+			 */
+		}
+	}
+>>>>>>> mt7902-next
 }
 
 
@@ -282,8 +359,11 @@ static void mt79xx_reg_notifier(struct wiphy *wiphy,
 
 
 
+<<<<<<< HEAD
 
 
+=======
+>>>>>>> mt7902-next
 /*  For DTV Ref project -> Default enable */
 #if CFG_DC_USB_WOW_CALLBACK || CFG_POWER_OFF_CTRL_SUPPORT
 /* Register  DC  wow callback */
@@ -576,41 +656,134 @@ static struct ieee80211_channel mtk_6ghz_channels[] = {
 	CHAN6G(233, 0)
 };
 
-#if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
-#define HE_MCS_SUPP_2SS 0xFFFA
+// --- START FIXED DISASTER AREA ---
+// To this (specifically for modern kernels):
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
+
+/* NSS=1 (1 Spatial Stream) supporting MCS 0-11 
+ * Fixed casing to standard kernel cpu_to_le16
+ */
+#define HE_MCS_SUPP_1SS 0xFFFE
 #define HE_MCS_DONOT_SUPP 0xFFFF
 
-#define HE_MCS_NSS_SUPP						\
-{								\
-	.rx_mcs_80 = CPU_TO_LE16(HE_MCS_SUPP_2SS),		\
-	.tx_mcs_80 = CPU_TO_LE16(HE_MCS_SUPP_2SS),		\
-	.rx_mcs_160 = CPU_TO_LE16(HE_MCS_DONOT_SUPP),		\
-	.tx_mcs_160 = CPU_TO_LE16(HE_MCS_DONOT_SUPP),		\
-	.rx_mcs_80p80 = CPU_TO_LE16(HE_MCS_DONOT_SUPP),		\
-	.tx_mcs_80p80 = CPU_TO_LE16(HE_MCS_DONOT_SUPP),		\
+#define HE_MCS_NSS_SUPP_1x1 \
+{ \
+    .rx_mcs_80    = cpu_to_le16(HE_MCS_SUPP_1SS), \
+    .tx_mcs_80    = cpu_to_le16(HE_MCS_SUPP_1SS), \
+    .rx_mcs_160   = cpu_to_le16(HE_MCS_DONOT_SUPP), \
+    .tx_mcs_160   = cpu_to_le16(HE_MCS_DONOT_SUPP), \
+    .rx_mcs_80p80 = cpu_to_le16(HE_MCS_DONOT_SUPP), \
+    .tx_mcs_80p80 = cpu_to_le16(HE_MCS_DONOT_SUPP), \
 }
 
-#define WLAN_HE_CAP						\
-{								\
-	.has_he        = true,					\
-	.he_mcs_nss_supp = HE_MCS_NSS_SUPP,			\
+
+//begin radioactive area
+
+
+
+
+
+
+
+
+
+
+/* 
+ * CORRECTED HE (802.11ax / WiFi 6) Capabilities for 1x1 MT7921/MT7902
+ * 
+ * CRITICAL FIX: Midamble Rx Max NSTS field spans TWO bytes:
+ * - Byte 1, bit 7 (0x80) - must be 0 for 1 stream
+ * - Byte 2, bit 0 (0x01) - must be 0 for 1 stream
+ * 
+ * Changed byte 2 from 0x11 to 0x10 to clear bit 0
+ */
+
+#define WLAN_HE_CAP \
+{ \
+    .has_he = true, \
+    .he_cap_elem = { \
+        .mac_cap_info = { 0x08, 0x01, 0x40, 0x00, 0x00, 0x00 }, \
+        /* Index:        0     1     2     3     4     5     6... */ \
+        /* MAC capabilities preserved from original */ \
+        .phy_cap_info = { \
+            0x06,  /* Byte 0: Channel width support */ \
+            0x00,  /* Byte 1: bit 7=0 for NSTS (part 1) */ \
+            0x10,  /* Byte 2: bit 0=0 for NSTS (part 2), bit 4=Doppler - CHANGED from 0x11! */ \
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 \
+        }, \
+    }, \
+    .he_mcs_nss_supp = HE_MCS_NSS_SUPP_1x1, \
 }
 
-#define IFTYPE6G(_maskbit)					\
-{								\
-	.types_mask         = BIT(_maskbit),			\
-	.he_cap             = WLAN_HE_CAP,			\
+/* 
+ * WHAT CHANGED:
+ * - Byte 2: 0x11 → 0x10 (cleared bit 0 to fix NSTS=2 bug)
+ * 
+ * WHAT STAYED THE SAME:
+ * - MAC capabilities: 0x08, 0x01, 0x40, 0x00, 0x00, 0x00
+ * - Byte 0: 0x08 (channel width)
+ * - Byte 1: 0x00 (NSTS bit 1 = 0)
+ * - Byte 3-10: All 0x00
+ * - MCS/NSS support: HE_MCS_NSS_SUPP_1x1
+ * 
+ * WHY IT WORKS:
+ * 0x11 = 0b00010001 (bit 0=1, bit 4=1) → NSTS field reads as 0b01 = 2 streams ✗
+ * 0x10 = 0b00010000 (bit 0=0, bit 4=1) → NSTS field reads as 0b00 = 1 stream ✓
+ * 
+ * Bit 4 stays set for Doppler Tx support, which is fine for 1x1.
+ */
+
+/* 
+ * EXPLANATION OF KEY BYTES:
+ * 
+ * Byte 0 (0x08):
+ *   - Bit 3 set = Channel width support
+ *   - Bits 1-2 clear = No extra channel width bits
+ * 
+ * Byte 1 (0x00):
+ *   - Bit 7 CLEAR = Midamble NSTS bit 1 = 0
+ *   - All other bits clear
+ * 
+ * Byte 2 (0x10):
+ *   - Bit 0 CLEAR = Midamble NSTS bit 0 = 0 (CRITICAL!)
+ *   - Bit 4 SET = Doppler Tx support
+ *   - Combined NSTS bits = 0b00 = 1 stream ✓
+ * 
+ * NSTS Field Calculation:
+ *   bit_1 (byte1[7]) = 0
+ *   bit_0 (byte2[0]) = 0
+ *   NSTS = (bit_1 << 1) | bit_0 = 0b00 = 1 spatial stream
+ */
+
+
+
+
+
+
+
+
+// end radioactive area
+#endif // #if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
+
+
+
+
+/* Now that the macro is defined, we can use it in the iftype data */
+#define IFTYPE_HE_ONLY(_maskbit) \
+{ \
+    .types_mask = BIT(_maskbit), \
+    .he_cap     = WLAN_HE_CAP, \
 }
 
-static struct ieee80211_sband_iftype_data mtk_6ghz_iftype_data[] = {
-	IFTYPE6G(IFTYPE_STATION),
-	IFTYPE6G(IFTYPE_AP),
-	IFTYPE6G(IFTYPE_P2P_CLIENT),
-	IFTYPE6G(IFTYPE_P2P_GO)
+static struct ieee80211_sband_iftype_data mtk_he_iftype_data[] = {
+    IFTYPE_HE_ONLY(NL80211_IFTYPE_STATION),
+    IFTYPE_HE_ONLY(NL80211_IFTYPE_AP),
+    IFTYPE_HE_ONLY(NL80211_IFTYPE_P2P_CLIENT),
+    IFTYPE_HE_ONLY(NL80211_IFTYPE_P2P_GO),
 };
-#endif
+// --- END FIXED DISASTER AREA ---
 
-#endif
+
 
 #define RATETAB_ENT(_rate, _rateid, _flags)	\
 {						\
@@ -647,12 +820,23 @@ static struct ieee80211_rate mtk_rates[] = {
 	.tx_params      = IEEE80211_HT_MCS_TX_DEFINED,		\
 }
 
+/*
 #define WLAN_VHT_MCS_INFO					\
 {								\
 	.rx_mcs_map     = 0xFFFA,				\
 	.rx_highest     = cpu_to_le16(867),			\
 	.tx_mcs_map     = 0xFFFA,				\
 	.tx_highest     = cpu_to_le16(867),			\
+}
+*/
+
+/* FORCE 1x1 VHT (WiFi 5) */
+#define WLAN_VHT_MCS_INFO \
+{ \
+    .rx_mcs_map      = 0xFFFE,  /* 1SS Only, MCS 0-9 */ \
+    .rx_highest      = cpu_to_le16(433), /* Max 433Mbps for 1x1 80MHz */ \
+    .tx_mcs_map      = 0xFFFE, \
+    .tx_highest      = cpu_to_le16(433), \
 }
 
 
@@ -673,7 +857,7 @@ static struct ieee80211_rate mtk_rates[] = {
 {									\
 	.vht_supported  = true,						\
 	.cap            = IEEE80211_VHT_CAP_RXLDPC			\
-			| IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_MASK	\
+			|  0/*IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_MASK*/	\
 			| IEEE80211_VHT_CAP_MAX_MPDU_LENGTH_11454	\
 			| IEEE80211_VHT_CAP_RXLDPC			\
 			| IEEE80211_VHT_CAP_SHORT_GI_80			\
@@ -685,39 +869,56 @@ static struct ieee80211_rate mtk_rates[] = {
 
 /* public for both Legacy Wi-Fi / P2P access */
 struct ieee80211_supported_band mtk_band_2ghz = {
-	.band = KAL_BAND_2GHZ,
-	.channels = mtk_2ghz_channels,
-	.n_channels = ARRAY_SIZE(mtk_2ghz_channels),
-	.bitrates = mtk_g_rates,
-	.n_bitrates = mtk_g_rates_size,
-	.ht_cap = WLAN_HT_CAP,
+    .band = KAL_BAND_2GHZ,
+    .channels = mtk_2ghz_channels,
+    .n_channels = ARRAY_SIZE(mtk_2ghz_channels),
+    .bitrates = mtk_g_rates,
+    .n_bitrates = mtk_g_rates_size,
+    .ht_cap = WLAN_HT_CAP,
+#if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
+    .n_iftype_data = ARRAY_SIZE(mtk_he_iftype_data), // <--- ADD THIS LINE
+    .iftype_data = mtk_he_iftype_data,
+#endif
 };
 
 /* public for both Legacy Wi-Fi / P2P access */
 struct ieee80211_supported_band mtk_band_5ghz = {
-	.band = KAL_BAND_5GHZ,
-	.channels = mtk_5ghz_channels,
-	.n_channels = ARRAY_SIZE(mtk_5ghz_channels),
-	.bitrates = mtk_a_rates,
-	.n_bitrates = mtk_a_rates_size,
-	.ht_cap = WLAN_HT_CAP,
-	.vht_cap = WLAN_VHT_CAP,
+    .band = KAL_BAND_5GHZ,
+    .channels = mtk_5ghz_channels,
+    .n_channels = ARRAY_SIZE(mtk_5ghz_channels),
+    .bitrates = mtk_a_rates,
+    .n_bitrates = mtk_a_rates_size,
+    .ht_cap = WLAN_HT_CAP,
+    .vht_cap = WLAN_VHT_CAP,
+#if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
+    .n_iftype_data = ARRAY_SIZE(mtk_he_iftype_data), // <--- ADD THIS LINE
+    .iftype_data = mtk_he_iftype_data,
+#endif
 };
 
+
+
 #if (CFG_SUPPORT_WIFI_6G == 1)
-/* public for both Legacy Wi-Fi / P2P access */
 struct ieee80211_supported_band mtk_band_6ghz = {
-	.band = KAL_BAND_6GHZ,
-	.channels = mtk_6ghz_channels,
-	.n_channels = ARRAY_SIZE(mtk_6ghz_channels),
-	.bitrates = mtk_a_rates,
-	.n_bitrates = mtk_a_rates_size,
+    .band = KAL_BAND_6GHZ,
+    .channels = mtk_6ghz_channels,
+    .n_channels = ARRAY_SIZE(mtk_6ghz_channels),
+    .bitrates = mtk_a_rates,
+    .n_bitrates = mtk_a_rates_size,
 #if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
-	.n_iftype_data = ARRAY_SIZE(mtk_6ghz_iftype_data),
-	.iftype_data = mtk_6ghz_iftype_data,
+    /* Use the new unified 1x1 HE data name here */
+    .n_iftype_data = ARRAY_SIZE(mtk_he_iftype_data),
+    .iftype_data = mtk_he_iftype_data,
 #endif
 };
 #endif
+
+
+
+
+#endif
+
+
 
 const uint32_t mtk_cipher_suites[] = {
 	/* keep WEP first, it may be removed below */
@@ -2589,8 +2790,7 @@ static int32_t wlanNetRegister(struct wireless_dev *prWdev)
 {
 	struct GLUE_INFO *prGlueInfo;
 	int32_t i4DevIdx = -1;
-	struct NETDEV_PRIVATE_GLUE_INFO *prNetDevPrivate =
-		(struct NETDEV_PRIVATE_GLUE_INFO *) NULL;
+	struct NETDEV_PRIVATE_GLUE_INFO *prNetDevPrivate = NULL;
 	struct ADAPTER *prAdapter = NULL;
 	uint32_t u4Idx = 0;
 
@@ -2603,6 +2803,7 @@ static int32_t wlanNetRegister(struct wireless_dev *prWdev)
 		prGlueInfo = (struct GLUE_INFO *) wiphy_priv(prWdev->wiphy);
 		prAdapter = prGlueInfo->prAdapter;
 		i4DevIdx = wlanGetDevIdx(prWdev->netdev);
+
 		if (i4DevIdx < 0) {
 			DBGLOG(INIT, ERROR, "net_device number exceeds!\n");
 			break;
@@ -2615,39 +2816,67 @@ static int32_t wlanNetRegister(struct wireless_dev *prWdev)
 		for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
 			prNetDevPrivate = (struct NETDEV_PRIVATE_GLUE_INFO *)
 				netdev_priv(gprWdev[u4Idx]->netdev);
+			
 			ASSERT(prNetDevPrivate->prGlueInfo == prGlueInfo);
 			prNetDevPrivate->ucBssIdx = u4Idx;
+
 #if CFG_ENABLE_UNIFY_WIPHY
 			prNetDevPrivate->ucIsP2p = FALSE;
 #endif
+
 			wlanBindBssIdxToNetInterface(prGlueInfo,
 				     u4Idx,
 				     (void *)gprWdev[u4Idx]->netdev);
+
 #if CFG_SUPPORT_PERSIST_NETDEV
 			if (gprNetdev[u4Idx]->reg_state == NETREG_REGISTERED)
 				continue;
-			/* Ensure carrier is off before registration to prevent NetworkManager interference */
+
+			/* Ensure carrier is off before registration to prevent race conditions */
 			netif_carrier_off(gprWdev[u4Idx]->netdev);
 			netif_tx_stop_all_queues(gprWdev[u4Idx]->netdev);
 #endif
-			if (register_netdev(gprWdev[u4Idx]->netdev)
-				< 0) {
+
+			/* * iwd/cfg80211 COMPATIBILITY BLOCK
+			 * We initialize these BEFORE register_netdev so the kernel 
+			 * knows exactly what kind of device is appearing.
+			 */
+
+		    /* 1. Set the interface type on the wireless device itself */
+			prWdev->iftype = NL80211_IFTYPE_STATION;
+
+			/* 2. Set the global capabilities on the wiphy */
+			prWdev->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION) | 
+							BIT(NL80211_IFTYPE_AP) |
+							BIT(NL80211_IFTYPE_P2P_CLIENT);
+
+			/* 3. SET THESE - If these are 0, CMD_TRIGGER_SCAN returns -22 */
+			prWdev->wiphy->max_scan_ssids = 4;        /* MTK firmware limit is usually small */
+			prWdev->wiphy->max_scan_ie_len = 1024;    /* Safe limit for MT7902 */
+
+			/* 4. Tell mac80211 we are ready for managed mode */
+			prWdev->wiphy->regulatory_flags |= REGULATORY_WIPHY_SELF_MANAGED;
+
+			/* 4. Finalize the network device registration */
+			if (register_netdev(gprWdev[u4Idx]->netdev) < 0) {
 				DBGLOG(INIT, ERROR,
 					"Register net_device %d failed\n",
 					u4Idx);
-				wlanClearDevIdx(
-					gprWdev[u4Idx]->netdev);
+				wlanClearDevIdx(gprWdev[u4Idx]->netdev);
 				i4DevIdx = -1;
+			} else {
+				DBGLOG(INIT, INFO, "Registered netdev %s as STATION\n", 
+					gprWdev[u4Idx]->netdev->name);
 			}
 		}
 
 		if (i4DevIdx != -1)
 			prGlueInfo->fgIsRegistered = TRUE;
+
 	} while (FALSE);
 
-	return i4DevIdx;	/* success */
-}				/* end of wlanNetRegister() */
-
+	return i4DevIdx;
+}
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -2846,7 +3075,11 @@ static void wlanCreateWirelessDevice(void)
 	prWiphy->iface_combinations = p_mtk_iface_combinations_sta;
 	prWiphy->n_iface_combinations = mtk_iface_combinations_sta_num;
 	prWiphy->max_scan_ssids = SCN_SSID_MAX_NUM + 1;
+<<<<<<< HEAD
 	prWiphy->max_scan_ie_len = 512;
+=======
+	prWiphy->max_scan_ie_len = 2048;
+>>>>>>> mt7902-next
 	prWiphy->n_addresses = 1;
 
 	/* Ensure perm_addr exists (avoid zero MAC issues with iwd) */
@@ -2940,6 +3173,7 @@ static void wlanCreateWirelessDevice(void)
 	prWiphy->regulatory_flags = REGULATORY_CUSTOM_REG | REGULATORY_DISABLE_BEACON_HINTS;
 	/* If you have/declare a custom regdomain object, you may apply it here via wiphy_apply_custom_regulatory().
 	 * NOTE: do not attempt to write into non-existent wiphy fields (eg reg_alpha2) — use helpers. */
+<<<<<<< HEAD
 
 	/* --- NUCLEAR SCRUB: conservative scrub BEFORE wiphy_register() --- */
 	rtnl_lock();
@@ -2976,6 +3210,8 @@ static void wlanCreateWirelessDevice(void)
 		DBGLOG(INIT, INFO, "NUCLEAR SCRUB: %d channels sanitized\n", sanitized);
 	}
 	rtnl_unlock();
+=======
+>>>>>>> mt7902-next
 
 	/* 11) Register the wiphy with cfg80211 */
 	if (wiphy_register(prWiphy) < 0) {
@@ -4246,6 +4482,14 @@ uint32_t wlanConnac2XDownloadBufferBin(struct ADAPTER *prAdapter)
 	DBGLOG(INIT, INFO, "Start Efuse Buffer Mode ..\n");
 	DBGLOG(INIT, INFO, "ucEfuseBUfferModeCal is %x\n",
 		prAdapter->rWifiVar.ucEfuseBufferModeCal);
+
+	// ===== ADD THIS =====
+if (prAdapter->rWifiVar.ucEfuseBufferModeCal == LOAD_EEPROM_BIN) {
+    DBGLOG(INIT, WARN, "MT7902-FIX: Forcing EFUSE mode (no binary file available)\n");
+    prAdapter->rWifiVar.ucEfuseBufferModeCal = LOAD_EFUSE;
+}
+	// ====================
+
 
 	prChipInfo = prAdapter->chip_info;
 	chip_id = prChipInfo->chip_id;
@@ -6211,7 +6455,7 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		FAIL_REASON_NUM
 	} eFailReason;
 	struct WLANDEV_INFO *prWlandevInfo = NULL;
-	int32_t i4DevIdx = 0;
+	int32_t i4DevIdx = -1;
 	struct GLUE_INFO *prGlueInfo = NULL;
 	struct ADAPTER *prAdapter = NULL;
 	int32_t i4Status = 0;
@@ -6278,6 +6522,7 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		wlanOnPreAdapterStart(prGlueInfo, prAdapter, &prRegInfo, &prChipInfo);
 
 		/* 4. Boot MCU */
+		/* Note: mt79xx_wfsys_cold_boot_and_wait handles the power-on sequence */
 		if (mt79xx_wfsys_cold_boot_and_wait(prAdapter) != 0) {
 			DBGLOG(INIT, ERROR, "WFSYS init failed: MCU did not come alive\n");
 			return -ENODEV;
@@ -6295,6 +6540,7 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 			break;
 		}
 
+		/* Initialize internal state before bands are set */
 		if (wlanOnPreNetRegister(prGlueInfo, prAdapter, prChipInfo, prWifiVar, FALSE)) {
 			i4Status = -EIO;
 			eFailReason = NET_REGISTER_FAIL;
@@ -6302,37 +6548,34 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		}
 
 		/* ---------------------------------------------------------
-		 * CRITICAL FIX: Initialize Bands and Capabilities BEFORE Register
-		 * This ensures wiphy has correct bands when userspace sees it.
+		 * CRITICAL FIX: Initialize Bands and Capabilities
+		 * We FORCE 5GHz enablement here because firmware detection
+		 * might be reporting false or default.
 		 * --------------------------------------------------------- */
 		
-		/* Configure 5G band */
-		if (prAdapter->fgEnable5GBand)
-			prWdev->wiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
-		else
-			prWdev->wiphy->bands[KAL_BAND_5GHZ] = NULL;
+		/* FORCE Enable 5GHz Band */
+		prAdapter->fgEnable5GBand = TRUE;
 
+		/* Configure 5G band structure */
+		prWdev->wiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
+
+		/* Apply to P2P interfaces */
 		for (i = 0 ; i < KAL_P2P_NUM; i++) {
 			if (gprP2pRoleWdev[i] == NULL) continue;
-			if (prAdapter->fgEnable5GBand)
-				gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
-			else
-				gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_5GHZ] = NULL;
+			gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
 		}
 
 #if (CFG_SUPPORT_WIFI_6G == 1)
-		/* Configure 6G band */
-		if (prAdapter->fgIsHwSupport6G)
+		/* Configure 6G band if HW supports it */
+		if (prAdapter->fgIsHwSupport6G) {
 			prWdev->wiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
-		else
-			prWdev->wiphy->bands[KAL_BAND_6GHZ] = NULL;
-
-		for (i = 0 ; i < KAL_P2P_NUM; i++) {
-			if (gprP2pRoleWdev[i] == NULL) continue;
-			if (prAdapter->fgIsHwSupport6G)
+			
+			for (i = 0 ; i < KAL_P2P_NUM; i++) {
+				if (gprP2pRoleWdev[i] == NULL) continue;
 				gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
-			else
-				gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_6GHZ] = NULL;
+			}
+		} else {
+			prWdev->wiphy->bands[KAL_BAND_6GHZ] = NULL;
 		}
 #endif
 
@@ -6348,6 +6591,7 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 #if (CONFIG_WLAN_SERVICE == 1)
 		wlanServiceInit(prGlueInfo);
 #endif
+		/* Clear FT IEs */
 		for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
 			struct FT_IES *prFtIEs = aisGetFtIe(prAdapter, u4Idx);
 			kalMemZero(prFtIEs, sizeof(*prFtIEs));
@@ -6356,7 +6600,8 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		/* ---------------------------------------------------------
 		 * CRITICAL FIX: Mark Driver READY before Register
 		 * This ensures wlanIsDriverReady() returns TRUE when
-		 * NetworkManager queries TX Power immediately after Register.
+		 * NetworkManager/iwd queries capabilities immediately.
+		 * Prevents 0x103 Timeouts on early commands.
 		 * --------------------------------------------------------- */
 		wlanOnWhenProbeSuccess(prGlueInfo, prAdapter, FALSE);
 #if CFG_SUPPORT_TPENHANCE_MODE
@@ -6364,7 +6609,7 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 #endif
 
 		/* 6. Register Net Device (GO LIVE) */
-		/* Userspace sees the interface HERE. It is now safe because we are Ready. */
+		/* Userspace sees the interface HERE. */
 		i4DevIdx = wlanNetRegister(prWdev);
 		if (i4DevIdx < 0) {
 			i4Status = -ENXIO;
@@ -6407,7 +6652,7 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		}
 #endif
 		
-		/* Register P2P if needed (was in cleanup block) */
+		/* Register P2P if needed */
 		wlanOnP2pRegistration(prGlueInfo, prAdapter, prWdev);
 
 		DBGLOG(INIT, INFO,
