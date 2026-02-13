@@ -239,42 +239,6 @@ EXPORT_SYMBOL(gConEmiSize);
 
 #include <net/cfg80211.h>
 
-<<<<<<< HEAD
-static void mt79xx_reg_notifier(struct wiphy *wiphy,
-                               struct regulatory_request *request)
-{
-    struct ieee80211_supported_band *sband;
-    int b, i;
-
-    DBGLOG(INIT, INFO,
-        "REG NOTIFIER: alpha2=%c%c initiator=%d\n",
-        request->alpha2[0], request->alpha2[1], request->initiator);
-
-
-    /* Force-accept US regardless of initiator */
-    if (request->alpha2[0] != 'U' || request->alpha2[1] != 'S') {
-        request->alpha2[0] = 'U';
-        request->alpha2[1] = 'S';
-    }
-
-    /* Re-enable IR on *all* channels */
-    for (b = 0; b < ARRAY_SIZE(wiphy->bands); b++) {
-        sband = wiphy->bands[b];
-        if (!sband)
-            continue;
-
-        for (i = 0; i < sband->n_channels; i++) {
-            struct ieee80211_channel *c = &sband->channels[i];
-
-            c->flags &= ~(IEEE80211_CHAN_NO_IR |
-                          IEEE80211_CHAN_DISABLED |
-                          IEEE80211_CHAN_RADAR);
-
-            c->max_reg_power = 3000;
-            c->max_power     = 3000;
-        }
-    }
-=======
 /* LEGAL regulatory domain configuration for MT79xx chips
  * This respects actual regulatory domains instead of forcing US everywhere
  */
@@ -349,7 +313,6 @@ static void mt79xx_reg_notifier(struct wiphy *wiphy,
 			 */
 		}
 	}
->>>>>>> mt7902-next
 }
 
 
@@ -359,11 +322,6 @@ static void mt79xx_reg_notifier(struct wiphy *wiphy,
 
 
 
-<<<<<<< HEAD
-
-
-=======
->>>>>>> mt7902-next
 /*  For DTV Ref project -> Default enable */
 #if CFG_DC_USB_WOW_CALLBACK || CFG_POWER_OFF_CTRL_SUPPORT
 /* Register  DC  wow callback */
@@ -3075,11 +3033,7 @@ static void wlanCreateWirelessDevice(void)
 	prWiphy->iface_combinations = p_mtk_iface_combinations_sta;
 	prWiphy->n_iface_combinations = mtk_iface_combinations_sta_num;
 	prWiphy->max_scan_ssids = SCN_SSID_MAX_NUM + 1;
-<<<<<<< HEAD
-	prWiphy->max_scan_ie_len = 512;
-=======
 	prWiphy->max_scan_ie_len = 2048;
->>>>>>> mt7902-next
 	prWiphy->n_addresses = 1;
 
 	/* Ensure perm_addr exists (avoid zero MAC issues with iwd) */
@@ -3173,45 +3127,6 @@ static void wlanCreateWirelessDevice(void)
 	prWiphy->regulatory_flags = REGULATORY_CUSTOM_REG | REGULATORY_DISABLE_BEACON_HINTS;
 	/* If you have/declare a custom regdomain object, you may apply it here via wiphy_apply_custom_regulatory().
 	 * NOTE: do not attempt to write into non-existent wiphy fields (eg reg_alpha2) — use helpers. */
-<<<<<<< HEAD
-
-	/* --- NUCLEAR SCRUB: conservative scrub BEFORE wiphy_register() --- */
-	rtnl_lock();
-	{
-		int b, i, sanitized = 0;
-		struct ieee80211_supported_band *sband;
-
-		DBGLOG(INIT, INFO, "NUCLEAR SCRUB: pre-register channel scrub\n");
-
-		for (b = 0; b < ARRAY_SIZE(prWiphy->bands); b++) {
-			sband = prWiphy->bands[b];
-			if (!sband || !sband->n_channels)
-				continue;
-
-			for (i = 0; i < sband->n_channels; i++) {
-				struct ieee80211_channel *chan = &sband->channels[i];
-
-				/* Clear problematic bits that make userspace mark them NO-IR/disabled.
-				 * Be conservative: clear RADAR/DISABLED/NO_IR only, keep other flags. */
-				chan->flags &= ~(IEEE80211_CHAN_RADAR |
-				                 IEEE80211_CHAN_DISABLED |
-				                 IEEE80211_CHAN_NO_IR);
-
-				/* Set maximums to a sane, firmware-supported value (mBm) */
-				chan->max_power = 3000;
-				chan->max_reg_power = 3000;
-
-				/* avoid beacon-triggered country enforcement */
-				chan->beacon_found = 0;
-
-				sanitized++;
-			}
-		}
-		DBGLOG(INIT, INFO, "NUCLEAR SCRUB: %d channels sanitized\n", sanitized);
-	}
-	rtnl_unlock();
-=======
->>>>>>> mt7902-next
 
 	/* 11) Register the wiphy with cfg80211 */
 	if (wiphy_register(prWiphy) < 0) {
