@@ -2925,15 +2925,6 @@ void aisFsmRunEventScanDone(IN struct ADAPTER *prAdapter,
 	prScanDoneMsg = (struct MSG_SCN_SCAN_DONE *)prMsgHdr;
 	ucBssIndex = prScanDoneMsg->ucBssIndex;
 
-	DBGLOG(AIS, LOUD, "[%d] EVENT-SCAN DONE: Current Time = %u\n",
-		ucBssIndex,
-		kalGetTimeTick());
-
-	if (aisGetAisBssInfo(prAdapter, ucBssIndex) == NULL) {
-		DBGLOG(AIS, WARN, "prAisBssInfo is NULL, and then return\n");
-		return;
-	}
-
 	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
 	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
 	prRoamingFsmInfo = aisGetRoamingInfo(prAdapter, ucBssIndex);
@@ -2944,49 +2935,45 @@ void aisFsmRunEventScanDone(IN struct ADAPTER *prAdapter,
 	eStatus = prScanDoneMsg->eScanStatus;
 	cnmMemFree(prAdapter, prMsgHdr);
 
-	DBGLOG(AIS, INFO, "ScanDone %u, status(%d) native req(%u)\n",
-	       ucSeqNumOfCompMsg, eStatus, prAisFsmInfo->u2SeqNumOfScanReport);
+	DBGLOG(AIS, INFO, "ScanDone %u, status(%d) current_state(%d) conn_req(%u)\n",
+	       ucSeqNumOfCompMsg, eStatus, prAisFsmInfo->eCurrentState, prConnSettings->fgIsConnReqIssued);
 
 	eNextState = prAisFsmInfo->eCurrentState;
 
 	if (ucSeqNumOfCompMsg != prAisFsmInfo->ucSeqNumOfScanReq) {
-		DBGLOG(AIS, WARN,
-		       "SEQ NO of AIS SCN DONE MSG is not matched %u %u\n",
+		DBGLOG(AIS, WARN, "SEQ NO mismatch: %u vs %u\n",
 		       ucSeqNumOfCompMsg, prAisFsmInfo->ucSeqNumOfScanReq);
 	} else {
 		prAisFsmInfo->fgIsScanning = FALSE;
 		cnmTimerStopTimer(prAdapter, &prAisFsmInfo->rScanDoneTimer);
+
 		switch (prAisFsmInfo->eCurrentState) {
 		case AIS_STATE_SCAN:
-			eNextState = AIS_STATE_IDLE;
-#if CFG_SUPPORT_AGPS_ASSIST
-			scanReportScanResultToAgps(prAdapter);
-#endif
+			/* FIX: If we are trying to connect, move to SEARCH to process results.
+			 * Otherwise, return to IDLE. 
+			 */
+			if (prConnSettings->fgIsConnReqIssued)
+				eNextState = AIS_STATE_SEARCH;
+			else
+				eNextState = AIS_STATE_IDLE;
 			break;
 
 		case AIS_STATE_ONLINE_SCAN:
 			scanGetCurrentEssChnlList(prAdapter, ucBssIndex);
-
 #if CFG_SUPPORT_ROAMING
-			eNextState = aisFsmRoamingScanResultsUpdate(prAdapter,
-				ucBssIndex);
+			eNextState = aisFsmRoamingScanResultsUpdate(prAdapter, ucBssIndex);
 #else
 			eNextState = AIS_STATE_NORMAL_TR;
-#endif /* CFG_SUPPORT_ROAMING */
-#if CFG_SUPPORT_AGPS_ASSIST
-			scanReportScanResultToAgps(prAdapter);
 #endif
 			break;
 
 		case AIS_STATE_LOOKING_FOR:
 			scanGetCurrentEssChnlList(prAdapter, ucBssIndex);
-
 #if CFG_SUPPORT_ROAMING
-			eNextState = aisFsmRoamingScanResultsUpdate(prAdapter,
-				ucBssIndex);
+			eNextState = aisFsmRoamingScanResultsUpdate(prAdapter, ucBssIndex);
 #else
 			eNextState = AIS_STATE_SEARCH;
-#endif /* CFG_SUPPORT_ROAMING */
+#endif
 			break;
 
 		default:
@@ -2994,106 +2981,70 @@ void aisFsmRunEventScanDone(IN struct ADAPTER *prAdapter,
 		}
 	}
 
-	/* Perform state transition BEFORE checking RNR queue */
-	if (eNextState != prAisFsmInfo->eCurrentState)
-		aisFsmSteps(prAdapter, eNextState, ucBssIndex);
-
-	/* Decide if we should report completion to userspace.
-	 * We do this BEFORE clearing the flags so we can check properly.
-	 */
-	if ((uint16_t) ucSeqNumOfCompMsg == prAisFsmInfo->u2SeqNumOfScanReport) {
+	/* Decide if this was a userspace-requested scan (via nl80211) */
+	if ((uint16_t)ucSeqNumOfCompMsg == prAisFsmInfo->u2SeqNumOfScanReport) {
 		fgShouldReportCompletion = TRUE;
 	}
 
-	/* Clear the scan-issued flag early so RNR scans can be accepted */
-	if (fgShouldReportCompletion) {
-		prAisFsmInfo->u2SeqNumOfScanReport = AIS_SCN_REPORT_SEQ_NOT_SET;
-		prConnSettings->fgIsScanReqIssued = FALSE;
-	}
-
 #if (CFG_SUPPORT_WIFI_RNR == 1)
-	/* Check if we have more RNR follow-up scans queued.
-	 * If yes, dispatch the next one and return without calling kalScanDone.
-	 * If no, fall through to report completion.
+	/* * MT7902 RNR Loop Management:
+	 * If we have a pending connection request, we should STOP the RNR background
+	 * scanning and prioritize the association logic. 
 	 */
 	if (!LINK_IS_EMPTY(&prAdapter->rNeighborAPInfoList)) {
-		struct NEIGHBOR_AP_INFO *prNeighborAPInfo;
+		if (prConnSettings->fgIsConnReqIssued) {
+			DBGLOG(AIS, INFO, "Aborting RNR loop to prioritize Connection Request\n");
+			/* Clear the list to stop the loop */
+			while (!LINK_IS_EMPTY(&prAdapter->rNeighborAPInfoList)) {
+				struct NEIGHBOR_AP_INFO *prInfo;
+				LINK_REMOVE_HEAD(&prAdapter->rNeighborAPInfoList, prInfo, struct NEIGHBOR_AP_INFO *);
+				cnmMemFree(prAdapter, prInfo);
+			}
+		} else {
+			struct NEIGHBOR_AP_INFO *prNeighborAPInfo;
 
-		LINK_REMOVE_HEAD(&prAdapter->rNeighborAPInfoList,
-			prNeighborAPInfo, struct NEIGHBOR_AP_INFO *);
+			LINK_REMOVE_HEAD(&prAdapter->rNeighborAPInfoList, prNeighborAPInfo, struct NEIGHBOR_AP_INFO *);
+			DBGLOG(AIS, INFO, "Dispatching RNR follow-up (%u left)\n", prAdapter->rNeighborAPInfoList.u4NumElem);
 
-		DBGLOG(AIS, INFO,
-			"Dispatching RNR follow-up scan (%u remaining)\n",
-			prAdapter->rNeighborAPInfoList.u4NumElem);
-
-		cnmTimerStartTimer(prAdapter,
-			aisGetScanDoneTimer(prAdapter, ucBssIndex),
-			SEC_TO_MSEC(AIS_SCN_DONE_TIMEOUT_SEC));
-
-// Force the driver to realize this is a specific channel scan (allows 6GHz)
-// Use the Function Mask to tell the driver this is a specific channel scan
-//prNeighborAPInfo->rScanRequest.ucScnFuncMask |= ENUM_SCN_SPECIFIC_CH_SCAN;
-//prNeighborAPInfo->rScanRequest.eScanChannel = SCAN_CHANNEL_SPECIFIED;
-
-		aisFsmScanRequestAdv(prAdapter,
-			&prNeighborAPInfo->rScanRequest);
-		cnmMemFree(prAdapter, prNeighborAPInfo);
-
-		/* Don't report completion yet - more scans to do */
-		return;
+			/* We remain in the current state while RNR scans continue */
+			aisFsmScanRequestAdv(prAdapter, &prNeighborAPInfo->rScanRequest);
+			cnmMemFree(prAdapter, prNeighborAPInfo);
+			return; /* Exit: Do not transition or report completion yet */
+		}
 	}
 #endif
 
-	/* RNR queue is empty. Report scan completion to userspace. */
+	/* Finalize State Transition */
+	if (eNextState != prAisFsmInfo->eCurrentState) {
+		aisFsmSteps(prAdapter, eNextState, ucBssIndex);
+	}
+
+	/* Report to Userspace/iwd */
 	if (fgShouldReportCompletion) {
+		prAisFsmInfo->u2SeqNumOfScanReport = AIS_SCN_REPORT_SEQ_NOT_SET;
+		prConnSettings->fgIsScanReqIssued = FALSE;
+
 		if (prRmReq->rBcnRmParam.eState != RM_ON_GOING) {
-			DBGLOG(AIS, INFO,
-				"All scans complete, calling kalScanDone\n");
+			DBGLOG(AIS, INFO, "Reporting kalScanDone to upper layers\n");
 			kalScanDone(prAdapter->prGlueInfo, ucBssIndex,
-				(eStatus == SCAN_STATUS_DONE) ?
-				WLAN_STATUS_SUCCESS : WLAN_STATUS_FAILURE);
+				(eStatus == SCAN_STATUS_DONE) ? WLAN_STATUS_SUCCESS : WLAN_STATUS_FAILURE);
 		}
 	}
 
+	/* Handle 802.11k/Radio Measurement State Machine */
 	if (prBcnRmParam->eState == RM_NO_REQUEST)
 		return;
 
 	if (prBcnRmParam->eState == RM_WAITING) {
 		rrmDoBeaconMeasurement(prAdapter, ucBssIndex);
 	} else if (prBcnRmParam->rNormalScan.fgExist) {
-		struct NORMAL_SCAN_PARAMS *prParam = &prBcnRmParam->rNormalScan;
-
-		DBGLOG(AIS, INFO,
-		       "BCN REQ: Schedule normal scan after a beacon measurement done\n");
 		prBcnRmParam->eState = RM_WAITING;
 		prBcnRmParam->rNormalScan.fgExist = FALSE;
-		cnmTimerStartTimer(prAdapter, &prAisFsmInfo->rScanDoneTimer,
-				   SEC_TO_MSEC(AIS_SCN_DONE_TIMEOUT_SEC));
-
-		aisFsmScanRequestAdv(prAdapter, &prParam->rScanRequest);
+		aisFsmScanRequestAdv(prAdapter, &prBcnRmParam->rNormalScan.rScanRequest);
 	} else {
-#if CFG_SUPPORT_802_11K
-		struct LINK *prBSSDescList =
-			&prAdapter->rWifiVar.rScanInfo.rBSSDescList;
-		struct BSS_DESC *prBssDesc = NULL;
-		uint32_t count = 0;
-
-		LINK_FOR_EACH_ENTRY(prBssDesc, prBSSDescList, rLinkEntry,
-				    struct BSS_DESC)
-		{
-			if (TIME_BEFORE(prRmReq->rScanStartTime,
-				prBssDesc->rUpdateTime)) {
-				rrmCollectBeaconReport(
-					prAdapter, prBssDesc, ucBssIndex);
-				count++;
-			}
-		}
-		DBGLOG(RRM, INFO, "BCN report Active Mode, total: %d\n", count);
-#endif
 		rrmStartNextMeasurement(prAdapter, FALSE, ucBssIndex);
 	}
 }
-
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief

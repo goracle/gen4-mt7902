@@ -2258,8 +2258,7 @@ scanCheckBandMismatch(enum ENUM_BAND eHwBand,
     return FALSE;
 }
 
-static struct BSS_DESC *
-scanResolveOrAllocateBssDesc(struct ADAPTER *prAdapter,
+static struct BSS_DESC * scanResolveOrAllocateBssDesc(struct ADAPTER *prAdapter,
     enum ENUM_BSS_TYPE eBSSType,
     struct WLAN_BEACON_FRAME *prWlanBeaconFrame,
     struct SW_RFB *prSwRfb,
@@ -2272,70 +2271,94 @@ scanResolveOrAllocateBssDesc(struct ADAPTER *prAdapter,
     *pfgIsNewBssDesc = FALSE;
     *pfgIsCopy = FALSE;
 
+    /* 1. Primary Search: Look for an exact match (MAC + SSID) */
     prBssDesc = scanSearchExistingBssDescWithSsid(
         prAdapter, eBSSType,
         (uint8_t *)prWlanBeaconFrame->aucBSSID,
         (uint8_t *)prWlanBeaconFrame->aucSrcAddr,
         fgIsValidSsid, fgIsValidSsid ? prSsid : NULL);
 
+    /* 2. Promotion Logic: If we have a valid SSID name now, but found no match, 
+       check if we previously stored a 'hidden' entry for this physical MAC. */
+    if (prBssDesc == NULL && fgIsValidSsid) {
+        prBssDesc = scanSearchExistingBssDescWithSsid(
+            prAdapter, eBSSType,
+            (uint8_t *)prWlanBeaconFrame->aucBSSID,
+            (uint8_t *)prWlanBeaconFrame->aucSrcAddr,
+            FALSE, NULL);
+
+	if (prBssDesc) {
+            DBGLOG(SCN, INFO, "PROMOTING Hidden BSS " MACSTR " to SSID: %s\n", 
+                MAC2STR(prBssDesc->aucBSSID), prSsid->aucSsid);
+            
+            /* Corrected: using u4SsidLen instead of ucSsidLen */
+            COPY_SSID(prBssDesc->aucSSID, prBssDesc->ucSSIDLen, 
+                      prSsid->aucSsid, prSsid->u4SsidLen);
+        }
+
+    }
+
+    /* 3. Allocation: If still no descriptor, allocate a new one */
     if (prBssDesc == NULL) {
         *pfgIsNewBssDesc = TRUE;
-        /* Allocation strategy from original - try several times */
         do {
             prBssDesc = scanAllocateBssDesc(prAdapter);
             if (prBssDesc) break;
+            
             scanRemoveBssDescsByPolicy(prAdapter,
                 (SCN_RM_POLICY_EXCLUDE_CONNECTED | SCN_RM_POLICY_OLDEST_HIDDEN | SCN_RM_POLICY_TIMEOUT));
+            
             prBssDesc = scanAllocateBssDesc(prAdapter);
             if (prBssDesc) break;
+            
             scanRemoveBssDescsByPolicy(prAdapter,
                 (SCN_RM_POLICY_EXCLUDE_CONNECTED | SCN_RM_POLICY_SMART_WEAKEST));
+            
             prBssDesc = scanAllocateBssDesc(prAdapter);
             if (prBssDesc) break;
-            DBGLOG(SCN, WARN, "alloc new BssDesc for " MACSTR " failed\n", MAC2STR((uint8_t *)prWlanBeaconFrame->aucBSSID));
+            
+            DBGLOG(SCN, WARN, "alloc new BssDesc for " MACSTR " failed\n", 
+                MAC2STR((uint8_t *)prWlanBeaconFrame->aucBSSID));
             return NULL;
         } while (FALSE);
     } else {
-        /* update existing with replicated-beacon protections */
+        /* 4. Update existing: Handle timing and signal strength for replicated frames */
         OS_SYSTIME rCurrentTime;
         GET_CURRENT_SYSTIME(&rCurrentTime);
 
         ASSERT(prSwRfb->prRxStatusGroup3);
 
-        if (prBssDesc->eBSSType != eBSSType)
+        if (prBssDesc->eBSSType != eBSSType) {
             prBssDesc->eBSSType = eBSSType;
-        else {
+        } else {
             uint8_t ucHwCh = prSwRfb->ucChnlNum;
-#if (CFG_SUPPORT_WIFI_6G == 1)
-	    //nicRxdChNumTranslate(eBand, &ucHwCh);
-            //nicRxdChNumTranslate(prAdapter->rWifiVar.rScanInfo.eHwBand, &ucHwCh);
-	    //nicRxdChNumTranslateByChannel(ucChannelNum, &ucHwCh);
-	    //	    uint8_t ucHwCh = prSwRfb->ucChnlNum;
 
-#endif
+            /* Validate signal strength and update window to prevent 'flapping' */
             if (ucHwCh != prBssDesc->ucChannelNum
                 && prBssDesc->ucRCPI > nicRxGetRcpiValueFromRxv(prAdapter, RCPI_MODE_MAX, prSwRfb)) {
+                
                 uint8_t ucRcpi = nicRxGetRcpiValueFromRxv(prAdapter, RCPI_MODE_MAX, prSwRfb);
+                
                 if ((prBssDesc->ucRCPI - ucRcpi) >= REPLICATED_BEACON_STRENGTH_THRESHOLD
                     && rCurrentTime - prBssDesc->rUpdateTime <= REPLICATED_BEACON_FRESH_PERIOD) {
-                    log_dbg(SCN, TRACE, "rssi(%u) is too much weaker and previous one(%u) is fresh\n",
-                            ucRcpi, prBssDesc->ucRCPI);
                     return prBssDesc;
                 } else if (rCurrentTime - prBssDesc->rUpdateTime <= REPLICATED_BEACON_TIME_THRESHOLD) {
-                    log_dbg(SCN, TRACE, "receive beacon/probe responses too soon(%u:%u)\n",
-                            prBssDesc->rUpdateTime, rCurrentTime);
                     return prBssDesc;
                 }
             }
         }
 
-        /* Timestamp reset -> reinit */
+        /* 5. Handle AP Reboots: Reset timestamp if the AP has restarted */
         if (prBssDesc->eBSSType == BSS_TYPE_INFRASTRUCTURE
             && ((struct WLAN_BEACON_FRAME *)prSwRfb->pvHeader)->au4Timestamp[0] < prBssDesc->u8TimeStamp.QuadPart
             && prBssDesc->fgIsConnecting == FALSE) {
-            u_int8_t fgIsConnected = prBssDesc->fgIsConnected, fgIsConnecting = prBssDesc->fgIsConnecting;
+            
+            u_int8_t fgIsConnected = prBssDesc->fgIsConnected;
+            u_int8_t fgIsConnecting = prBssDesc->fgIsConnecting;
+            
             *pfgIsNewBssDesc = TRUE;
             scanResetBssDesc(prAdapter, prBssDesc);
+            
             prBssDesc->fgIsConnected = fgIsConnected;
             prBssDesc->fgIsConnecting = fgIsConnecting;
         }
@@ -2343,6 +2366,7 @@ scanResolveOrAllocateBssDesc(struct ADAPTER *prAdapter,
 
     return prBssDesc;
 }
+
 
 
 static void scanCopyRawIEIfNeeded(struct BSS_DESC *prBssDesc,
@@ -2468,43 +2492,40 @@ static void scanParseIEs(struct ADAPTER *prAdapter,
         DBGLOG(SCN, LOUD, "SCAN_TRACE: Processing IE_ID: %d (Len: %d)\n", IE_ID(pucIE), IE_LEN(pucIE));
 
         switch (IE_ID(pucIE)) {
-        case ELEM_ID_SSID:
-            if ((!prIeSsid) && (IE_LEN(pucIE) <= ELEM_MAX_LEN_SSID)) {
-                u_int8_t fgIsHiddenSSID = FALSE;
-                uint8_t ucSSIDChar = 0;
-                prIeSsid = (struct IE_SSID *)pucIE;
 
-                if (IE_LEN(pucIE) == 0) {
-                    fgIsHiddenSSID = TRUE;
-                } else {
-                    for (int i=0; i<IE_LEN(pucIE); i++)
-                        ucSSIDChar |= SSID_IE(pucIE)->aucSSID[i];
-                    if (!ucSSIDChar) fgIsHiddenSSID = TRUE;
-                }
+	    case ELEM_ID_SSID:
+		if ((!prIeSsid) && (IE_LEN(pucIE) <= ELEM_MAX_LEN_SSID)) {
+		    u_int8_t fgIncomingIsHidden = FALSE;
+		    uint8_t ucSSIDChar = 0;
+		    prIeSsid = (struct IE_SSID *)pucIE;
 
-                if (!fgIsHiddenSSID) {
-                    COPY_SSID(prBssDesc->aucSSID, prBssDesc->ucSSIDLen,
-                              SSID_IE(pucIE)->aucSSID, SSID_IE(pucIE)->ucLength);
-                    
-                    /* Capture the SSID name directly to dmesg */
-                    DBGLOG(SCN, WARN, "SCAN_TRACE: FOUND SSID: [%s] Len: %d\n", 
-                           prBssDesc->aucSSID, prBssDesc->ucSSIDLen);
-                } else {
-                    DBGLOG(SCN, WARN, "SCAN_TRACE: SSID marked HIDDEN for " MACSTR "\n", MAC2STR(prBssDesc->aucBSSID));
-                    if (fgIsProbeResp) {
-#if (CFG_SUPPORT_WIFI_6G == 1)
-                        /* We suspect this block might be wiping 2.4G Probe Responses accidentally */
-                        if ((eHwBand != BAND_6G) || (eHwBand == BAND_6G && prBssDesc->u2RawLength == 0))
-#endif
-                        {
-                            DBGLOG(SCN, WARN, "SCAN_TRACE: Cleaning SSID due to hidden/probe logic (Band %d)\n", eHwBand);
-                            kalMemZero(prBssDesc->aucSSID, sizeof(prBssDesc->aucSSID));
-                            prBssDesc->ucSSIDLen = 0;
-                        }
-                    }
-                }
-            }
-            break;
+		    // 1. Determine if the incoming frame's SSID is hidden
+		    if (IE_LEN(pucIE) == 0) {
+			fgIncomingIsHidden = TRUE;
+		    } else {
+			for (int i=0; i<IE_LEN(pucIE); i++)
+			    ucSSIDChar |= SSID_IE(pucIE)->aucSSID[i];
+			if (!ucSSIDChar) fgIncomingIsHidden = TRUE;
+		    }
+
+		    // 2. Logic: Only update the name if the incoming frame actually has one
+		    if (!fgIncomingIsHidden) {
+			COPY_SSID(prBssDesc->aucSSID, prBssDesc->ucSSIDLen,
+				SSID_IE(pucIE)->aucSSID, SSID_IE(pucIE)->ucLength);
+			prBssDesc->fgIsHiddenSSID = FALSE; // Force clear the hidden flag
+
+			DBGLOG(SCN, WARN, "SCAN_TRACE: RECOVERED SSID: [%s] for " MACSTR "\n", 
+			    prBssDesc->aucSSID, MAC2STR(prBssDesc->aucBSSID));
+		    } else {
+			// 3. If the incoming frame is hidden, only mark as hidden if we 
+			// don't ALREADY have a valid name from a previous probe response.
+			if (prBssDesc->ucSSIDLen == 0) {
+			    prBssDesc->fgIsHiddenSSID = TRUE;
+			    DBGLOG(SCN, WARN, "SCAN_TRACE: SSID remains hidden for " MACSTR "\n", MAC2STR(prBssDesc->aucBSSID));
+			}
+		    }
+		}
+		break;
 
         case ELEM_ID_SUP_RATES:
             if ((!prIeSupportedRate) && (IE_LEN(pucIE) <= RATE_NUM_SW))

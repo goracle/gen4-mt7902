@@ -471,55 +471,39 @@ enum ENUM_HEBA_TYPE {
 				  HE_MAC_CAP3_MAX_AMPDU_LEN_EXP_MASK))
 
 /* should use macro to access field of HE PHY CAP*/
-#define HE_SET_PHY_CAP_CHAN_WIDTH_SET_BW40_2G(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[0] |=  HE_PHY_CAP0_CHAN_WIDTH_SET_BW40_2G)
+/* --- BYTE 0: Channel Width Capabilities --- */
 
-#define HE_IS_PHY_CAP_CHAN_WIDTH_SET_BW40_BW80_5G(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[0] & HE_PHY_CAP0_CHAN_WIDTH_SET_BW40_BW80_5G)
+// 2.4GHz / 5GHz 80MHz (Safe for MT7902)
+#define HE_SET_PHY_CAP_CHAN_WIDTH_SET_BW40_2G(_auc)      ((_auc)[0] |=  HE_PHY_CAP0_CHAN_WIDTH_SET_BW40_2G)
+#define HE_SET_PHY_CAP_CHAN_WIDTH_SET_BW40_BW80_5G(_auc) ((_auc)[0] |=  HE_PHY_CAP0_CHAN_WIDTH_SET_BW40_BW80_5G)
+#define HE_IS_PHY_CAP_CHAN_WIDTH_SET_BW40_BW80_5G(_auc)  ((_auc)[0]  &  HE_PHY_CAP0_CHAN_WIDTH_SET_BW40_BW80_5G)
 
-#define HE_SET_PHY_CAP_CHAN_WIDTH_SET_BW40_BW80_5G(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[0] |=  HE_PHY_CAP0_CHAN_WIDTH_SET_BW40_BW80_5G)
+// 160MHz / 80+80MHz (FORCED DISABLED for Stability)
+#define HE_SET_PHY_CAP_CHAN_WIDTH_SET_BW160_5G(_auc)     do {} while(0)
+#define HE_SET_PHY_CAP_CHAN_WIDTH_SET_BW80P80_5G(_auc)   do {} while(0)
+#define HE_IS_PHY_CAP_CHAN_WIDTH_SET_BW160_5G(_auc)      (0)
+#define HE_IS_PHY_CAP_CHAN_WIDTH_SET_BW80P80_5G(_auc)    (0)
 
-#define HE_IS_PHY_CAP_CHAN_WIDTH_SET_BW160_5G(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[0] & HE_PHY_CAP0_CHAN_WIDTH_SET_BW160_5G)
 
-#define HE_SET_PHY_CAP_CHAN_WIDTH_SET_BW160_5G(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[0] |= HE_PHY_CAP0_CHAN_WIDTH_SET_BW160_5G)
+/* --- BYTE 1: Coding & Protocol --- */
 
-#define HE_IS_PHY_CAP_CHAN_WIDTH_SET_BW80P80_5G(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[0] & HE_PHY_CAP0_CHAN_WIDTH_SET_BW80P80_5G)
+#define HE_SET_PHY_CAP_LDPC_CODING_IN_PAYLOAD(_auc)      ((_auc)[1] |=  HE_PHY_CAP1_LDPC_CODING_IN_PAYLOAD)
+#define HE_UNSET_PHY_CAP_LDPC_CODING_IN_PAYLOAD(_auc)    ((_auc)[1] &= ~HE_PHY_CAP1_LDPC_CODING_IN_PAYLOAD)
 
-#define HE_SET_PHY_CAP_CHAN_WIDTH_SET_BW80P80_5G(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[0] |= HE_PHY_CAP0_CHAN_WIDTH_SET_BW80P80_5G)
 
-#define HE_SET_PHY_CAP_LDPC_CODING_IN_PAYLOAD(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[1] |= HE_PHY_CAP1_LDPC_CODING_IN_PAYLOAD)
+/* --- BYTE 2: Training & STBC --- */
 
-#define HE_UNSET_PHY_CAP_LDPC_CODING_IN_PAYLOAD(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[1] &= ~HE_PHY_CAP1_LDPC_CODING_IN_PAYLOAD)
+#define HE_SET_PHY_CAP_NDP_4X_HE_LTF(_auc)               ((_auc)[2] |=  HE_PHY_CAP2_NDP_4X_HE_LTF)
+#define HE_SET_PHY_CAP_STBC_TX_LT_OR_EQ_80M(_auc)        ((_auc)[2] |=  HE_PHY_CAP2_STBC_TX_LT_OR_EQ_80M)
+#define HE_SET_PHY_CAP_STBC_RX_LT_OR_EQ_80M(_auc)        ((_auc)[2] |=  HE_PHY_CAP2_STBC_RX_LT_OR_EQ_80M)
+#define HE_UNSET_PHY_CAP_STBC_RX_LT_OR_EQ_80M(_auc)      ((_auc)[2] &= ~HE_PHY_CAP2_STBC_RX_LT_OR_EQ_80M)
 
-#define HE_SET_PHY_CAP_NDP_4X_HE_LTF(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[2] |= HE_PHY_CAP2_NDP_4X_HE_LTF)
 
-#define HE_SET_PHY_CAP_STBC_TX_LT_OR_EQ_80M(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[2] |= HE_PHY_CAP2_STBC_TX_LT_OR_EQ_80M)
+/* --- BYTE 3: Beamforming (BF) --- */
 
-#define HE_SET_PHY_CAP_STBC_RX_LT_OR_EQ_80M(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[2] |= HE_PHY_CAP2_STBC_RX_LT_OR_EQ_80M)
-
-#define HE_UNSET_PHY_CAP_STBC_RX_LT_OR_EQ_80M(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[2] &= ~HE_PHY_CAP2_STBC_RX_LT_OR_EQ_80M)
-
-#define HE_UNSET_PHY_CAP_SU_BFMER(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[3] &= ~HE_PHY_CAP3_SU_BFMER)
-
-#define HE_SET_PHY_CAP_SU_BFMER(_aucHePhyCapInfo) \
-	(_aucHePhyCapInfo[3] |= HE_PHY_CAP3_SU_BFMER)
-
-#define HE_GET_PHY_CAP_SU_BFMER(_aucHePhyCapInfo) \
-	((_aucHePhyCapInfo[3] &= HE_PHY_CAP3_SU_BFMER) \
-	>> HE_PHY_CAP3_SU_BFMER_SHFT)
-
+#define HE_SET_PHY_CAP_SU_BFMER(_auc)                    ((_auc)[3] |=  HE_PHY_CAP3_SU_BFMER)
+#define HE_UNSET_PHY_CAP_SU_BFMER(_auc)                  ((_auc)[3] &= ~HE_PHY_CAP3_SU_BFMER)
+#define HE_GET_PHY_CAP_SU_BFMER(_auc)                    (((_auc)[3] &  HE_PHY_CAP3_SU_BFMER) >> HE_PHY_CAP3_SU_BFMER_SHFT)
 
 /* set to 0 if DCM is not supported */
 /* set to 1 for BPSK */
