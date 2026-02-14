@@ -296,6 +296,7 @@ struct AIS_FSM_INFO {
 	uint8_t aucScanIEBuf[MAX_IE_LENGTH];
 
 	u_int8_t fgIsScanOidAborted;
+  bool fgIsScanReporting;
 
 	/* Pending Request List */
 	struct LINK rPendingReqList;

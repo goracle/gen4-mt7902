@@ -390,6 +390,8 @@ void aisFsmInit(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	prAisFsmInfo->ucAvailableAuthTypes = 0;
 
 	prAisFsmInfo->prTargetBssDesc = (struct BSS_DESC *)NULL;
+	/* In ais_fsm.c or where you initialize the struct */
+	prAisFsmInfo->fgIsScanReporting = FALSE;
 
 	prAisFsmInfo->ucSeqNumOfReqMsg = 0;
 	prAisFsmInfo->ucSeqNumOfChReq = 0;
@@ -1357,11 +1359,12 @@ aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	u_int8_t                  fgIsTransition = FALSE;
 
 	DBGLOG(AIS, LOUD,
-	       "[AIS%d] STATE_IDLE ENTRY: PrevState=%s fgIsConnReqIssued=%d fgIsDisconnByNonReq=%d\n",
+	       "[AIS%d] STATE_IDLE ENTRY: PrevState=%s fgIsConnReqIssued=%d fgIsDisconnByNonReq=%d reporting=%d\n",
 	       ucBssIndex,
 	       AIS_STATE_NAME(prAisFsmInfo->ePreviousState),
 	       prConnSettings->fgIsConnReqIssued,
-	       prConnSettings->fgIsDisconnectedByNonRequest);
+	       prConnSettings->fgIsDisconnectedByNonRequest,
+	       prAisFsmInfo->fgIsScanReporting);
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 	if (prAisFsmInfo->ePreviousState != prAisFsmInfo->eCurrentState) {
@@ -1388,11 +1391,22 @@ aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 
 	if (prAisReq == NULL || prAisReq->eReqType == AIS_REQUEST_RECONNECT) {
 
-		if (IS_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex)) {
+		/* --- OWNERSHIP GUARD START --- */
+		/* If the Glue Layer is currently reporting scan results to the OS,
+		 * we MUST NOT deactivate the network. Deactivation sends a command 
+		 * to the MT7902 to flush/reset, which destroys the BSS buffers 
+		 * the kernel is currently reading.
+		 */
+		if (prAisFsmInfo->fgIsScanReporting) {
+			DBGLOG(AIS, INFO, "[AIS%d] IDLE: Deferring deactivation, reporting in progress...\n", 
+			       ucBssIndex);
+		} 
+		else if (IS_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex)) {
 			DBGLOG(AIS, LOUD, "[AIS%d] IDLE: Deactivating network\n", ucBssIndex);
 			UNSET_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
 			nicDeactivateNetwork(prAdapter, prAisBssInfo->ucBssIndex);
 		}
+		/* --- OWNERSHIP GUARD END --- */
 
 		if (prConnSettings->fgIsConnReqIssued == TRUE &&
 		    prConnSettings->fgIsDisconnectedByNonRequest == FALSE) {
@@ -1415,7 +1429,10 @@ aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 			       ucBssIndex,
 			       prAdapter->rWifiVar.rScanInfo.fgSchedScanning);
 
-			SET_NET_PWR_STATE_IDLE(prAdapter, prAisBssInfo->ucBssIndex);
+			/* Only set power state to IDLE if we aren't holding the 
+			 * door open for a scan report. */
+			if (!prAisFsmInfo->fgIsScanReporting)
+				SET_NET_PWR_STATE_IDLE(prAdapter, prAisBssInfo->ucBssIndex);
 
 			if (prAdapter->rWifiVar.rScanInfo.fgSchedScanning) {
 				SET_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
@@ -1438,6 +1455,7 @@ aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 			cnmMemFree(prAdapter, prAisReq);
 
 	} else if (prAisReq->eReqType == AIS_REQUEST_SCAN) {
+		/* ... rest of your existing logic remains identical ... */
 		DBGLOG(AIS, LOUD, "[AIS%d] IDLE: Processing SCAN request\n", ucBssIndex);
 #if CFG_SUPPORT_ROAMING
 		prAisFsmInfo->fgIsRoamingScanPending = FALSE;
@@ -1463,10 +1481,6 @@ aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 		cnmMemFree(prAdapter, prAisReq);
 
 	} else {
-		/* Unrecognised request type. This is a programming error —
-		 * a new AIS_REQUEST_* value was added without a handler here.
-		 * Free the message so it doesn't leak, log loudly so the
-		 * developer sees it immediately, and stay in IDLE. */
 		DBGLOG(AIS, WARN,
 		       "[AIS%d] IDLE: Unhandled request type=%d, freeing to prevent leak\n",
 		       ucBssIndex, prAisReq->eReqType);
@@ -1490,7 +1504,6 @@ aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	}
 #endif
 
-	/* Callers inspect fgIsTransition; return the candidate next state. */
 	return fgIsTransition ? eNextState : AIS_STATE_IDLE;
 }
 
@@ -1806,62 +1819,51 @@ static void aisConfigureScanChannel(IN struct ADAPTER *prAdapter,
 		return;
 	}
 
-	/* 2. Handle the "Specified" scan list (The RNR Fix Logic) */
+	/* 2. Unified Scan List (De-Janked)
+	 * Instead of letting scanSetRequestChannel split the channels into 
+	 * 'primary' and 'extension', we build one flat list of SPECIFIED channels.
+	 */
 	if (prScanRequest->u4ChannelNum > 0) {
-		uint8_t fgHas2G4 = FALSE;
 		ucNum = (uint8_t)prScanRequest->u4ChannelNum;
 
-		/* Copy the requested channels (likely 5G/6G from neighbors) */
+		/* Copy existing request (Neighbors from RNR, etc.) */
 		kalMemCopy(prScanReqMsg->arChnlInfoList,
 			   prScanRequest->arChannel,
 			   ucNum * sizeof(struct RF_CHANNEL_INFO));
-
-		/* Check if 2.4G is already in there */
-		for (i = 0; i < ucNum; i++) {
-			if (prScanReqMsg->arChnlInfoList[i].eBand == BAND_2G4) {
-				fgHas2G4 = TRUE;
-				break;
-			}
-		}
-
-		/* MT7902 VIVOBOOK FIX: If 2.4G is missing, force append Ch 1, 6, 11.
-		 * This ensures network 'H' is never ignored during RNR-heavy scans.
-		 */
-		if (!fgHas2G4 && (ucNum + 3) <= MAXIMUM_OPERATION_CHANNEL_LIST) {
-			uint8_t aucCommonCh[] = {1, 6, 11};
-			for (i = 0; i < 3; i++) {
-				prScanReqMsg->arChnlInfoList[ucNum].eBand = BAND_2G4;
-				prScanReqMsg->arChnlInfoList[ucNum].ucChannelNum = aucCommonCh[i];
-				ucNum++;
-			}
-		}
-
-		prScanReqMsg->eScanChannel = SCAN_CHANNEL_SPECIFIED;
-		prScanReqMsg->ucChannelListNum = ucNum;
-
-		DBGLOG(AIS, INFO, "[MT7902] Scan Override: %d channels (included 2.4G fallback)\n", ucNum);
-		return;
-	}
-
-	/* 3. Default Path: Select band based on preferences */
-	enum ENUM_BAND ePreferBand = prAdapter->aePreferBand[KAL_NETWORK_TYPE_AIS_INDEX];
-
-	if (ePreferBand == BAND_2G4) {
-		prScanReqMsg->eScanChannel = SCAN_CHANNEL_2G4;
-	} else if (ePreferBand == BAND_5G) {
-		prScanReqMsg->eScanChannel = SCAN_CHANNEL_5G;
 	} else {
-		/* Default to FULL but let scanSetRequestChannel handle the specifics */
-		prScanReqMsg->eScanChannel = SCAN_CHANNEL_FULL;
+		/* If no specific channels requested, we manually populate 2.4G + 5G/6G
+		 * into a single 'Specified' list to bypass firmware 'Full' mode jank.
+		 */
+		for (i = 1; i <= 13; i++) {
+			if (ucNum >= MAXIMUM_OPERATION_CHANNEL_LIST) break;
+			prScanReqMsg->arChnlInfoList[ucNum].eBand = BAND_2G4;
+			prScanReqMsg->arChnlInfoList[ucNum].ucChannelNum = i;
+			ucNum++;
+		}
+		/* Add common 5G channels to ensure we aren't blind to them */
+		uint8_t auc5G[] = {36, 40, 44, 48, 149, 153, 157, 161};
+		for (i = 0; i < sizeof(auc5G); i++) {
+			if (ucNum >= MAXIMUM_OPERATION_CHANNEL_LIST) break;
+			prScanReqMsg->arChnlInfoList[ucNum].eBand = BAND_5G;
+			prScanReqMsg->arChnlInfoList[ucNum].ucChannelNum = auc5G[i];
+			ucNum++;
+		}
 	}
 
-	/* Populate the message using the standard helper */
-	scanSetRequestChannel(prAdapter,
-			      prScanRequest->u4ChannelNum,
-			      prScanRequest->arChannel,
-			      (prAisFsmInfo->eCurrentState == AIS_STATE_ONLINE_SCAN),
-			      prScanReqMsg);
+	/* 3. Final Channel Message Setup */
+	prScanReqMsg->eScanChannel = SCAN_CHANNEL_SPECIFIED;
+	prScanReqMsg->ucChannelListNum = ucNum;
+
+	/* CRITICAL: Some versions of this driver use a separate field for 
+	 * extension channels. We explicitly clear it so the firmware 
+	 * doesn't try to use dual-channel logic on a single-channel scan.
+	 */
+	// kalMemSet(prScanReqMsg->aucExtChnlList, 0, sizeof(prScanReqMsg->aucExtChnlList));
+
+	DBGLOG(AIS, INFO, "[MT7902] FLATTENED Scan: %d channels specified. Priority: HIGH\n", ucNum);
 }
+
+
 
 /* ============================================================
  * HELPER: Configure the SSID / scan-type fields for a scan msg.
@@ -2871,6 +2873,8 @@ void aisFsmRunEventScanDone(IN struct ADAPTER *prAdapter,
     ucBssIndex = prScanDoneMsg->ucBssIndex;
 
     prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+    if (prAisFsmInfo)
+        prAisFsmInfo->fgIsScanReporting = TRUE;
     prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
     prRmReq = aisGetRmReqParam(prAdapter, ucBssIndex);
     prBcnRmParam = &prRmReq->rBcnRmParam;

@@ -5057,22 +5057,47 @@ void kalScanDone(IN struct GLUE_INFO *prGlueInfo,
 		 IN uint32_t status)
 {
 	uint8_t fgAborted = (status != WLAN_STATUS_SUCCESS) ? TRUE : FALSE;
+	struct ADAPTER *prAdapter;
+	struct AIS_FSM_INFO *prAisFsmInfo;
+
 	ASSERT(prGlueInfo);
+	prAdapter = prGlueInfo->prAdapter;
+	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
 
-	if (IS_BSS_INDEX_AIS(prGlueInfo->prAdapter, ucBssIndex))
-		scanLogEssResult(prGlueInfo->prAdapter);
-
-	scanReportBss2Cfg80211(prGlueInfo->prAdapter,
-			       BSS_TYPE_INFRASTRUCTURE, NULL);
-
-	/* check for system configuration for generating error message on scan
-	 * list
+	/* 1. LOCK: Signal the AIS FSM that we are handing data to the OS.
+	 * This flag acts as a 'Stay Alive' signal for the hardware context.
 	 */
-	wlanCheckSystemConfiguration(prGlueInfo->prAdapter);
+	if (prAisFsmInfo)
+		prAisFsmInfo->fgIsScanReporting = TRUE;
 
+	if (IS_BSS_INDEX_AIS(prAdapter, ucBssIndex))
+		scanLogEssResult(prAdapter);
+
+	/* This is where SSID "H" and friends are copied to the kernel.
+	 * Because we set the flag above, nicDeactivateNetwork cannot
+	 * preemptively nuke these buffers.
+	 */
+	scanReportBss2Cfg80211(prAdapter, BSS_TYPE_INFRASTRUCTURE, NULL);
+
+	wlanCheckSystemConfiguration(prAdapter);
+
+	/* 2. NOTIFY: Tell cfg80211 the scan is officially finished. */
 	kalIndicateStatusAndComplete(prGlueInfo, WLAN_STATUS_SCAN_COMPLETE,
 		&fgAborted, sizeof(fgAborted), ucBssIndex);
+
+	/* 3. UNLOCK: Release the reporting lock. */
+	if (prAisFsmInfo) {
+		prAisFsmInfo->fgIsScanReporting = FALSE;
+
+		/* 4. SYNC: Now that the OS is happy, we re-run the FSM steps.
+		 * If the FSM wanted to go to IDLE and deactivate the radio,
+		 * it will successfully do so NOW, safely after the hand-off.
+		 */
+		aisFsmSteps(prAdapter, prAisFsmInfo->eCurrentState, ucBssIndex);
+	}
 }
+
+
 
 #if CFG_SUPPORT_SCAN_CACHE_RESULT
 /*----------------------------------------------------------------------------*/

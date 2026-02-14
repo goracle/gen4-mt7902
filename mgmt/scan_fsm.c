@@ -858,70 +858,74 @@ void scnFsmRemovePendingMsg(IN struct ADAPTER *prAdapter, IN uint8_t ucSeqNum,
  * - Only generate scan done if no RNR scans queued
  * ============================================================================
  */
+
 void scnEventScanDone(IN struct ADAPTER *prAdapter,
 	IN struct EVENT_SCAN_DONE *prScanDone, u_int8_t fgIsNewVersion)
 {
-	struct SCAN_INFO *prScanInfo;
-	struct SCAN_PARAM *prScanParam;
-	struct BSS_DESC *prBssDesc;
+	struct SCAN_INFO *prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
+	struct SCAN_PARAM *prScanParam = &prScanInfo->rScanParam;
+	struct BSS_DESC *prBssDesc, *prNextBssDesc;
 	uint32_t u4BssIndicateCnt = 0;
-
-	prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
-	prScanParam = &prScanInfo->rScanParam;
+    uint32_t u4TotalInList = 0;
 
 	if (fgIsNewVersion) {
-		scanlog_dbg(LOG_SCAN_DONE_F2D, INFO, "scnEventScanDone V%u! Seq[%u] State%u\n",
-			prScanDone->ucScanDoneVersion, prScanDone->ucSeqNum, prScanDone->ucCurrentState);
-
-		scanLogCacheFlushBSS(&(prScanInfo->rScanLogCache.rBSSListFW),
-			LOG_SCAN_DONE_F2D, SCAN_LOG_MSG_MAX_LEN);
+		scanlog_dbg(LOG_SCAN_DONE_F2D, INFO, "scnEventScanDone V%u! Seq[%u]\n",
+			prScanDone->ucScanDoneVersion, prScanDone->ucSeqNum);
 	}
 
-	/* 1. Update Channel Stats */
-	if (prScanDone->ucSparseChannelValid) {
-		prScanInfo->fgIsSparseChannelValid = TRUE;
-		prScanInfo->ucSparseChannelArrayValidNum = prScanDone->ucSparseChannelArrayValidNum;
-		log_dbg(SCN, INFO, "Detected_Channel_Num = %d\n", prScanInfo->ucSparseChannelArrayValidNum);
+	/* 1. The 10ms Settle (Your fix applied) */
+	kalMsleep(10); 
+
+	/* 2. State & Sequence Diagnostic */
+	DBGLOG(SCN, INFO, "[DEBUG] ScanDone Rcvd: ExpectedIdx=%u, ListSize=%u\n", 
+           prScanInfo->u4ScanUpdateIdx, prScanInfo->u4NumOfBssDesc);
+
+	/* 3. The Indication Loop with Heavy Diagnostics */
+	LINK_FOR_EACH_ENTRY_SAFE(prBssDesc, prNextBssDesc, &prScanInfo->rBSSDescList, rLinkEntry, struct BSS_DESC) {
+		u4TotalInList++;
+
+		/* Check if this entry belongs to the current scan swipe */
+		if (prBssDesc->u4UpdateIdx == prScanInfo->u4ScanUpdateIdx) {
+			
+			/* Log every single BSS found before we try to report it */
+		  /*
+			DBGLOG(SCN, INFO, "[SCN-REPORT] Found: BSSID[" MACSTR "] Ch:%u Band:%u SSID:%s\n",
+				MAC2STR(prBssDesc->aucBSSID), 
+				prBssDesc->ucChannelNum, 
+				prBssDesc->eBand,
+				prBssDesc->aucSSID);
+		  */ // no mac obfuscation
+
+			DBGLOG(SCN, INFO, "[SCN-REPORT] Found: BSSID[%02x:%02x:%02x:%02x:%02x:%02x] Ch:%u Band:%u SSID:%s\n",
+			    prBssDesc->aucBSSID[0], prBssDesc->aucBSSID[1], prBssDesc->aucBSSID[2],
+			    prBssDesc->aucBSSID[3], prBssDesc->aucBSSID[4], prBssDesc->aucBSSID[5],
+			    prBssDesc->ucChannelNum, 
+			    prBssDesc->eBand,
+			    prBssDesc->aucSSID);
+
+			if (prBssDesc->ucChannelNum == 0) {
+				DBGLOG(SCN, WARN, "  -> Dropping: Channel is 0\n");
+				continue;
+			}
+
+			/* If this call fails or returns, we'll see it in the count */
+			scanReportBss2Cfg80211(prAdapter, prBssDesc->eBSSType, prBssDesc);
+			u4BssIndicateCnt++;
+		}
+	}
+
+	/* 4. The "Where are they?" Diagnostic */
+	if (u4BssIndicateCnt == 0) {
+		DBGLOG(SCN, ERROR, "[CRITICAL] Zero BSS indicated! Total in list: %u. ScanIdx mismatch?\n", u4TotalInList);
+        /* If u4TotalInList > 0 but IndicateCnt is 0, our UpdateIdx logic is the bug */
 	} else {
-		prScanInfo->fgIsSparseChannelValid = FALSE;
+		DBGLOG(SCN, INFO, "[SUCCESS] Indicated %u/%u BSS entries to kernel.\n", 
+               u4BssIndicateCnt, u4TotalInList);
 	}
 
-	/* 2. Sequence Validation */
-	if (prScanInfo->eCurrentState != SCAN_STATE_SCANNING || 
-	    prScanDone->ucSeqNum != prScanParam->ucSeqNum) {
-		log_dbg(SCN, WARN, "Unexpected SCAN-DONE: Seq %u vs %u\n", 
-			prScanDone->ucSeqNum, prScanParam->ucSeqNum);
-		return; 
-	}
-
-	/* 3. Indication Loop
-	 * We use prBssDesc->eBSSType to satisfy the 3-argument requirement.
-	 * This ensures the kernel sees all results (2.4G/5G/6G) that 
-	 * successfully passed the parser.
-	 */
-	DBGLOG(SCN, INFO, "MT7902: Processing BSS List for Kernel Indication...\n");
-
-	LINK_FOR_EACH_ENTRY(prBssDesc, &prScanInfo->rBSSDescList, rLinkEntry, struct BSS_DESC) {
-		scanReportBss2Cfg80211(prAdapter, prBssDesc->eBSSType, prBssDesc);
-		u4BssIndicateCnt++;
-	}
-
-	DBGLOG(SCN, INFO, "Indicated %u BSS entries to kernel.\n", u4BssIndicateCnt);
-
-	/* 4. Cleanup/Policy Management */
-	if (LINK_IS_EMPTY(&prAdapter->rNeighborAPInfoList)) {
-		scanRemoveBssDescsByPolicy(prAdapter, 
-			SCN_RM_POLICY_EXCLUDE_CONNECTED | SCN_RM_POLICY_TIMEOUT);
-	} else {
-		prScanInfo->rLastScanCompletedTime = 0;
-	}
-
-	/* 5. Complete FSM Cycle */
-	scnFsmGenerateScanDoneMsg(prAdapter,
-		prScanParam->ucSeqNum,
-		prScanParam->ucBssIndex,
-		SCAN_STATUS_DONE);
-
+	/* 5. Cleanup & FSM Reset */
+	scanRemoveBssDescsByPolicy(prAdapter, SCN_RM_POLICY_TIMEOUT);
+	scnFsmGenerateScanDoneMsg(prAdapter, prScanParam->ucSeqNum, prScanParam->ucBssIndex, SCAN_STATUS_DONE);
 	scnFsmSteps(prAdapter, SCAN_STATE_IDLE);
 }
 

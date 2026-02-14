@@ -267,8 +267,6 @@ static const struct ieee80211_regdomain mt79xx_regdom_world = {
 
 
 
-
-
 static void mt79xx_reg_notifier(struct wiphy *wiphy,
                                struct regulatory_request *request)
 {
@@ -457,13 +455,14 @@ int CFG80211_Resume(struct wiphy *wiphy)
 
 #define CHAN2G(_channel, _freq, _flags)		\
 {						\
-	.band               = KAL_BAND_2GHZ,	\
-	.center_freq        = (_freq),		\
-	.hw_value           = (_channel),	\
-	.flags              = (_flags),		\
-	.max_antenna_gain   = 0,		\
-	.max_power          = 30,		\
+	.band                = KAL_BAND_2GHZ,	\
+	.center_freq         = (_freq),		\
+	.hw_value            = (_channel),	\
+	.flags               = (_flags),		\
+	.max_antenna_gain    = 0,		\
+	.max_power           = 30,		\
 }
+
 static struct ieee80211_channel mtk_2ghz_channels[] = {
 	CHAN2G(1, 2412, 0),
 	CHAN2G(2, 2417, 0),
@@ -478,57 +477,33 @@ static struct ieee80211_channel mtk_2ghz_channels[] = {
 	CHAN2G(11, 2462, 0),
 	CHAN2G(12, 2467, 0),
 	CHAN2G(13, 2472, 0),
-	CHAN2G(14, 2484, 0),
 };
 
-#define CHAN5G(_channel, _flags)					\
-{									\
-	.band               = KAL_BAND_5GHZ,				\
-	.center_freq        =						\
-		(((_channel >= 182) && (_channel <= 196)) ?		\
-		(4000 + (5 * (_channel))) : (5000 + (5 * (_channel)))),	\
-	.hw_value           = (_channel),				\
-	.flags              = (_flags),					\
-	.max_antenna_gain   = 0,					\
-	.max_power          = 30,					\
+#define CHAN5G(_channel, _flags) {              \
+    .band = KAL_BAND_5GHZ,                      \
+    .center_freq = (5000 + (5 * (_channel))),   \
+    .hw_value = (_channel),                     \
+    .flags = (_flags),                          \
+    .max_antenna_gain = 0,                      \
+    .max_power = 30,                            \
 }
 static struct ieee80211_channel mtk_5ghz_channels[] = {
 	/* UNII-1 */
-	CHAN5G(36, 0),
-	CHAN5G(40, 0),
-	CHAN5G(44, 0),
-	CHAN5G(48, 0),
+	CHAN5G(36, 0), CHAN5G(40, 0), CHAN5G(44, 0), CHAN5G(48, 0),
 	/* UNII-2 */
-	CHAN5G(52, IEEE80211_CHAN_RADAR),
-	CHAN5G(56, IEEE80211_CHAN_RADAR),
-	CHAN5G(60, IEEE80211_CHAN_RADAR),
-	CHAN5G(64, IEEE80211_CHAN_RADAR),
+	CHAN5G(52, IEEE80211_CHAN_RADAR), CHAN5G(56, IEEE80211_CHAN_RADAR),
+	CHAN5G(60, IEEE80211_CHAN_RADAR), CHAN5G(64, IEEE80211_CHAN_RADAR),
 	/* UNII-2e */
-	CHAN5G(100, IEEE80211_CHAN_RADAR),
-	CHAN5G(104, IEEE80211_CHAN_RADAR),
-	CHAN5G(108, IEEE80211_CHAN_RADAR),
-	CHAN5G(112, IEEE80211_CHAN_RADAR),
-	CHAN5G(116, IEEE80211_CHAN_RADAR),
-	CHAN5G(120, IEEE80211_CHAN_RADAR),
-	CHAN5G(124, IEEE80211_CHAN_RADAR),
-	CHAN5G(128, IEEE80211_CHAN_RADAR),
-	CHAN5G(132, IEEE80211_CHAN_RADAR),
-	CHAN5G(136, IEEE80211_CHAN_RADAR),
-	CHAN5G(140, IEEE80211_CHAN_RADAR),
-	CHAN5G(144, IEEE80211_CHAN_RADAR),
-	/* Japan 4.9GHz band (channels 148-164) */
-	CHAN5G(148, IEEE80211_CHAN_RADAR | IEEE80211_CHAN_NO_IR),
-	CHAN5G(152, IEEE80211_CHAN_RADAR | IEEE80211_CHAN_NO_IR),
-	CHAN5G(156, IEEE80211_CHAN_RADAR | IEEE80211_CHAN_NO_IR),
-	CHAN5G(160, IEEE80211_CHAN_RADAR | IEEE80211_CHAN_NO_IR),
-	CHAN5G(164, IEEE80211_CHAN_RADAR | IEEE80211_CHAN_NO_IR),
+	CHAN5G(100, IEEE80211_CHAN_RADAR), CHAN5G(104, IEEE80211_CHAN_RADAR),
+	CHAN5G(108, IEEE80211_CHAN_RADAR), CHAN5G(112, IEEE80211_CHAN_RADAR),
+	CHAN5G(116, IEEE80211_CHAN_RADAR), CHAN5G(120, IEEE80211_CHAN_RADAR),
+	CHAN5G(124, IEEE80211_CHAN_RADAR), CHAN5G(128, IEEE80211_CHAN_RADAR),
+	CHAN5G(132, IEEE80211_CHAN_RADAR), CHAN5G(136, IEEE80211_CHAN_RADAR),
+	CHAN5G(140, IEEE80211_CHAN_RADAR), CHAN5G(144, IEEE80211_CHAN_RADAR),
 	/* UNII-3 */
-	CHAN5G(149, 0),
-	CHAN5G(153, 0),
-	CHAN5G(157, 0),
-	CHAN5G(161, 0),
-	CHAN5G(165, 0)
+	CHAN5G(149, 0), CHAN5G(153, 0), CHAN5G(157, 0), CHAN5G(161, 0), CHAN5G(165, 0)
 };
+
 
 #if (CFG_SUPPORT_WIFI_6G == 1)
 #define CHAN6G(_channel, _flags)					\

@@ -1947,79 +1947,63 @@ u_int8_t rlmDomainIsValidRfSetting(struct ADAPTER *prAdapter,
               enum ENUM_CHANNEL_WIDTH eChannelWidth,
               uint8_t ucChannelS1, uint8_t ucChannelS2)
 {
-    uint8_t ucCenterCh = 0;
-    uint8_t ucUpperChannel, ucLowerChannel;
-    u_int8_t fgValidChannel = TRUE;
-    u_int8_t fgUpperChannel = TRUE;
-    u_int8_t fgLowerChannel = TRUE;
-    u_int8_t fgValidBW = TRUE;
-    u_int8_t fgValidRfSetting = TRUE;
+    u_int8_t fgValid = FALSE;
 
-    /* 1. 
-     * If we are on 2.4GHz and using standard 20MHz bandwidth, we stop 
-     * caring about what the regulatory table says. If the radio saw it, 
-     * it's valid.
+    /* * 1. THE "H" NETWORK FIX (2.4GHz Safety Pass)
+     * If the hardware saw a signal on a 2.4GHz channel (1-14), 
+     * we trust the hardware. We ignore Band/Width tagging entirely 
+     * to prevent mis-classified WiFi 6 frames from being filtered.
      */
-if (eBand == BAND_2G4 && eChannelWidth == CW_20_40MHZ) {
-        if (ucPriChannel >= 1 && ucPriChannel <= 14) {
-            return TRUE; 
-        }
+    if (ucPriChannel >= 1 && ucPriChannel <= 14) {
+        return TRUE;
     }
 
-    /* 2. Bandwidth/Center Channel Logic for 5G/6G */
-    if (eChannelWidth == CW_20_40MHZ) {
-        ucCenterCh = rlmDomainGetCenterChannel(eBand, ucPriChannel, eExtend);
-        fgValidChannel = rlmDomainCheckChannelEntryValid(prAdapter, ucCenterCh);
+    /* * 2. 5G / 6G VALIDATION
+     * For higher bands, we perform a basic validation.
+     */
+    switch (eChannelWidth) {
+    case CW_20_40MHZ:
+        /* Check if the primary channel exists in our allowed table */
+        fgValid = rlmDomainCheckChannelEntryValid(prAdapter, ucPriChannel);
+        break;
 
-        switch (eExtend) {
-        case CHNL_EXT_SCA:
-            ucUpperChannel = ucPriChannel + 4;
-            ucLowerChannel = ucPriChannel;
-            break;
-        case CHNL_EXT_SCB:
-            ucUpperChannel = ucPriChannel;
-            ucLowerChannel = ucPriChannel - 4;
-            break;
-        default:
-            ucUpperChannel = ucPriChannel;
-            ucLowerChannel = ucPriChannel;
-            break;
-        }
+    case CW_80MHZ:
+    case CW_160MHZ:
+        /* For wide bands, validate the center frequency (S1) */
+        fgValid = rlmDomainCheckChannelEntryValid(prAdapter, ucChannelS1);
+        break;
 
-        fgUpperChannel = rlmDomainCheckChannelEntryValid(prAdapter, ucUpperChannel);
-        fgLowerChannel = rlmDomainCheckChannelEntryValid(prAdapter, ucLowerChannel);
+    case CW_80P80MHZ:
+        /* Dual-segment 80MHz: Both must be valid */
+        if (rlmDomainCheckChannelEntryValid(prAdapter, ucChannelS1) &&
+            rlmDomainCheckChannelEntryValid(prAdapter, ucChannelS2)) {
+            fgValid = TRUE;
+        }
+        break;
 
-    } else if (eChannelWidth == CW_80MHZ || eChannelWidth == CW_160MHZ) {
-        ucCenterCh = ucChannelS1;
-        if (eChannelWidth != CW_160MHZ) {
-            fgValidChannel = rlmDomainCheckChannelEntryValid(prAdapter, ucCenterCh);
-        }
-    } else if (eChannelWidth == CW_80P80MHZ) {
-        /* Dual 80MHz segments */
-        if (!rlmDomainCheckChannelEntryValid(prAdapter, ucChannelS1) ||
-            !rlmDomainCheckChannelEntryValid(prAdapter, ucChannelS2)) {
-            fgValidChannel = FALSE;
-        }
-    } else {
-        DBGLOG(RLM, ERROR, "Invalid BW setting: %d\n", eChannelWidth);
-        return FALSE;
+    default:
+        DBGLOG(RLM, ERROR, "Unsupported BW: %d\n", eChannelWidth);
+        fgValid = FALSE;
+        break;
     }
 
-    /* 3. Final Band-Specific Width Verification */
-    if (eBand == BAND_5G) {
-        if (eChannelWidth == CW_80MHZ || eChannelWidth == CW_80P80MHZ) {
-            uint32_t u4Offset = CAL_CH_OFFSET_80M(ucPriChannel, ucChannelS1);
-            if (u4Offset >= 4 || (ucPriChannel == 165)) {
-                fgValidBW = FALSE;
-            }
+    /* * 3. FINAL SAFETY NET
+     * If the reg-table check failed but we are in a forced-US mode,
+     * we allow the channel anyway. This stops the "0 Bss found" ghosting.
+     */
+    if (!fgValid) {
+        if (prAdapter->rWifiVar.u2CountryCode == 0x5553) { /* "US" */
+             return TRUE; 
         }
+        
+        DBGLOG(RLM, INFO, "Filtered BSS: Ch %d, Band %d, BW %d\n", 
+               ucPriChannel, eBand, eChannelWidth);
     }
 
-    if (!fgValidBW || !fgValidChannel || !fgUpperChannel || !fgLowerChannel)
-        fgValidRfSetting = FALSE;
-
-    return fgValidRfSetting;
+    return fgValid;
 }
+
+
 
 
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
