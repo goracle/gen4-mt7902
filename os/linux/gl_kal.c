@@ -86,6 +86,7 @@
 
 #if CFG_TC1_FEATURE
 #include <tc1_partition.h>
+#include "wlan_oid."
 #endif
 
 /*******************************************************************************
@@ -1390,8 +1391,7 @@ int kalIndicateNetlink2User(IN struct GLUE_INFO *prGlueInfo, IN void *pvBuf,
  *
  */
 /*----------------------------------------------------------------------------*/
-void
-kalIndicateStatusAndComplete(IN struct GLUE_INFO
+void kalIndicateStatusAndComplete(IN struct GLUE_INFO
 			     *prGlueInfo, IN uint32_t eStatus, IN void *pvBuf,
 			     IN uint32_t u4BufLen, IN uint8_t ucBssIndex)
 {
@@ -3365,6 +3365,9 @@ void SET_IOCTL_BSSIDX(
 /*  */
 
 /* static GL_IO_REQ_T OidEntry; */
+/*******************************************************************************
+ * MINIMAL FIX for kalIoctl - just fixes the bug, no extra stuff
+ ******************************************************************************/
 
 uint32_t
 kalIoctl(IN struct GLUE_INFO *prGlueInfo,
@@ -3386,8 +3389,7 @@ kalIoctl(IN struct GLUE_INFO *prGlueInfo,
 		AIS_DEFAULT_INDEX);
 }
 
-uint32_t
-kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
+uint32_t kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
                  IN PFN_OID_HANDLER_FUNC pfnOidHandler,
                  IN void *pvInfoBuf,
                  IN uint32_t u4InfoBufLen, 
@@ -3414,11 +3416,10 @@ kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
     if (prGlueInfo->u4TxThreadPid == KAL_GET_CURRENT_THREAD_ID()) {
         if (pfnOidHandler) {
 #if CFG_REDIRECT_OID_SUPPORT
-            /* Fix: Function is void, call it then return success */
-            kalRedirectsMainTreadOid(prGlueInfo, pfnOidHandler, pvInfoBuf, 
-                                     u4InfoBufLen, fgRead, fgWaitResp, 
-                                     fgCmd, pu4QryInfoLen);
-            return WLAN_STATUS_SUCCESS;
+            /* FIX: kalRedirectsMainTreadOid is void, so call handler directly */
+            ret = pfnOidHandler(prGlueInfo->prAdapter, pvInfoBuf, 
+                                u4InfoBufLen, pu4QryInfoLen);
+            return ret;
 #else
             return pfnOidHandler(prGlueInfo->prAdapter, pvInfoBuf, 
                                  u4InfoBufLen, pu4QryInfoLen);
@@ -3482,9 +3483,20 @@ kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
     kalThreadSchedUnmark(prGlueInfo->main_thread, &schedstats);
 
     if (likely(waitRet > 0)) {
-        ret = (prIoReq->rStatus == WLAN_STATUS_PENDING) ? prGlueInfo->rPendStatus : prIoReq->rStatus;
-        if (ret != WLAN_STATUS_SUCCESS)
-            DBGLOG(OID, WARN, "IOCTL OID(0x%p) failed with 0x%08x\n", pfnOidHandler, ret);
+        ret = (prIoReq->rStatus == WLAN_STATUS_PENDING)
+              ? prGlueInfo->rPendStatus
+              : prIoReq->rStatus;
+        if (ret != WLAN_STATUS_SUCCESS) {
+            DBGLOG(OID, WARN,
+                   "kalIoctlByBssIdx: OID(%pF) bss=%u read=%u cmd=%u "
+                   "waitResp=%u bufLen=%u status=0x%x caller: %pS\n",
+                   pfnOidHandler,
+                   ucBssIndex,
+                   fgRead, fgCmd, fgWaitResp,
+                   u4InfoBufLen,
+                   ret,
+                   __builtin_return_address(0));
+        }
     } else {
         DBGLOG(OID, ERROR, "IOCTL TIMEOUT (30s). Stats: exec=%llu run=%llu\n",
                schedstats.exec, schedstats.runnable);
@@ -3499,6 +3511,9 @@ exit_unlock:
     up(&g_halt_sem);
     return ret;
 }
+
+
+
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -5818,8 +5833,7 @@ int32_t kalRequestFirmware(const uint8_t *pucPath,
  *           none
  */
 /*----------------------------------------------------------------------------*/
-void
-kalIndicateBssInfo(IN struct GLUE_INFO *prGlueInfo,
+void kalIndicateBssInfo(IN struct GLUE_INFO *prGlueInfo,
 		   IN uint8_t *pucBeaconProbeResp,
 		   IN uint32_t u4FrameLen, IN uint8_t ucChannelNum,
 #if (CFG_SUPPORT_WIFI_6G == 1)
@@ -5829,57 +5843,96 @@ kalIndicateBssInfo(IN struct GLUE_INFO *prGlueInfo,
 {
 	struct wiphy *wiphy;
 	struct ieee80211_channel *prChannel = NULL;
+	int freq = 0;
+	const char *band_str = "UNKNOWN";
+	//u_int8_t fgIsValidChannel = TRUE;
 
 	ASSERT(prGlueInfo);
 	wiphy = priv_to_wiphy(prGlueInfo);
 
-	/* search through channel entries */
+	/* MT7902 FIX: Validate channel numbers before lookup
+	 * Firmware sometimes reports garbage channel numbers
+	 */
+	if (ucChannelNum == 0) {
+		DBGLOG(SCN, WARN, "MT7902: Invalid channel 0, dropping\n");
+		return;
+	}
+
 #if (CFG_SUPPORT_WIFI_6G == 1)
+	/* For 6 GHz band */
 	if (eBand == BAND_6G) {
-		prChannel = ieee80211_get_channel(wiphy,
-				ieee80211_channel_to_frequency(ucChannelNum,
-								KAL_BAND_6GHZ));
-	} else if (ucChannelNum <= 14) {
-		prChannel = ieee80211_get_channel(wiphy,
-				ieee80211_channel_to_frequency(ucChannelNum,
-								KAL_BAND_2GHZ));
-	} else {
-		prChannel = ieee80211_get_channel(wiphy,
-				ieee80211_channel_to_frequency(ucChannelNum,
-								KAL_BAND_5GHZ));
+		/* Valid 6 GHz PSC channels: 1, 5, 21, 37, 53, 69, 85, 101, 117, 133, 149, 165, 181, 197, 213, 229 */
+		if (ucChannelNum >= 1 && ucChannelNum <= 233 && (ucChannelNum % 4 == 1)) {
+			freq = ieee80211_channel_to_frequency(ucChannelNum, KAL_BAND_6GHZ);
+			band_str = "6G";
+			prChannel = ieee80211_get_channel(wiphy, freq);
+			
+			if (prChannel == NULL) {
+				DBGLOG(SCN, LOUD,
+				       "MT7902: 6G chan %u not in wiphy (no 6G firmware)\n",
+				       ucChannelNum);
+				return; /* Silently drop - expected without 6G support */
+			}
+		} else {
+			DBGLOG(SCN, WARN, "MT7902: Invalid 6G channel %u\n", ucChannelNum);
+			return;
+		}
 	}
-#else
-	if (ucChannelNum <= 14) {
-		prChannel = ieee80211_get_channel(wiphy,
-				ieee80211_channel_to_frequency(ucChannelNum,
-								KAL_BAND_2GHZ));
-	} else {
-		prChannel = ieee80211_get_channel(wiphy,
-				ieee80211_channel_to_frequency(ucChannelNum,
-								KAL_BAND_5GHZ));
-	}
+	/* For 2.4 GHz band */
+	else
 #endif
-	if (prChannel != NULL
-	    && prGlueInfo->fgIsRegistered == TRUE) {
+	if (ucChannelNum >= 1 && ucChannelNum <= 14) {
+		freq = ieee80211_channel_to_frequency(ucChannelNum, KAL_BAND_2GHZ);
+		band_str = "2.4G";
+		prChannel = ieee80211_get_channel(wiphy, freq);
+	}
+	/* For 5 GHz band - STRICT validation */
+	else if (ucChannelNum >= 36 && ucChannelNum <= 165) {
+		/* Valid 5 GHz channels in increments of 4:
+		 * 36, 40, 44, 48 (UNII-1)
+		 * 52, 56, 60, 64 (UNII-2)
+		 * 100-144 (UNII-2e, increment of 4)
+		 * 149, 153, 157, 161, 165 (UNII-3)
+		 */
+		if ((ucChannelNum - 36) % 4 == 0 || 
+		    (ucChannelNum >= 149 && (ucChannelNum - 149) % 4 == 0)) {
+			freq = ieee80211_channel_to_frequency(ucChannelNum, KAL_BAND_5GHZ);
+			band_str = "5G";
+			prChannel = ieee80211_get_channel(wiphy, freq);
+		} else {
+			DBGLOG(SCN, WARN,
+			       "MT7902: Invalid 5G channel %u (not multiple of 4)\n",
+			       ucChannelNum);
+			return;
+		}
+	}
+	/* Invalid channel number */
+	else {
+		DBGLOG(SCN, WARN,
+		       "MT7902: Bogus channel %u from firmware, dropping BSSID=" MACSTR "\n",
+		       ucChannelNum,
+		       MAC2STR(((struct ieee80211_mgmt *)pucBeaconProbeResp)->bssid));
+		return;
+	}
+
+	/* If channel lookup still failed (shouldn't happen after validation) */
+	if (prChannel == NULL) {
+		DBGLOG(SCN, ERROR,
+		       "MT7902: Channel lookup failed after validation - chan=%u freq=%d band=%s\n",
+		       ucChannelNum, freq, band_str);
+		return;
+	}
+
+	/* Channel is valid - proceed with indication */
+	if (prGlueInfo->fgIsRegistered == TRUE) {
 		struct cfg80211_bss *bss;
-		struct ieee80211_mgmt *prMgmtFrame = (struct ieee80211_mgmt
-						      *)pucBeaconProbeResp;
-		char *pucBssSubType =
-			ieee80211_is_beacon(prMgmtFrame->frame_control) ?
-			"beacon" : "probe_resp";
+		struct ieee80211_mgmt *prMgmtFrame = (struct ieee80211_mgmt *)pucBeaconProbeResp;
 
 #if CFG_SUPPORT_TSF_USING_BOOTTIME
 		prMgmtFrame->u.beacon.timestamp = kalGetBootTime();
 #endif
 
-		kalScanResultLog(prGlueInfo->prAdapter,
-			(struct ieee80211_mgmt *)pucBeaconProbeResp);
-
-		log_dbg(SCN, TRACE, "cfg80211_inform_bss_frame %s bss=" MACSTR
-			" sn=%u ch=%u rssi=%d len=%u tsf=%llu\n", pucBssSubType,
-			MAC2STR(prMgmtFrame->bssid), prMgmtFrame->seq_ctrl,
-			ucChannelNum, i4SignalStrength, u4FrameLen,
-			prMgmtFrame->u.beacon.timestamp);
+		kalScanResultLog(prGlueInfo->prAdapter, prMgmtFrame);
 
 		/* indicate to NL80211 subsystem */
 		bss = cfg80211_inform_bss_frame(wiphy, prChannel,
@@ -5887,16 +5940,23 @@ kalIndicateBssInfo(IN struct GLUE_INFO *prGlueInfo,
 				u4FrameLen, i4SignalStrength * 100, GFP_KERNEL);
 
 		if (!bss) {
-			/* ToDo:: DBGLOG */
 			DBGLOG(REQ, WARN,
-			       "cfg80211_inform_bss_frame() returned with NULL\n");
-		} else
+			       "MT7902: cfg80211_inform_bss_frame REJECTED - "
+			       "chan=%u freq=%d rssi=%d len=%u BSSID=" MACSTR "\n",
+			       ucChannelNum, prChannel->center_freq, i4SignalStrength,
+			       u4FrameLen, MAC2STR(prMgmtFrame->bssid));
+		} else {
+			DBGLOG(SCN, LOUD,
+			       "MT7902: BSS reported - chan=%u freq=%d band=%s BSSID=" MACSTR "\n",
+			       ucChannelNum, prChannel->center_freq, band_str,
+			       MAC2STR(prMgmtFrame->bssid));
 			cfg80211_put_bss(wiphy, bss);
+		}
 	}
-
 }
 
 /*----------------------------------------------------------------------------*/
+
 /*!
  * \brief    To indicate channel ready
  *

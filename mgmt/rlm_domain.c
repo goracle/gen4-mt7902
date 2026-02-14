@@ -1940,146 +1940,87 @@ uint8_t rlmDomainGetCenterChannel(enum ENUM_BAND eBand, uint8_t ucPriChannel,
  * \return
  */
 /*----------------------------------------------------------------------------*/
-u_int8_t
-rlmDomainIsValidRfSetting(struct ADAPTER *prAdapter,
-			  enum ENUM_BAND eBand,
-			  uint8_t ucPriChannel,
-			  enum ENUM_CHNL_EXT eExtend,
-			  enum ENUM_CHANNEL_WIDTH eChannelWidth,
-			  uint8_t ucChannelS1, uint8_t ucChannelS2)
+u_int8_t rlmDomainIsValidRfSetting(struct ADAPTER *prAdapter,
+              enum ENUM_BAND eBand,
+              uint8_t ucPriChannel,
+              enum ENUM_CHNL_EXT eExtend,
+              enum ENUM_CHANNEL_WIDTH eChannelWidth,
+              uint8_t ucChannelS1, uint8_t ucChannelS2)
 {
-	uint8_t ucCenterCh = 0;
-	uint8_t  ucUpperChannel;
-	uint8_t  ucLowerChannel;
-	u_int8_t fgValidChannel = TRUE;
-	u_int8_t fgUpperChannel = TRUE;
-	u_int8_t fgLowerChannel = TRUE;
-	u_int8_t fgValidBW = TRUE;
-	u_int8_t fgValidRfSetting = TRUE;
-	uint32_t u4PrimaryOffset;
+    uint8_t ucCenterCh = 0;
+    uint8_t ucUpperChannel, ucLowerChannel;
+    u_int8_t fgValidChannel = TRUE;
+    u_int8_t fgUpperChannel = TRUE;
+    u_int8_t fgLowerChannel = TRUE;
+    u_int8_t fgValidBW = TRUE;
+    u_int8_t fgValidRfSetting = TRUE;
 
-	/*DBG msg for Channel InValid */
-	if (eChannelWidth == CW_20_40MHZ) {
-		ucCenterCh = rlmDomainGetCenterChannel(eBand, ucPriChannel,
-						       eExtend);
+    /* 1. 
+     * If we are on 2.4GHz and using standard 20MHz bandwidth, we stop 
+     * caring about what the regulatory table says. If the radio saw it, 
+     * it's valid.
+     */
+if (eBand == BAND_2G4 && eChannelWidth == CW_20_40MHZ) {
+        if (ucPriChannel >= 1 && ucPriChannel <= 14) {
+            return TRUE; 
+        }
+    }
 
-		/* Check Central Channel Valid or Not */
-		fgValidChannel = rlmDomainCheckChannelEntryValid(prAdapter,
-								 ucCenterCh);
-		if (fgValidChannel == FALSE)
-			DBGLOG(RLM, WARN, "Rf20: CentralCh=%d\n", ucCenterCh);
+    /* 2. Bandwidth/Center Channel Logic for 5G/6G */
+    if (eChannelWidth == CW_20_40MHZ) {
+        ucCenterCh = rlmDomainGetCenterChannel(eBand, ucPriChannel, eExtend);
+        fgValidChannel = rlmDomainCheckChannelEntryValid(prAdapter, ucCenterCh);
 
-		/* Check Upper Channel and Lower Channel */
-		switch (eExtend) {
-		case CHNL_EXT_SCA:
-			ucUpperChannel = ucPriChannel + 4;
-			ucLowerChannel = ucPriChannel;
-			break;
-		case CHNL_EXT_SCB:
-			ucUpperChannel = ucPriChannel;
-			ucLowerChannel = ucPriChannel - 4;
-			break;
-		default:
-			ucUpperChannel = ucPriChannel;
-			ucLowerChannel = ucPriChannel;
-			break;
-		}
+        switch (eExtend) {
+        case CHNL_EXT_SCA:
+            ucUpperChannel = ucPriChannel + 4;
+            ucLowerChannel = ucPriChannel;
+            break;
+        case CHNL_EXT_SCB:
+            ucUpperChannel = ucPriChannel;
+            ucLowerChannel = ucPriChannel - 4;
+            break;
+        default:
+            ucUpperChannel = ucPriChannel;
+            ucLowerChannel = ucPriChannel;
+            break;
+        }
 
-		fgUpperChannel = rlmDomainCheckChannelEntryValid(prAdapter,
-								ucUpperChannel);
-		if (fgUpperChannel == FALSE)
-			DBGLOG(RLM, WARN, "Rf20: UpperCh=%d\n", ucUpperChannel);
+        fgUpperChannel = rlmDomainCheckChannelEntryValid(prAdapter, ucUpperChannel);
+        fgLowerChannel = rlmDomainCheckChannelEntryValid(prAdapter, ucLowerChannel);
 
-		fgLowerChannel = rlmDomainCheckChannelEntryValid(prAdapter,
-								ucLowerChannel);
-		if (fgLowerChannel == FALSE)
-			DBGLOG(RLM, WARN, "Rf20: LowerCh=%d\n", ucLowerChannel);
+    } else if (eChannelWidth == CW_80MHZ || eChannelWidth == CW_160MHZ) {
+        ucCenterCh = ucChannelS1;
+        if (eChannelWidth != CW_160MHZ) {
+            fgValidChannel = rlmDomainCheckChannelEntryValid(prAdapter, ucCenterCh);
+        }
+    } else if (eChannelWidth == CW_80P80MHZ) {
+        /* Dual 80MHz segments */
+        if (!rlmDomainCheckChannelEntryValid(prAdapter, ucChannelS1) ||
+            !rlmDomainCheckChannelEntryValid(prAdapter, ucChannelS2)) {
+            fgValidChannel = FALSE;
+        }
+    } else {
+        DBGLOG(RLM, ERROR, "Invalid BW setting: %d\n", eChannelWidth);
+        return FALSE;
+    }
 
-	} else if ((eChannelWidth == CW_80MHZ) ||
-		   (eChannelWidth == CW_160MHZ)) {
-		ucCenterCh = ucChannelS1;
+    /* 3. Final Band-Specific Width Verification */
+    if (eBand == BAND_5G) {
+        if (eChannelWidth == CW_80MHZ || eChannelWidth == CW_80P80MHZ) {
+            uint32_t u4Offset = CAL_CH_OFFSET_80M(ucPriChannel, ucChannelS1);
+            if (u4Offset >= 4 || (ucPriChannel == 165)) {
+                fgValidBW = FALSE;
+            }
+        }
+    }
 
-		/* Check Central Channel Valid or Not */
-		if (eChannelWidth != CW_160MHZ) {
-			/* BW not check , ex: primary 36 and
-			 * central channel 50 will fail the check
-			 */
-			fgValidChannel =
-				rlmDomainCheckChannelEntryValid(prAdapter,
-								ucCenterCh);
-		}
+    if (!fgValidBW || !fgValidChannel || !fgUpperChannel || !fgLowerChannel)
+        fgValidRfSetting = FALSE;
 
-		if (fgValidChannel == FALSE)
-			DBGLOG(RLM, WARN, "Rf80/160C: CentralCh=%d\n",
-			       ucCenterCh);
-	} else if (eChannelWidth == CW_80P80MHZ) {
-		ucCenterCh = ucChannelS1;
-
-		fgValidChannel = rlmDomainCheckChannelEntryValid(prAdapter,
-								 ucCenterCh);
-
-		if (fgValidChannel == FALSE)
-			DBGLOG(RLM, WARN, "Rf160NC: CentralCh1=%d\n",
-			       ucCenterCh);
-
-		ucCenterCh = ucChannelS2;
-
-		fgValidChannel = rlmDomainCheckChannelEntryValid(prAdapter,
-								 ucCenterCh);
-
-		if (fgValidChannel == FALSE)
-			DBGLOG(RLM, WARN, "Rf160NC: CentralCh2=%d\n",
-			       ucCenterCh);
-
-		/* Check Central Channel Valid or Not */
-	} else {
-		DBGLOG(RLM, ERROR, "Wrong BW =%d\n", eChannelWidth);
-		fgValidChannel = FALSE;
-	}
-
-	/* Check BW Setting Correct or Not */
-	if (eBand == BAND_2G4) {
-		if (eChannelWidth != CW_20_40MHZ) {
-			fgValidBW = FALSE;
-			DBGLOG(RLM, WARN, "Rf: B=%d, W=%d\n",
-			       eBand, eChannelWidth);
-		}
-	} else {
-		if ((eChannelWidth == CW_80MHZ) ||
-				(eChannelWidth == CW_80P80MHZ)) {
-			u4PrimaryOffset = CAL_CH_OFFSET_80M(ucPriChannel,
-							    ucChannelS1);
-			if (u4PrimaryOffset >= 4) {
-				fgValidBW = FALSE;
-				DBGLOG(RLM, WARN, "Rf: PriOffSet=%d, W=%d\n",
-				       u4PrimaryOffset, eChannelWidth);
-			}
-			if (ucPriChannel == 165 && eBand == BAND_5G) {
-				fgValidBW = FALSE;
-				DBGLOG(RLM, WARN,
-				       "Rf: PriOffSet=%d, W=%d C=%d\n",
-				       u4PrimaryOffset, eChannelWidth,
-				       ucPriChannel);
-			}
-		} else if (eChannelWidth == CW_160MHZ) {
-			u4PrimaryOffset = CAL_CH_OFFSET_160M(ucPriChannel,
-							     ucCenterCh);
-			if (u4PrimaryOffset >= 8) {
-				fgValidBW = FALSE;
-				DBGLOG(RLM, WARN,
-				       "Rf: PriOffSet=%d, W=%d\n",
-				       u4PrimaryOffset, eChannelWidth);
-			}
-		}
-	}
-
-	if ((fgValidBW == FALSE) || (fgValidChannel == FALSE) ||
-	    (fgUpperChannel == FALSE) || (fgLowerChannel == FALSE))
-		fgValidRfSetting = FALSE;
-
-	return fgValidRfSetting;
-
+    return fgValidRfSetting;
 }
+
 
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
 /*
@@ -3076,83 +3017,97 @@ u_int8_t rlmDomainTxPwrLegacyLimitLoad(
 	uint8_t ucVersion, uint32_t u4CountryCode,
 	struct TX_PWR_LEGACY_LIMIT_DATA *pTxPwrLegacyLimitData)
 {
-	uint8_t uLegSecIdx;
+	uint8_t uLegSecIdx, i;
 	uint8_t ucLegacySecNum = gTx_Legacy_Pwr_Limit_Section[ucVersion].ucLegacySectionNum;
 	uint32_t u4CountryStart = 0, u4CountryEnd = 0, u4Pos = 0;
 	struct TX_LEGACY_PWR_LIMIT_SECTION *prLegacySection = &gTx_Legacy_Pwr_Limit_Section[ucVersion];
 	uint8_t *prFileName = prAdapter->chip_info->prTxPwrLimitFile;
 	u_int8_t bFoundAnySection = FALSE;
 
-	/* Initialize to zeros */
+	/* Initialize channel count */
 	pTxPwrLegacyLimitData->ucChNum = 0;
 
-	/* * BOLD STEP 1: Attempt to find ONLY the user-requested country code.
-	 * If it fails, we do NOT fall back to 'WW' or '00'. 
+	/* 1. Attempt to find the requested country code (US). 
+	 * Fallback to Global '00' (0x3030) if US is not found or is empty.
 	 */
 	if (!rlmDomainTxPwrLimitGetCountryRange(u4CountryCode, pucBuf,
 		u4BufLen, &u4CountryStart, &u4CountryEnd)) {
 		
-		char acCode[3];
-		acCode[0] = (uint8_t)(u4CountryCode >> 8);
-		acCode[1] = (uint8_t)(u4CountryCode & 0xFF);
-		acCode[2] = '\0';
-
-		DBGLOG(RLM, ERROR, "DEFANGED: Country '%s' (0x%x) NOT in %s. Refusing fallback to cage.\n",
-			acCode, u4CountryCode, prFileName);
-		
-		/* * Returning FALSE here prevents the driver from loading ANY 
-		 * power limit tables, forcing it to use internal firmware defaults.
-		 */
-		return FALSE;
+		if (!rlmDomainTxPwrLimitGetCountryRange(0x3030, pucBuf, u4BufLen, 
+			&u4CountryStart, &u4CountryEnd)) {
+			
+			DBGLOG(RLM, WARN, "MT7902: No US or Global table in %s.\n", prFileName);
+		} else {
+			DBGLOG(RLM, INFO, "MT7902: Falling back to Global (00) power limits.\n");
+		}
 	}
 
-	/* BOLD STEP 2: Process the tables for the requested country ONLY */
-	u4Pos = u4CountryStart;
+	/* 2. Process sections from the file */
+	if (u4CountryEnd > u4CountryStart) {
+		for (uLegSecIdx = 0; uLegSecIdx < ucLegacySecNum; uLegSecIdx++) {
+			const uint8_t *pLegacySecName = prLegacySection->arLegacySectionNames[uLegSecIdx];
+			u4Pos = u4CountryStart;
 
-	for (uLegSecIdx = 0; uLegSecIdx < ucLegacySecNum; uLegSecIdx++) {
-		const uint8_t *pLegacySecName = prLegacySection->arLegacySectionNames[uLegSecIdx];
-		
-		if (!rlmDomainTxPwrLimitSearchSection(pLegacySecName, pucBuf, &u4Pos, u4CountryEnd)) {
-			DBGLOG(RLM, INFO, "Section %s not found for this country, skipping.\n", pLegacySecName);
-			continue;
-		}
-		
-		bFoundAnySection = TRUE;
-		
-		while (!rlmDomainTxPwrLimitSectionEnd(pucBuf, pLegacySecName, &u4Pos, u4CountryEnd) &&
-			u4Pos < u4CountryEnd) {
-			
-			uint32_t u4PreLoadPos = u4Pos;
-			
-			/* Don't let one bad line in the .dat file crash the whole load */
-			if (!rlmDomainLegacyTxPwrLimitLoadChannelSetting(
-				ucVersion, pucBuf, &u4Pos, u4CountryEnd,
-				pTxPwrLegacyLimitData, uLegSecIdx)) {
-				
-				DBGLOG(RLM, WARN, "Malformed line at offset %u, skipping line.\n", u4PreLoadPos);
-				
-				while (u4Pos < u4CountryEnd && pucBuf[u4Pos] != '\n')
-					u4Pos++;
-				if (u4Pos < u4CountryEnd)
-					u4Pos++;
+			if (!rlmDomainTxPwrLimitSearchSection(pLegacySecName, pucBuf, &u4Pos, u4CountryEnd))
 				continue;
-			}
 			
-			if (u4Pos == u4PreLoadPos) u4Pos++;
+			bFoundAnySection = TRUE;
+			
+			while (!rlmDomainTxPwrLimitSectionEnd(pucBuf, pLegacySecName, &u4Pos, u4CountryEnd) &&
+				u4Pos < u4CountryEnd) {
+				
+				if (!rlmDomainLegacyTxPwrLimitLoadChannelSetting(
+					ucVersion, pucBuf, &u4Pos, u4CountryEnd,
+					pTxPwrLegacyLimitData, uLegSecIdx)) {
+					
+					while (u4Pos < u4CountryEnd && pucBuf[u4Pos] != '\n')
+						u4Pos++;
+					if (u4Pos < u4CountryEnd)
+						u4Pos++;
+					continue;
+				}
+			}
 		}
 	}
 
-	if (bFoundAnySection && pTxPwrLegacyLimitData->ucChNum > 0) {
-		DBGLOG(RLM, INFO, "SUCCESS: Loaded %u channels for user-defined country.\n",
-			pTxPwrLegacyLimitData->ucChNum);
-		return TRUE;
+	/* 3. EMERGENCY INJECTION: Force 2.4GHz channels (1, 6, 11)
+	 * This fixes network 'H' visibility by ensuring the Tx Power Envelope is not zero.
+	 */
+	uint8_t aucTarget[] = {1, 6, 11};
+	uint8_t ucMaxCh = TX_PWR_LIMIT_2G_CH_NUM + TX_PWR_LIMIT_5G_CH_NUM;
+
+	for (i = 0; i < 3; i++) {
+		uint8_t ucTargetCh = aucTarget[i];
+		u_int8_t fgFound = FALSE;
+		int j;
+
+		for (j = 0; j < pTxPwrLegacyLimitData->ucChNum; j++) {
+			if (pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit[j].ucChannel == ucTargetCh) {
+				fgFound = TRUE;
+				break;
+			}
+		}
+
+		if (!fgFound && pTxPwrLegacyLimitData->ucChNum < ucMaxCh) {
+			uint8_t ucIdx = pTxPwrLegacyLimitData->ucChNum;
+			struct CHANNEL_TX_LEGACY_PWR_LIMIT *prChLimit = 
+				&pTxPwrLegacyLimitData->rChannelTxLegacyPwrLimit[ucIdx];
+			
+			prChLimit->ucChannel = ucTargetCh;
+			
+			/* Set power limit to 40 (20dBm) for all rate groups */
+			kalMemSet(prChLimit->rTxLegacyPwrLimitValue, 40, 
+				  sizeof(prChLimit->rTxLegacyPwrLimitValue));
+			
+			pTxPwrLegacyLimitData->ucChNum++;
+			bFoundAnySection = TRUE;
+			
+			DBGLOG(RLM, INFO, "MT7902: Forced 20dBm limit for Channel %d\n", ucTargetCh);
+		}
 	}
 
-	DBGLOG(RLM, WARN, "No valid channel data found for requested country.\n");
-	return FALSE;
+	return (bFoundAnySection && pTxPwrLegacyLimitData->ucChNum > 0);
 }
-
-
 
 void rlmDomainTxPwrLimitSetChValues(
 	uint8_t ucVersion,

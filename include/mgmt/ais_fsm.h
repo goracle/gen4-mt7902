@@ -241,6 +241,9 @@ struct AIS_FSM_INFO {
 	u_int8_t fgIsScanning;
 
 	u_int8_t fgIsChannelRequested;
+
+  u_int8_t ucRoamingConsecutiveCount;
+
 	u_int8_t fgIsChannelGranted;
 
 #if CFG_SUPPORT_ROAMING

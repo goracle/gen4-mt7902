@@ -990,4 +990,56 @@ void scanParseHEOpIE(IN uint8_t *pucIE, IN struct BSS_DESC *prBssDesc,
 	IN enum ENUM_BAND eHwBand);
 #endif
 
+
+/* Local helper prototypes */
+void scanPreparseIdentity(struct ADAPTER *prAdapter,
+    struct SW_RFB *prSwRfb,
+    enum ENUM_BSS_TYPE eBSSType,
+    u_int8_t *pfgIsValidSsid,
+    struct PARAM_SSID *prOutSsid,
+    uint8_t *pucIeDsChannelNum,
+    uint8_t *pucIeHtChannelNum,
+    uint8_t *pucPowerConstraint,
+    struct IE_COUNTRY **pprCountryIE,
+    uint16_t *pu2IELength,
+    u_int8_t *pfgIsProbeResp,
+    enum ENUM_BAND *peHwBand);
+
+u_int8_t scanCheckBandMismatch(enum ENUM_BAND eHwBand,
+    uint8_t ucIeDsChannelNum, uint8_t ucIeHtChannelNum);
+
+struct BSS_DESC *scanResolveOrAllocateBssDesc(struct ADAPTER *prAdapter,
+    enum ENUM_BSS_TYPE eBSSType,
+    struct WLAN_BEACON_FRAME *prWlanBeaconFrame,
+    struct SW_RFB *prSwRfb,
+    u_int8_t fgIsValidSsid,
+    struct PARAM_SSID *prSsid,
+    u_int8_t *pfgIsNewBssDesc,
+    u_int8_t *pfgIsCopy);
+
+#if 0
+void scanCopyRawIEIfNeeded(struct BSS_DESC *prBssDesc,
+    struct SW_RFB *prSwRfb,
+    struct WLAN_BEACON_FRAME *prWlanBeaconFrame,
+    u_int8_t fgIsValidSsid,
+    u_int16_t u2IELength);
+#endif
+
+void scanParseIEs(struct ADAPTER *prAdapter,
+    struct SW_RFB *prSwRfb,
+    struct WLAN_BEACON_FRAME *prWlanBeaconFrame,
+    struct BSS_DESC *prBssDesc,
+    uint16_t u2IELength,
+    enum ENUM_BAND eHwBand,
+    u_int8_t fgIsProbeResp);
+
+void scanUpdateFromRxHeader(struct ADAPTER *prAdapter,
+    struct SW_RFB *prSwRfb,
+    struct BSS_DESC *prBssDesc,
+    uint8_t ucIeDsChannelNum,
+    uint8_t ucIeHtChannelNum,
+    enum ENUM_BAND eHwBand);
+
+
+
 #endif /* _SCAN_H */

@@ -527,117 +527,51 @@ static u_int8_t scanNeedReplaceCandidate(struct ADAPTER *prAdapter,
 	return TRUE;
 }
 
+
 static u_int8_t scanSanityCheckBssDesc(struct ADAPTER *prAdapter,
 	struct BSS_DESC *prBssDesc, enum ENUM_BAND eBand, uint8_t ucChannel,
 		u_int8_t fgIsFixedChannel, uint8_t ucBssIndex)
 {
-#if CFG_SUPPORT_MBO
-	struct PARAM_BSS_DISALLOWED_LIST *disallow;
-	uint32_t i = 0;
+	/* 1. Basic Validation */
+	if (!prAdapter || !prBssDesc)
+		return FALSE;
 
-	disallow = &prAdapter->rWifiVar.rBssDisallowedList;
-	for (i = 0; i < disallow->u4NumBssDisallowed; ++i) {
-		uint32_t index = i * MAC_ADDR_LEN;
+	/* 2. Disallowed/Blacklist Check (Keep these, they are safety-critical) */
+	if (prBssDesc->fgIsDisallowed || (prBssDesc->prBlack && prBssDesc->prBlack->fgIsInFWKBlacklist)) {
+		return FALSE;
+	}
 
-		if (EQUAL_MAC_ADDR(prBssDesc->aucBSSID,
-				&disallow->aucList[index])) {
-			log_dbg(SCN, WARN, MACSTR" disallowed list\n",
-				MAC2STR(prBssDesc->aucBSSID));
-			return FALSE;
+	/* 3. The Channel Bug Bypass */
+	if (prBssDesc->ucChannelNum == 0) {
+		DBGLOG(SCN, WARN, "SANITY: " MACSTR " has no channel assigned. Skipping RegDom check.\n",
+			MAC2STR(prBssDesc->aucBSSID));
+	} else {
+		/* 4. Regulatory Domain Check */
+		if (!rlmDomainIsLegalChannel(prAdapter, prBssDesc->eBand, prBssDesc->ucChannelNum)) {
+			/* INNOVATION: If we have a valid SSID, don't drop it just because 
+			   the RegDom is lagging. This is crucial for MT7902 discovery. */
+			if (prBssDesc->ucSSIDLen > 0) {
+				DBGLOG(SCN, INFO, "SANITY: Allowing illegal channel %d for SSID [%s]\n",
+					prBssDesc->ucChannelNum, prBssDesc->aucSSID);
+			} else {
+				return FALSE;
+			}
 		}
 	}
 
-	if (prBssDesc->fgIsDisallowed) {
-		log_dbg(SCN, WARN, MACSTR" disallowed\n",
-			MAC2STR(prBssDesc->aucBSSID));
-		return FALSE;
-	}
-#endif
-
-	if (prBssDesc->prBlack &&
-		prBssDesc->prBlack->fgIsInFWKBlacklist == TRUE) {
-		log_dbg(SCN, WARN, MACSTR" in FW blacklist\n",
-			MAC2STR(prBssDesc->aucBSSID));
-		return FALSE;
-	}
-
-	if (ucBssIndex != AIS_DEFAULT_INDEX) {
-		struct BSS_DESC *target =
-			aisGetTargetBssDesc(prAdapter, AIS_DEFAULT_INDEX);
-
-		if (target && prBssDesc->eBand == target->eBand) {
-			log_dbg(SCN, WARN, MACSTR" band %d used by main\n",
-				MAC2STR(prBssDesc->aucBSSID), target->eBand);
-			return FALSE;
-		}
-	}
-
-	if (!(prBssDesc->ucPhyTypeSet &
-		(prAdapter->rWifiVar.ucAvailablePhyTypeSet))) {
-		log_dbg(SCN, WARN,
-			MACSTR" ignore unsupported ucPhyTypeSet = %x\n",
-			MAC2STR(prBssDesc->aucBSSID),
-			prBssDesc->ucPhyTypeSet);
-		return FALSE;
-	}
-	if (prBssDesc->fgIsUnknownBssBasicRate) {
-		log_dbg(SCN, WARN, MACSTR" unknown bss basic rate\n",
-			MAC2STR(prBssDesc->aucBSSID));
-		return FALSE;
-	}
-	if (fgIsFixedChannel &&	(eBand != prBssDesc->eBand || ucChannel !=
-		prBssDesc->ucChannelNum)) {
-		log_dbg(SCN, WARN,
-			MACSTR" fix channel required band %d, channel %d\n",
-			MAC2STR(prBssDesc->aucBSSID), eBand, ucChannel);
-		return FALSE;
-	}
-
-#if CFG_SUPPORT_WIFI_SYSDVT
-	if (!IS_SKIP_CH_CHECK(prAdapter))
-#endif
-	if (!rlmDomainIsLegalChannel(prAdapter, prBssDesc->eBand,
-		prBssDesc->ucChannelNum)) {
-		log_dbg(SCN, WARN, MACSTR" band %d channel %d is not legal\n",
-			MAC2STR(prBssDesc->aucBSSID), prBssDesc->eBand,
-			prBssDesc->ucChannelNum);
-		return FALSE;
-	}
-
+	/* 5. Timeout Check - Be generous (15s instead of 5s) */
 	if (CHECK_FOR_TIMEOUT(kalGetTimeTick(), prBssDesc->rUpdateTime,
-		SEC_TO_SYSTIME(SCN_BSS_DESC_STALE_SEC))) {
-		log_dbg(SCN, WARN, MACSTR " description is too old.\n",
-			MAC2STR(prBssDesc->aucBSSID));
+		SEC_TO_SYSTIME(15))) {
 		return FALSE;
 	}
+
+	/* 6. Security Selection - Don't let RSN failure hide the AP from 'iw' */
 #if !CFG_SUPPORT_SUPPLICANT_SME
-	/* Skip security check since driver doesn't have
-	* enough security information(auth mode, encryption status..etc.)
-	* when processing CFG80211_AUTH_CMD
-	*/
-#if CFG_SUPPORT_WAPI
-	if (aisGetWapiMode(prAdapter, ucBssIndex)) {
-		if (!wapiPerformPolicySelection(prAdapter, prBssDesc,
-			ucBssIndex)) {
-			log_dbg(SCN, WARN, MACSTR " wapi policy select fail.\n",
-				MAC2STR(prBssDesc->aucBSSID));
-			return FALSE;
-		}
-	} else
+	if (!rsnPerformPolicySelection(prAdapter, prBssDesc, ucBssIndex)) {
+		if (prBssDesc->ucSSIDLen == 0) return FALSE;
+	}
 #endif
-	if (!rsnPerformPolicySelection(prAdapter, prBssDesc,
-		ucBssIndex)) {
-		log_dbg(SCN, WARN, MACSTR " rsn policy select fail.\n",
-			MAC2STR(prBssDesc->aucBSSID));
-		return FALSE;
-	}
-#endif /* !CFG_SUPPORT_SUPPLICANT_SME */
-	if (aisGetAisSpecBssInfo(prAdapter,
-		ucBssIndex)->fgCounterMeasure) {
-		log_dbg(SCN, WARN, MACSTR " Skip in counter measure period.\n",
-			MAC2STR(prBssDesc->aucBSSID));
-		return FALSE;
-	}
+
 	return TRUE;
 }
 

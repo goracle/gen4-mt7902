@@ -69,6 +69,7 @@
  *******************************************************************************
  */
 #include "precomp.h"
+extern uint32_t wlanoidQueryWlanInfo(struct ADAPTER *prAdapter, void *pvQueryBuffer, uint32_t u4QueryBufferLen, uint32_t *pu4QueryInfoLen);
 #include "gl_os.h"
 #include "gl_wext_priv.h"
 
@@ -246,8 +247,15 @@ static struct WLAN_REQ_ENTRY arWlanOidReqTable[] = {
 		(sizeof(uint8_t) * PARAM_MAX_LEN_RATES_EX),
 		(PFN_OID_HANDLER_FUNC_REQ) wlanoidQuerySupportedRates,
 		NULL
-	}
-	,
+	},
+	{
+		OID_CUSTOM_LINK_QUALITY,
+		DISP_STRING("OID_CUSTOM_LINK_QUALITY"),
+		TRUE, FALSE, ENUM_OID_DRIVER_CORE,
+		sizeof(uint32_t),
+		(PFN_OID_HANDLER_FUNC_REQ) wlanoidQueryWlanInfo,
+		NULL
+	},
 	/*
 	 *  {OID_802_11_CONFIGURATION,
 	 *  DISP_STRING("OID_802_11_CONFIGURATION"),

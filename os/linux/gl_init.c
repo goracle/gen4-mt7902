@@ -264,59 +264,46 @@ static const struct ieee80211_regdomain mt79xx_regdom_world = {
 	},
 };
 
+
+
+
+
+
 static void mt79xx_reg_notifier(struct wiphy *wiphy,
                                struct regulatory_request *request)
 {
-	struct ieee80211_supported_band *sband;
-	int b, i;
+    struct ADAPTER *prAdapter = wiphy_priv(wiphy);
+    struct ieee80211_supported_band *band;
+    int b, i;
 
-	DBGLOG(INIT, INFO,
-	    "REG NOTIFIER: alpha2=%c%c initiator=%d\n",
-	    request->alpha2[0], request->alpha2[1], request->initiator);
+    DBGLOG(INIT, INFO, "REG NOTIFIER: kernel sent %c%c. Injecting into FW...\n",
+           request->alpha2[0], request->alpha2[1]);
 
-	/* DO NOT force country codes - respect what was requested
-	 * The kernel's regulatory system will handle this properly
-	 */
+    /* 1. Update the adapter cache */
+    prAdapter->rWifiVar.u2CountryCode = (((uint16_t)request->alpha2[0]) << 8) | 
+                                         ((uint16_t)request->alpha2[1]);
 
-	/* Let the regulatory core handle channel flags appropriately
-	 * based on the actual regulatory domain.
-	 * 
-	 * We can do some cleanup here, but we should NOT:
-	 * - Clear NO_IR flags (those prevent illegal transmissions)
-	 * - Clear RADAR flags (those require DFS, which we may not support)
-	 * - Set excessive power levels
-	 */
+    /* 2. Force your BOLD code to run immediately */
+    wlanCfgSetCountryCode(prAdapter);
 
-	for (b = 0; b < ARRAY_SIZE(wiphy->bands); b++) {
-		sband = wiphy->bands[b];
-		if (!sband)
-			continue;
+    /* 3. Aggressive Channel Flag Cleanup with proper types */
+    for (b = 0; b < NUM_NL80211_BANDS; b++) {
+        band = wiphy->bands[b];
+        if (!band)
+            continue;
 
-		for (i = 0; i < sband->n_channels; i++) {
-			struct ieee80211_channel *c = &sband->channels[i];
-			
-			/* Only adjust power if it seems unreasonably high
-			 * Most regulatory domains allow 20-23 dBm (100-200 mW)
-			 * The regulatory core will further limit this based on
-			 * the actual country rules
-			 */
-			if (c->max_power > 2300) {
-				c->max_power = 2300;  /* 23 dBm = ~200mW */
-			}
-			
-			/* DO NOT touch:
-			 * - IEEE80211_CHAN_DISABLED (channel not available)
-			 * - IEEE80211_CHAN_NO_IR (can't initiate radiation)
-			 * - IEEE80211_CHAN_RADAR (requires DFS)
-			 * 
-			 * The regulatory core sets these based on legal requirements
-			 */
-		}
-	}
+        for (i = 0; i < band->n_channels; i++) {
+            /* Clear NO_IR (No-Initiate-Radiation) to allow active probing */
+            band->channels[i].flags &= ~IEEE80211_CHAN_NO_IR;
+            
+            /* Clear RADAR to stop the DFS state machine from locking channels */
+            band->channels[i].flags &= ~IEEE80211_CHAN_RADAR;
+            
+            /* Maximize transmit power (23dBm = 2300 in mBm) */
+            band->channels[i].max_power = 2300;
+        }
+    }
 }
-
-
-
 
 
 
@@ -529,6 +516,12 @@ static struct ieee80211_channel mtk_5ghz_channels[] = {
 	CHAN5G(136, IEEE80211_CHAN_RADAR),
 	CHAN5G(140, IEEE80211_CHAN_RADAR),
 	CHAN5G(144, IEEE80211_CHAN_RADAR),
+	/* Japan 4.9GHz band (channels 148-164) */
+	CHAN5G(148, IEEE80211_CHAN_RADAR | IEEE80211_CHAN_NO_IR),
+	CHAN5G(152, IEEE80211_CHAN_RADAR | IEEE80211_CHAN_NO_IR),
+	CHAN5G(156, IEEE80211_CHAN_RADAR | IEEE80211_CHAN_NO_IR),
+	CHAN5G(160, IEEE80211_CHAN_RADAR | IEEE80211_CHAN_NO_IR),
+	CHAN5G(164, IEEE80211_CHAN_RADAR | IEEE80211_CHAN_NO_IR),
 	/* UNII-3 */
 	CHAN5G(149, 0),
 	CHAN5G(153, 0),
@@ -3059,8 +3052,10 @@ static void wlanCreateWirelessDevice(void)
 	                          BIT(NL80211_IFTYPE_ADHOC);
 	prWiphy->bands[KAL_BAND_2GHZ] = &mtk_band_2ghz;
 	prWiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
+#if 0 //mask it for now
 #if (CFG_SUPPORT_WIFI_6G == 1)
 	prWiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
+#endif
 #endif
 
 	/* 7) Crypto, signal and features */

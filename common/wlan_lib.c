@@ -699,6 +699,7 @@ PFN_OID_HANDLER_FUNC apfnOidQueryHandlerWOHwAccess[] = {
 	wlanoidQueryEncryptionStatus,
 	wlanoidQueryNetworkTypeInUse,
 	wlanoidQueryBssidList,
+	wlanoidQueryWlanInfo,
 	wlanoidQueryAcpiDevicePowerState,
 	wlanoidQuerySupportedRates,
 	wlanoidQueryDesiredRates,
@@ -706,6 +707,7 @@ PFN_OID_HANDLER_FUNC apfnOidQueryHandlerWOHwAccess[] = {
 	wlanoidQueryBeaconInterval,
 	wlanoidQueryAtimWindow,
 	wlanoidQueryFrequency,
+	wlanoidQueryWlanInfo,
 };
 
 /* OID set handlers allowed in RF test mode */
@@ -8593,19 +8595,19 @@ void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 	if (!prAdapter)
 		return;
 
-	/* 1. Try the cached 'Good CC' first */
+	/* 1. Resolve the Country Code */
 	if (prAdapter->rWifiVar.u2CountryCode != 0x0000) {
 		u2NewCode = prAdapter->rWifiVar.u2CountryCode;
 		DBGLOG(INIT, WARN, "BOLD: Using existing CC cache: 0x%04x\n", u2NewCode);
 	} 
 	else {
-		/* 2. If zero, try config, but FALLBACK to US (0x5553) instead of exiting */
+		/* Try config, but fallback to US (0x5553) */
 		if (wlanCfgGet(prAdapter, "CountryCode", aucValue, "", 0) != WLAN_STATUS_SUCCESS &&
 		    wlanCfgGet(prAdapter, "Country", aucValue, "", 0) != WLAN_STATUS_SUCCESS) {
 			
 			u2NewCode = 0x5553; /* 'US' */
 			prAdapter->rWifiVar.u2CountryCode = u2NewCode;
-			DBGLOG(INIT, WARN, "BOLD: No source found. FORCING CC to 0x%04x [US]\n", u2NewCode);
+			DBGLOG(INIT, WARN, "BOLD: No source found. FORCING CC to 0x5553 [US]\n");
 		} else {
 			u2NewCode = (((uint16_t)aucValue[0]) << 8) | ((uint16_t)aucValue[1]);
 			prAdapter->rWifiVar.u2CountryCode = u2NewCode;
@@ -8617,24 +8619,36 @@ void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 	aucValue[0] = (int8_t)((u2NewCode >> 8) & 0xFF);
 	aucValue[1] = (int8_t)(u2NewCode & 0xFF);
 
-	/* 3. Safety Check - If FW is not ready, we at least saved the 'Good CC' for later */
-	if (!prAdapter->fgIsFwDownloaded || !prAdapter->prGlueInfo) {
-		DBGLOG(INIT, WARN, "BOLD: Exit B - FW not ready. CC 0x%04x is now cached.\n", 
-			prAdapter->rWifiVar.u2CountryCode);
+	/* 2. Critical Safety Check - Glue Layer must exist */
+	if (!prAdapter->prGlueInfo) {
+		DBGLOG(INIT, ERROR, "BOLD: Exit - prGlueInfo is NULL. Deferring CC push.\n");
 		return; 
 	}
 
-	/* 4. The Push to Firmware */
-	DBGLOG(INIT, WARN, "BOLD: Pushing CC 0x%04x [%c%c] to hardware.\n", 
+	/* 3. Innovative Force: Ignore fgIsFwDownloaded race condition */
+	if (!prAdapter->fgIsFwDownloaded) {
+		DBGLOG(INIT, WARN, "BOLD: FW not marked ready, but FORCING hardware push for iwd stability.\n");
+	}
+
+	/* 4. The Push to Hardware/RLM */
+	DBGLOG(INIT, WARN, "BOLD: Committing CC 0x%04x [%c%c] to hardware state.\n", 
 		u2NewCode, aucValue[0], aucValue[1]);
+
+	/* Update the internal RLM domain state first */
+	rlmDomainSetCountryCode((int8_t *)aucValue, 2);
 
 	if (regd_is_single_sku_en()) {
 		rlmDomainOidSetCountry(prAdapter, (uint8_t *)aucValue, 2);
 	} else {
+		/* Clear domain info to force a re-evaluation of the channel list */
 		prAdapter->prDomainInfo = NULL;
 		rlmDomainSendCmd(prAdapter);
+		
+		/* 5. Update the Channel Table: This is what iwd needs to see carrier */
 		wlanUpdateChannelTable(prAdapter->prGlueInfo);
 	}
+
+	DBGLOG(INIT, WARN, "BOLD: CC push complete. Channel table refreshed.\n");
 }
 
 struct WLAN_CFG_ENTRY *wlanCfgGetEntry(IN struct ADAPTER *prAdapter,
@@ -9112,97 +9126,148 @@ uint32_t wlanCfgParseToFW(int8_t **args, int8_t *args_size,
 /*----------------------------------------------------------------------------*/
 void wlanFeatureToFw(IN struct ADAPTER *prAdapter)
 {
-	struct WLAN_CFG_ENTRY *prWlanCfgEntry;
-	uint32_t i;
-	struct CMD_HEADER rCmdV1Header;
-	uint32_t rStatus;
-	struct CMD_FORMAT_V1 rCmd_v1;
-	uint8_t ucTimes = 0;
-	size_t current_offset = 0;
+    struct WLAN_CFG_ENTRY *prWlanCfgEntry;
+    uint32_t i;
+    struct CMD_HEADER rCmdV1Header;
+    uint32_t rStatus;
+    struct CMD_FORMAT_V1 rCmd_v1;
+    uint8_t ucTimes = 0;
+    size_t current_offset = 0;
+    uint8_t ucBatchNum = 0;        /* track which flush attempt this is */
+    uint32_t uTotalSent = 0;       /* total entries successfully queued */
+    uint32_t uTotalSkipped = 0;    /* entries dropped for any reason */
 
-	/* Basic pointer validation */
-	if (!prAdapter)
-		return;
+    if (!prAdapter)
+        return;
 
-	kalMemSet(&rCmdV1Header, 0, sizeof(struct CMD_HEADER));
-	rCmdV1Header.cmdType = CMD_TYPE_SET;
-	rCmdV1Header.cmdVersion = CMD_VER_1;
+    kalMemSet(&rCmdV1Header, 0, sizeof(struct CMD_HEADER));
+    rCmdV1Header.cmdType = CMD_TYPE_SET;
+    rCmdV1Header.cmdVersion = CMD_VER_1;
 
-	for (i = 0; i < WLAN_CFG_ENTRY_NUM_MAX; i++) {
-		prWlanCfgEntry = wlanCfgGetEntryByIndex(prAdapter, i, 0);
+    DBGLOG(INIT, INFO, "wlanFeatureToFw: starting feature sync to FW\n");
 
-		/* 1. Validate entry pointer and key existence */
-		if (!prWlanCfgEntry || !prWlanCfgEntry->aucKey[0])
-			continue;
+    for (i = 0; i < WLAN_CFG_ENTRY_NUM_MAX; i++) {
+        prWlanCfgEntry = wlanCfgGetEntryByIndex(prAdapter, i, 0);
+        if (!prWlanCfgEntry || !prWlanCfgEntry->aucKey[0])
+            continue;
+        if (strcmp(prWlanCfgEntry->aucKey, "MacAddress") == 0 ||
+            strcmp(prWlanCfgEntry->aucKey, "MacAddr") == 0)
+            continue;
 
-		/* 2. Skip MAC Address keys (already handled by robust parser) */
-		if (strcmp(prWlanCfgEntry->aucKey, "MacAddress") == 0 || 
-		    strcmp(prWlanCfgEntry->aucKey, "MacAddr") == 0){
-		  continue;
-		}
+        /* Build the entry */
+        kalMemSet(&rCmd_v1, 0, sizeof(struct CMD_FORMAT_V1));
+        rCmd_v1.itemType = ITEM_TYPE_STR;
 
-		/* 3. Safety Check: Ensure we don't overflow the command buffer memory */
-		if (current_offset + sizeof(struct CMD_FORMAT_V1) > MAX_CMD_BUFFER_LENGTH) {
-			DBGLOG(INIT, WARN, "wlanFeatureToFw: Buffer full, flushing early\n");
-			goto flush; 
-		}
+        size_t keyLen = kalStrLen(prWlanCfgEntry->aucKey);
+        if (keyLen >= MAX_CMD_NAME_MAX_LENGTH) {
+            DBGLOG(INIT, WARN,
+                   "wlanFeatureToFw: key[%u] '%s' truncated (%zu->%d)\n",
+                   i, prWlanCfgEntry->aucKey,
+                   keyLen, MAX_CMD_NAME_MAX_LENGTH - 1);
+            keyLen = MAX_CMD_NAME_MAX_LENGTH - 1;
+        }
+        kalMemCopy(rCmd_v1.itemString, prWlanCfgEntry->aucKey, keyLen);
+        rCmd_v1.itemStringLength = (uint16_t)keyLen;
 
-		kalMemSet(&rCmd_v1, 0, sizeof(struct CMD_FORMAT_V1));
-		rCmd_v1.itemType = ITEM_TYPE_STR;
+        size_t valLen = kalStrLen(prWlanCfgEntry->aucValue);
+        if (valLen >= MAX_CMD_VALUE_MAX_LENGTH) {
+            DBGLOG(INIT, WARN,
+                   "wlanFeatureToFw: key '%s' value truncated (%zu->%d)\n",
+                   prWlanCfgEntry->aucKey,
+                   valLen, MAX_CMD_VALUE_MAX_LENGTH - 1);
+            valLen = MAX_CMD_VALUE_MAX_LENGTH - 1;
+        }
+        kalMemCopy(rCmd_v1.itemValue, prWlanCfgEntry->aucValue, valLen);
+        rCmd_v1.itemValueLength = (uint16_t)valLen;
 
-		/* 4. Use strnlen and strncpy equivalent for Key */
-		size_t keyLen = kalStrLen(prWlanCfgEntry->aucKey);
-		if (keyLen >= MAX_CMD_NAME_MAX_LENGTH)
-			keyLen = MAX_CMD_NAME_MAX_LENGTH - 1;
-		
-		kalMemCopy(rCmd_v1.itemString, prWlanCfgEntry->aucKey, keyLen);
-		rCmd_v1.itemStringLength = (uint16_t)keyLen;
+        /* Flush before writing if we'd overflow */
+        if (ucTimes >= MAX_CMD_ITEM_MAX ||
+            current_offset + sizeof(struct CMD_FORMAT_V1) > MAX_CMD_BUFFER_LENGTH) {
+            if (ucTimes > 0) {
+                rCmdV1Header.itemNum = ucTimes;
+                DBGLOG(INIT, INFO,
+                       "wlanFeatureToFw: flushing batch %u (%u items, %zu bytes)\n",
+                       ucBatchNum, ucTimes, current_offset);
+                rStatus = wlanSendSetQueryCmd(prAdapter,
+                              CMD_ID_GET_SET_CUSTOMER_CFG,
+                              TRUE, FALSE, FALSE, NULL, NULL,
+                              sizeof(struct CMD_HEADER),
+                              (uint8_t *)&rCmdV1Header,
+                              NULL, 0);
+                if (rStatus == WLAN_STATUS_SUCCESS ||
+                    rStatus == WLAN_STATUS_PENDING) {
+                    uTotalSent += ucTimes;
+                    DBGLOG(INIT, TRACE,
+                           "wlanFeatureToFw: batch %u queued OK (status=0x%x)\n",
+                           ucBatchNum, rStatus);
+                } else {
+                    uTotalSkipped += ucTimes;
+                    DBGLOG(INIT, ERROR,
+                           "wlanFeatureToFw: batch %u FAILED (status=0x%x, "
+                           "%u items lost)\n",
+                           ucBatchNum, rStatus, ucTimes);
+                    /* Log exactly which keys were in the failed batch */
+                    uint32_t j;
+                    size_t off = 0;
+                    for (j = 0; j < ucTimes; j++) {
+                        struct CMD_FORMAT_V1 *pItem =
+                            (struct CMD_FORMAT_V1 *)(rCmdV1Header.buffer + off);
+                        DBGLOG(INIT, ERROR,
+                               "  lost[%u/%u]: '%.*s' = '%.*s'\n",
+                               j + 1, ucTimes,
+                               pItem->itemStringLength, pItem->itemString,
+                               pItem->itemValueLength, pItem->itemValue);
+                        off += sizeof(struct CMD_FORMAT_V1);
+                    }
+                }
+                ucBatchNum++;
+                kalMemSet(rCmdV1Header.buffer, 0, MAX_CMD_BUFFER_LENGTH);
+                rCmdV1Header.cmdBufferLen = 0;
+                current_offset = 0;
+                ucTimes = 0;
+            }
+        }
 
-		/* 5. Use strnlen and strncpy equivalent for Value */
-		size_t valLen = kalStrLen(prWlanCfgEntry->aucValue);
-		if (valLen >= MAX_CMD_VALUE_MAX_LENGTH)
-			valLen = MAX_CMD_VALUE_MAX_LENGTH - 1;
+        DBGLOG(INIT, TRACE,
+               "wlanFeatureToFw: queuing entry[%u] '%s'='%s'\n",
+               i, prWlanCfgEntry->aucKey, prWlanCfgEntry->aucValue);
 
-		kalMemCopy(rCmd_v1.itemValue, prWlanCfgEntry->aucValue, valLen);
-		rCmd_v1.itemValueLength = (uint16_t)valLen;
+        kalMemCopy(rCmdV1Header.buffer + current_offset,
+                   &rCmd_v1, sizeof(struct CMD_FORMAT_V1));
+        ucTimes++;
+        current_offset += sizeof(struct CMD_FORMAT_V1);
+        rCmdV1Header.cmdBufferLen = (uint16_t)current_offset;
+    }
 
-		/* 6. Commit to the main buffer with offset tracking */
-		kalMemCopy(rCmdV1Header.buffer + current_offset, &rCmd_v1, sizeof(struct CMD_FORMAT_V1));
-		
-		ucTimes++;
-		current_offset += sizeof(struct CMD_FORMAT_V1);
-		rCmdV1Header.cmdBufferLen = (uint16_t)current_offset;
+    /* Final flush */
+    if (ucTimes > 0) {
+        rCmdV1Header.itemNum = ucTimes;
+        DBGLOG(INIT, INFO,
+               "wlanFeatureToFw: final flush batch %u (%u items, %zu bytes)\n",
+               ucBatchNum, ucTimes, current_offset);
+        rStatus = wlanSendSetQueryCmd(prAdapter,
+                      CMD_ID_GET_SET_CUSTOMER_CFG,
+                      TRUE, FALSE, FALSE, NULL, NULL,
+                      sizeof(struct CMD_HEADER),
+                      (uint8_t *)&rCmdV1Header,
+                      NULL, 0);
+        if (rStatus == WLAN_STATUS_SUCCESS ||
+            rStatus == WLAN_STATUS_PENDING) {
+            uTotalSent += ucTimes;
+        } else {
+            uTotalSkipped += ucTimes;
+            DBGLOG(INIT, ERROR,
+                   "wlanFeatureToFw: final batch FAILED (status=0x%x, "
+                   "%u items lost)\n",
+                   rStatus, ucTimes);
+        }
+        ucBatchNum++;
+    }
 
-		/* 7. Flush if we hit the item limit */
-		if (ucTimes >= MAX_CMD_ITEM_MAX) {
-flush:
-			rCmdV1Header.itemNum = ucTimes;
-			rStatus = wlanSendSetQueryCmd(prAdapter, CMD_ID_GET_SET_CUSTOMER_CFG,
-						      TRUE, FALSE, FALSE, NULL, NULL,
-						      sizeof(struct CMD_HEADER), (uint8_t *)&rCmdV1Header,
-						      NULL, 0);
-
-			if (rStatus != WLAN_STATUS_SUCCESS)
-				DBGLOG(INIT, ERROR, "wlanFeatureToFw: Send failed 0x%x\n", rStatus);
-
-			/* Reset for next batch */
-			kalMemSet(rCmdV1Header.buffer, 0, MAX_CMD_BUFFER_LENGTH);
-			rCmdV1Header.cmdBufferLen = 0;
-			current_offset = 0;
-			ucTimes = 0;
-		}
-	}
-
-	/* 8. Final flush for any remaining items */
-	if (ucTimes > 0) {
-		rCmdV1Header.itemNum = ucTimes;
-		wlanSendSetQueryCmd(prAdapter, CMD_ID_GET_SET_CUSTOMER_CFG,
-				    TRUE, FALSE, FALSE, NULL, NULL,
-				    sizeof(struct CMD_HEADER), (uint8_t *)&rCmdV1Header,
-				    NULL, 0);
-	}
+    DBGLOG(INIT, INFO,
+           "wlanFeatureToFw: done. batches=%u sent=%u skipped=%u\n",
+           ucBatchNum, uTotalSent, uTotalSkipped);
 }
-
 
 
 uint32_t wlanCfgParse(IN struct ADAPTER *prAdapter,

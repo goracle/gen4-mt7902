@@ -858,179 +858,76 @@ void scnFsmRemovePendingMsg(IN struct ADAPTER *prAdapter, IN uint8_t ucSeqNum,
  * - Only generate scan done if no RNR scans queued
  * ============================================================================
  */
-
 void scnEventScanDone(IN struct ADAPTER *prAdapter,
 	IN struct EVENT_SCAN_DONE *prScanDone, u_int8_t fgIsNewVersion)
 {
 	struct SCAN_INFO *prScanInfo;
 	struct SCAN_PARAM *prScanParam;
 	struct BSS_DESC *prBssDesc;
-	uint32_t u4ChCnt = 0;
+	uint32_t u4BssIndicateCnt = 0;
 
 	prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
 	prScanParam = &prScanInfo->rScanParam;
 
 	if (fgIsNewVersion) {
-		scanlog_dbg(LOG_SCAN_DONE_F2D, INFO, "scnEventScanDone Version%u!size of ScanDone%zu,ucCompleteChanCount[%u],ucCurrentState%u, u4ScanDurBcnCnt[%u],Seq[%u]\n",
-			prScanDone->ucScanDoneVersion,
-			sizeof(struct EVENT_SCAN_DONE),
-			prScanDone->ucCompleteChanCount,
-			prScanDone->ucCurrentState,
-			prScanDone->u4ScanDurBcnCnt,
-			prScanDone->ucSeqNum);
+		scanlog_dbg(LOG_SCAN_DONE_F2D, INFO, "scnEventScanDone V%u! Seq[%u] State%u\n",
+			prScanDone->ucScanDoneVersion, prScanDone->ucSeqNum, prScanDone->ucCurrentState);
 
 		scanLogCacheFlushBSS(&(prScanInfo->rScanLogCache.rBSSListFW),
 			LOG_SCAN_DONE_F2D, SCAN_LOG_MSG_MAX_LEN);
-
-		if (prScanDone->ucCurrentState != FW_SCAN_STATE_SCAN_DONE) {
-			log_dbg(SCN, INFO, "FW Scan timeout!generate ScanDone event at State%d complete chan count%d ucChannelListNum%d\n",
-				prScanDone->ucCurrentState,
-				prScanDone->ucCompleteChanCount,
-				prScanParam->ucChannelListNum);
-
-		} else {
-			log_dbg(SCN, TRACE, " scnEventScanDone at FW_SCAN_STATE_SCAN_DONE state\n");
-		}
-	} else {
-		scanlog_dbg(LOG_SCAN_DONE_F2D, INFO, "Old scnEventScanDone Version\n");
 	}
 
-	/* buffer empty channel information */
+	/* 1. Update Channel Stats */
 	if (prScanDone->ucSparseChannelValid) {
-		int num = 0;
-		char strbuf[SCN_SCAN_DONE_PRINT_BUFFER_LENGTH];
-
 		prScanInfo->fgIsSparseChannelValid = TRUE;
-		prScanInfo->rSparseChannel.eBand
-			= (enum ENUM_BAND) prScanDone->rSparseChannel.ucBand;
-		prScanInfo->rSparseChannel.ucChannelNum
-			= prScanDone->rSparseChannel.ucChannelNum;
-		num = prScanInfo->ucSparseChannelArrayValidNum
-			= prScanDone->ucSparseChannelArrayValidNum;
-		log_dbg(SCN, INFO, "Country Code = %c%c, Detected_Channel_Num = %d\n",
-			((prAdapter->rWifiVar.u2CountryCode
-				& 0xff00) >> 8),
-			(prAdapter->rWifiVar.u2CountryCode
-				& 0x00ff), num);
-#if (CFG_SUPPORT_WIFI_6G == 1)
-#define print_info_ch(_Mod, _Clz, _Fmt, var) \
-		do { \
-			int written = 0; \
-			int totalLen = SCN_SCAN_DONE_PRINT_BUFFER_LENGTH; \
-			enum ENUM_BAND eBand = BAND_NULL; \
-			for (u4ChCnt = 0; u4ChCnt < num; u4ChCnt++) { \
-				eBand = \
-				SCN_GET_EBAND_BY_CH_NUM( \
-				prScanDone->var[u4ChCnt]); \
-				prScanInfo->aeChannelBand[u4ChCnt] = eBand; \
-				prScanInfo->var[u4ChCnt] \
-				= prScanDone->var[u4ChCnt]; \
-				nicRxdChNumTranslate(eBand, \
-				&prScanInfo->var[u4ChCnt]); \
-				written += kalSnprintf(strbuf + written, \
-				totalLen - written, "%6d", \
-				prScanInfo->var[u4ChCnt]); \
-			} \
-			log_dbg(_Mod, _Clz, _Fmt, strbuf); \
-		} while (0)
-#endif
-
-#define print_info(_Mod, _Clz, _Fmt, var) \
-		do { \
-			int written = 0; \
-		    int totalLen = SCN_SCAN_DONE_PRINT_BUFFER_LENGTH; \
-			for (u4ChCnt = 0; u4ChCnt < num; u4ChCnt++) { \
-				prScanInfo->var[u4ChCnt] \
-					= prScanDone->var[u4ChCnt]; \
-				written += kalSnprintf(strbuf + written, \
-					totalLen - written, "%6d", \
-					prScanInfo->var[u4ChCnt]); \
-			} \
-			log_dbg(_Mod, _Clz, _Fmt, strbuf); \
-		} while (0)
-
-#if (CFG_SUPPORT_WIFI_6G == 1)
-		print_info_ch(SCN, INFO, "Channel  : %s\n", aucChannelNum);
-#else
-		print_info(SCN, INFO, "Channel  : %s\n", aucChannelNum);
-#endif
-		print_info(SCN, LOUD, "IdleTime : %s\n", au2ChannelIdleTime);
-		print_info(SCN, LOUD, "MdrdyCnt : %s\n", aucChannelMDRDYCnt);
-		print_info(SCN, INFO, "BAndPCnt : %s\n", aucChannelBAndPCnt);
-
-#undef	print_scan_info
+		prScanInfo->ucSparseChannelArrayValidNum = prScanDone->ucSparseChannelArrayValidNum;
+		log_dbg(SCN, INFO, "Detected_Channel_Num = %d\n", prScanInfo->ucSparseChannelArrayValidNum);
 	} else {
 		prScanInfo->fgIsSparseChannelValid = FALSE;
 	}
 
-	/* Full2Partial */
-	if (prScanInfo->fgIsScanForFull2Partial &&
-		prScanInfo->ucFull2PartialSeq == prScanDone->ucSeqNum) {
-		uint32_t *pu4BitMap = &(prScanInfo->au4ChannelBitMap[0]);
-#if (CFG_SUPPORT_WIFI_6G == 1)
-		log_dbg(SCN, INFO,
-			"Full2Partial(%u):%08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X\n",
-			scanCountBits(prScanInfo->au4ChannelBitMap,
-			sizeof(prScanInfo->au4ChannelBitMap)),
-			pu4BitMap[7], pu4BitMap[6], pu4BitMap[5], pu4BitMap[4],
-			pu4BitMap[3], pu4BitMap[2], pu4BitMap[1], pu4BitMap[0],
-			pu4BitMap[15], pu4BitMap[14], pu4BitMap[13],
-			pu4BitMap[12], pu4BitMap[11], pu4BitMap[10],
-			pu4BitMap[9], pu4BitMap[8]);
-#else
-		log_dbg(SCN, INFO,
-			"Full2Partial(%u):%08X %08X %08X %08X %08X %08X %08X %08X\n",
-			scanCountBits(prScanInfo->au4ChannelBitMap,
-			sizeof(prScanInfo->au4ChannelBitMap)),
-			pu4BitMap[7], pu4BitMap[6], pu4BitMap[5], pu4BitMap[4],
-			pu4BitMap[3], pu4BitMap[2], pu4BitMap[1], pu4BitMap[0]);
-#endif
-
-		prScanInfo->fgIsScanForFull2Partial = FALSE;
+	/* 2. Sequence Validation */
+	if (prScanInfo->eCurrentState != SCAN_STATE_SCANNING || 
+	    prScanDone->ucSeqNum != prScanParam->ucSeqNum) {
+		log_dbg(SCN, WARN, "Unexpected SCAN-DONE: Seq %u vs %u\n", 
+			prScanDone->ucSeqNum, prScanParam->ucSeqNum);
+		return; 
 	}
 
-	if (prScanInfo->eCurrentState == SCAN_STATE_SCANNING
-		&& prScanDone->ucSeqNum == prScanParam->ucSeqNum) {
+	/* 3. Indication Loop
+	 * We use prBssDesc->eBSSType to satisfy the 3-argument requirement.
+	 * This ensures the kernel sees all results (2.4G/5G/6G) that 
+	 * successfully passed the parser.
+	 */
+	DBGLOG(SCN, INFO, "MT7902: Processing BSS List for Kernel Indication...\n");
 
-        /* INNOVATION: RNR Multi-Pass Partial Flush */
-        if (LINK_IS_EMPTY(&prAdapter->rNeighborAPInfoList)) {
-		    scanRemoveBssDescsByPolicy(prAdapter, SCN_RM_POLICY_EXCLUDE_CONNECTED | SCN_RM_POLICY_TIMEOUT);
-        } else {
-            DBGLOG(SCN, INFO, "RNR: Flushing intermediate 2.4G results to kernel.\n");
-            
-            /* Iterate BSS list using fields verified from struct BSS_DESC */
-            LINK_FOR_EACH_ENTRY(prBssDesc, &prScanInfo->rBSSDescList, rLinkEntry, struct BSS_DESC) {
-                if (prBssDesc->u2RawLength > 0) {
-                    kalIndicateBssInfo(prAdapter->prGlueInfo, 
-                                       prBssDesc->aucRawBuf, 
-                                       (uint32_t)prBssDesc->u2RawLength, 
-                                       prBssDesc->ucChannelNum,
-#if (CFG_SUPPORT_WIFI_6G == 1)
-                                       prBssDesc->eBand,
-#endif
-                                       (int32_t)prBssDesc->ucRCPI / 2 - 110);
-                }
-            }
-            /* Reset cooldown so the next RNR-triggered scnSendScanReqV2 isn't blocked */
-            prScanInfo->rLastScanCompletedTime = 0;
-        }
+	LINK_FOR_EACH_ENTRY(prBssDesc, &prScanInfo->rBSSDescList, rLinkEntry, struct BSS_DESC) {
+		scanReportBss2Cfg80211(prAdapter, prBssDesc->eBSSType, prBssDesc);
+		u4BssIndicateCnt++;
+	}
 
-		scnFsmGenerateScanDoneMsg(prAdapter,
-			prScanParam->ucSeqNum,
-			prScanParam->ucBssIndex,
-			SCAN_STATUS_DONE);
+	DBGLOG(SCN, INFO, "Indicated %u BSS entries to kernel.\n", u4BssIndicateCnt);
 
-		scnFsmSteps(prAdapter, SCAN_STATE_IDLE);
-
+	/* 4. Cleanup/Policy Management */
+	if (LINK_IS_EMPTY(&prAdapter->rNeighborAPInfoList)) {
+		scanRemoveBssDescsByPolicy(prAdapter, 
+			SCN_RM_POLICY_EXCLUDE_CONNECTED | SCN_RM_POLICY_TIMEOUT);
 	} else {
-		log_dbg(SCN, INFO,
-			"Unexpected SCAN-DONE event: SeqNum = %d, Current State = %d\n",
-			prScanDone->ucSeqNum,
-			prScanInfo->eCurrentState);
+		prScanInfo->rLastScanCompletedTime = 0;
 	}
 
+	/* 5. Complete FSM Cycle */
+	scnFsmGenerateScanDoneMsg(prAdapter,
+		prScanParam->ucSeqNum,
+		prScanParam->ucBssIndex,
+		SCAN_STATUS_DONE);
+
+	scnFsmSteps(prAdapter, SCAN_STATE_IDLE);
 }
+
+
 /*----------------------------------------------------------------------------*/
+
 /*!
  * \brief
  *

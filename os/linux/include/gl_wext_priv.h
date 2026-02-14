@@ -196,6 +196,7 @@
 #define OID_PNP_SET_POWER                               0xFD010101
 
 #define OID_CUSTOM_OID_INTERFACE_VERSION                0xFFA0C000
+#define OID_CUSTOM_LINK_QUALITY                         0x3011101F
 
 /* MT5921 specific OIDs */
 #define OID_CUSTOM_BT_COEXIST_CTRL                      0xFFA0C580
