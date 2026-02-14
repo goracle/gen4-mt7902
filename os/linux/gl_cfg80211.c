@@ -1145,13 +1145,9 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 #endif
 	struct PARAM_WEP *prWepKey;
 	struct PARAM_WEP wepKey;
-	//uint8_t wepBuf[48];
 	u_int8_t fgAddWepPending = FALSE;
 	struct PARAM_OP_MODE rOpMode;
-
-	/* Is auth parameter needed to be updated to AIS */
 	uint8_t fgNewAuthParam = FALSE;
-
 #if CFG_SUPPORT_802_11R
 	uint32_t u4InfoBufLen = 0;
 #endif
@@ -1164,8 +1160,7 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		return -EINVAL;
 	rOpMode.ucBssIdx = ucBssIndex;
 
-	DBGLOG(REQ, INFO,
-		"auth to  BSS [" MACSTR "]\n",
+	DBGLOG(REQ, INFO, "auth to  BSS [" MACSTR "]\n",
 		MAC2STR((uint8_t *)req->bss->bssid));
 	DBGLOG(REQ, INFO, "auth_type:%d\n", req->auth_type);
 
@@ -1189,7 +1184,7 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		return -EFAULT;
 	}
 
-	/*<2> Set  Auth data */
+	/*<2> Set Auth data */
 	prConnSettings->ucAuthDataLen = 0;
 #if KERNEL_VERSION(4, 10, 0) > CFG80211_VERSION_CODE
 	if (req->sae_data_len != 0) {
@@ -1247,8 +1242,6 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	}
 #endif
 
-	/* after set operation mode, key table are cleared */
-
 #if CFG_SUPPORT_REPLAY_DETECTION
 	/* reset Detect replay information */
 	prDetRplyInfo = aisGetDetRplyInfo(prGlueInfo->prAdapter, ucBssIndex);
@@ -1285,10 +1278,10 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		if (!(prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg
 			& AUTH_TYPE_FAST_BSS_TRANSITION))
 			fgNewAuthParam = TRUE;
-		prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg |= AUTH_TYPE_FAST_BSS_TRANSITION;
+		prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg |= 
+			AUTH_TYPE_FAST_BSS_TRANSITION;
 		break;
 #endif
-
 	default:
 		DBGLOG(REQ, WARN,
 			"Auth type : %u not support, use default OPEN system\n",
@@ -1301,63 +1294,53 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	DBGLOG(REQ, INFO, "Auth Algorithm : %u\n",
 			prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg);
 
-
 #if CFG_SUPPORT_PASSPOINT
 	prGlueInfo->fgConnectHS20AP = FALSE;
-#endif /* CFG_SUPPORT_PASSPOINT */
-
+#endif
 
 	if (req->key_len != 0) {
-		/* NL80211 only set the Tx wep key while connect,
-		* the max 4 wep key set prior via add key cmd
-		*/
 		if (!(prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg &
 						AUTH_TYPE_SHARED_KEY))
 			DBGLOG(REQ, WARN,
 				"Auth Algorithm : %u with wep key\n",
 				prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg);
 
-		// Validate key length before proceeding
 		if (req->key_len > MAX_KEY_LEN) {
-		    DBGLOG(REQ, WARN,
-			"WEP key length (%zu) exceeds maximum (%u)\n",
-			req->key_len, MAX_KEY_LEN);
-		    return -EINVAL;
+			DBGLOG(REQ, WARN,
+				"WEP key length (%zu) exceeds maximum (%u)\n",
+				req->key_len, MAX_KEY_LEN);
+			return -EINVAL;
 		}
 
 		prWepKey = &wepKey;
 		kalMemZero(prWepKey, sizeof(struct PARAM_WEP));
 
 		prWepKey->u4Length = OFFSET_OF(
-		    struct PARAM_WEP, aucKeyMaterial) + req->key_len;
+			struct PARAM_WEP, aucKeyMaterial) + req->key_len;
 		prWepKey->u4KeyLength = (uint32_t) req->key_len;
 		prWepKey->u4KeyIndex = (uint32_t) req->key_idx;
 		prWepKey->u4KeyIndex |= IS_TRANSMIT_KEY;
 
 		kalMemCopy(prWepKey->aucKeyMaterial,
-		    req->key, prWepKey->u4KeyLength);
+			req->key, prWepKey->u4KeyLength);
 
-		// *** INSTALL KEY IMMEDIATELY - BEFORE AUTH ***
 		rStatus = kalIoctl(prGlueInfo,
-			    wlanoidSetAddWep, prWepKey,
-			    prWepKey->u4Length,
-			    FALSE, FALSE, TRUE, &u4BufLen);
+			wlanoidSetAddWep, prWepKey,
+			prWepKey->u4Length,
+			FALSE, FALSE, TRUE, &u4BufLen);
 
 		if (rStatus != WLAN_STATUS_SUCCESS) {
-		    DBGLOG(INIT, WARN,
-			"wlanoidSetAddWep fail 0x%x\n", rStatus);
-		    return -EFAULT;
+			DBGLOG(INIT, WARN,
+				"wlanoidSetAddWep fail 0x%x\n", rStatus);
+			return -EFAULT;
 		}
 
 		DBGLOG(REQ, INFO, 
-		    "WEP key installed: idx=%u, len=%u, txkey=%d\n",
-		    prWepKey->u4KeyIndex & ~IS_TRANSMIT_KEY,
-		    prWepKey->u4KeyLength,
-		    !!(prWepKey->u4KeyIndex & IS_TRANSMIT_KEY));
-
+			"WEP key installed: idx=%u, len=%u, txkey=%d\n",
+			prWepKey->u4KeyIndex & ~IS_TRANSMIT_KEY,
+			prWepKey->u4KeyLength,
+			!!(prWepKey->u4KeyIndex & IS_TRANSMIT_KEY));
 	}
-
-
 
 	kalMemZero(&rNewSsid, sizeof(struct PARAM_CONNECT));
 
@@ -1370,8 +1353,8 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 
 #if CFG_SUPPORT_802_11V_BSS_TRANSITION_MGT || CFG_SUPPORT_802_11R
 	DBGLOG(REQ, WARN, "SSID len %d, ssid %s, %d\n",
-				req->bss->ies->len, SSID_IE(req->bss->ies->data)->aucSSID,
-				SSID_IE(req->bss->ies->data)->ucLength);
+		req->bss->ies->len, SSID_IE(req->bss->ies->data)->aucSSID,
+		SSID_IE(req->bss->ies->data)->ucLength);
 
 	if (req->bss->ies->len != 0 &&
 		IE_ID(req->bss->ies->data) == ELEM_ID_SSID) {
@@ -1379,6 +1362,7 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		rNewSsid.u4SsidLen = SSID_IE(req->bss->ies->data)->ucLength;
 	}
 #endif
+
 #if CFG_SUPPORT_802_11R
 	if (req->auth_type == NL80211_AUTHTYPE_FT) {
 		rStatus = kalIoctl(prGlueInfo, wlanoidUpdateFtIes,
@@ -1388,17 +1372,14 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 			DBGLOG(REQ, WARN, "update FTIE fail:%x\n", rStatus);
 			return -EINVAL;
 		}
-
 	}
 #endif
 
 	prConnSettings->fgIsSendAssoc = FALSE;
 	if (!prConnSettings->fgIsConnInitialized || fgNewAuthParam) {
-		/* [TODO] to consider if bssid/auth_alg
-		* changed(need to update to AIS)
-		*/
 		if (fgNewAuthParam)
 			DBGLOG(REQ, WARN, "auth param update\n");
+		
 		rStatus = kalIoctl(prGlueInfo, wlanoidSetConnect,
 			(void *)&rNewSsid, sizeof(struct PARAM_CONNECT),
 			FALSE, FALSE, FALSE, &u4BufLen);
@@ -1408,24 +1389,20 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 			return -EINVAL;
 		}
 	} else {
-		/* skip join initial flow when it has been completed with
-		* the same auth parameters
-		*/
 		rStatus = kalIoctlByBssIdx(prGlueInfo, wlanoidSendAuthAssoc,
-				(void *)req->bss->bssid, MAC_ADDR_LEN,
-				FALSE, FALSE, TRUE, &u4BufLen, ucBssIndex);
+			(void *)req->bss->bssid, MAC_ADDR_LEN,
+			FALSE, FALSE, TRUE, &u4BufLen, ucBssIndex);
 		if (rStatus != WLAN_STATUS_SUCCESS) {
 			DBGLOG(REQ, WARN, "send auth failed:%x\n", rStatus);
 			return -EINVAL;
 		}
-
 	}
 
 	if (fgAddWepPending) {
 		rStatus = kalIoctl(prGlueInfo,
-				   wlanoidSetAddWep, prWepKey,
-				   prWepKey->u4Length,
-				   FALSE, FALSE, TRUE, &u4BufLen);
+			wlanoidSetAddWep, prWepKey,
+			prWepKey->u4Length,
+			FALSE, FALSE, TRUE, &u4BufLen);
 
 		if (rStatus != WLAN_STATUS_SUCCESS) {
 			DBGLOG(INIT, INFO,
@@ -1436,6 +1413,13 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 
 	return 0;
 }
+
+
+
+
+
+
+
 
 /* Add .disassoc method to avoid kernel WARN_ON when insmod wlan.ko */
 int mtk_cfg80211_disassoc(struct wiphy *wiphy, struct net_device *ndev,

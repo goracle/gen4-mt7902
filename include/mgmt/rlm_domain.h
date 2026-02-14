@@ -1043,8 +1043,9 @@ struct DOMAIN_INFO_ENTRY *rlmDomainGetDomainInfo(
 u_int8_t rlmIsValidChnl(struct ADAPTER *prAdapter, uint8_t ucNumOfChannel,
 			enum ENUM_BAND eBand);
 
-void
-rlmDomainGetChnlList(struct ADAPTER *prAdapter,
+void rlmDomainInitSkuDatabase(struct ADAPTER *prAdapter);
+
+void rlmDomainGetChnlList(struct ADAPTER *prAdapter,
 		     enum ENUM_BAND eSpecificBand, u_int8_t fgNoDfs,
 		     uint8_t ucMaxChannelNum, uint8_t *pucNumOfChannel,
 		     struct RF_CHANNEL_INFO *paucChannelList);

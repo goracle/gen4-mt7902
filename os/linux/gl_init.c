@@ -97,6 +97,8 @@
 #include "gl_vendor_ndp.h"
 #endif
 
+#include "mgmt/rlm_domain.h"
+
 /*******************************************************************************
  *                              C O N S T A N T S
  *******************************************************************************
@@ -3351,6 +3353,11 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 		      pvDriverData)->chip_info;
 	prAdapter->chip_info = prChipInfo;
 	prGlueInfo->prAdapter = prAdapter;
+
+	if (regd_is_single_sku_en()) {
+	  rlmDomainInitSkuDatabase(prAdapter);
+	}
+
 
 	/* 4 <3> Initialize Glue structure */
 	/* 4 <3.1> Create net device */

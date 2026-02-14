@@ -96,7 +96,7 @@
 
 /*For CFG80211 - wiphy parameters*/
 #define MAX_SCAN_LIST_NUM   (1)
-#define MAX_SCAN_IE_LEN     (512)
+#define MAX_SCAN_IE_LEN     (1024)
 
 #if 0
 #define RUNNING_P2P_MODE 0

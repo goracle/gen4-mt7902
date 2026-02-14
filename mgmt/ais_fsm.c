@@ -1348,15 +1348,18 @@ static const char *ais_state_names[] = {
 /* ============================================================
  * STATE HANDLER: IDLE
  * ============================================================ */
+/* ============================================================
+ * STATE HANDLER: IDLE
+ * ============================================================ */
 static enum ENUM_AIS_STATE
 aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 {
-	struct AIS_FSM_INFO      *prAisFsmInfo    = aisGetAisFsmInfo(prAdapter, ucBssIndex);
-	struct BSS_INFO          *prAisBssInfo    = aisGetAisBssInfo(prAdapter, ucBssIndex);
-	struct CONNECTION_SETTINGS *prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
-	struct AIS_REQ_HDR       *prAisReq;
-	enum ENUM_AIS_STATE       eNextState = AIS_STATE_IDLE;
-	u_int8_t                  fgIsTransition = FALSE;
+	struct AIS_FSM_INFO        *prAisFsmInfo    = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+	struct BSS_INFO            *prAisBssInfo    = aisGetAisBssInfo(prAdapter, ucBssIndex);
+	struct CONNECTION_SETTINGS *prConnSettings  = aisGetConnSettings(prAdapter, ucBssIndex);
+	struct AIS_REQ_HDR         *prAisReq;
+	enum ENUM_AIS_STATE         eNextState      = AIS_STATE_IDLE;
+	u_int8_t                    fgIsTransition  = FALSE;
 
 	DBGLOG(AIS, LOUD,
 	       "[AIS%d] STATE_IDLE ENTRY: PrevState=%s fgIsConnReqIssued=%d fgIsDisconnByNonReq=%d reporting=%d\n",
@@ -1391,22 +1394,24 @@ aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 
 	if (prAisReq == NULL || prAisReq->eReqType == AIS_REQUEST_RECONNECT) {
 
-		/* --- OWNERSHIP GUARD START --- */
-		/* If the Glue Layer is currently reporting scan results to the OS,
-		 * we MUST NOT deactivate the network. Deactivation sends a command 
-		 * to the MT7902 to flush/reset, which destroys the BSS buffers 
-		 * the kernel is currently reading.
+		/* * --- OWNERSHIP GUARD (H-FIX) ---
+		 * We block the IDLE state from cleaning up the BSS and killing 
+		 * the PCIe link while the OS (Glue Layer) is still reporting results.
 		 */
 		if (prAisFsmInfo->fgIsScanReporting) {
-			DBGLOG(AIS, INFO, "[AIS%d] IDLE: Deferring deactivation, reporting in progress...\n", 
+			DBGLOG(AIS, INFO, "[AIS%d] IDLE: H-FIX: OS still reporting. Blocking deactivation.\n", 
 			       ucBssIndex);
+
+			SET_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
+			nicActivateNetwork(prAdapter, prAisBssInfo->ucBssIndex);
+			SET_NET_PWR_STATE_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
 		} 
 		else if (IS_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex)) {
+			/* Deactivate ONLY when the OS has released the reporting flag */
 			DBGLOG(AIS, LOUD, "[AIS%d] IDLE: Deactivating network\n", ucBssIndex);
 			UNSET_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
 			nicDeactivateNetwork(prAdapter, prAisBssInfo->ucBssIndex);
 		}
-		/* --- OWNERSHIP GUARD END --- */
 
 		if (prConnSettings->fgIsConnReqIssued == TRUE &&
 		    prConnSettings->fgIsDisconnectedByNonRequest == FALSE) {
@@ -1424,15 +1429,16 @@ aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 			eNextState = AIS_STATE_SEARCH;
 			fgIsTransition = TRUE;
 		} else {
-			DBGLOG(AIS, LOUD,
-			       "[AIS%d] IDLE: Setting power state to IDLE, schedScan=%d\n",
-			       ucBssIndex,
-			       prAdapter->rWifiVar.rScanInfo.fgSchedScanning);
-
-			/* Only set power state to IDLE if we aren't holding the 
-			 * door open for a scan report. */
-			if (!prAisFsmInfo->fgIsScanReporting)
+			/* Force Power State ACTIVE if the OS still owns the device */
+			if (prAisFsmInfo->fgIsScanReporting) {
+				SET_NET_PWR_STATE_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
+			} else {
+				DBGLOG(AIS, LOUD,
+				       "[AIS%d] IDLE: Setting power state to IDLE, schedScan=%d\n",
+				       ucBssIndex,
+				       prAdapter->rWifiVar.rScanInfo.fgSchedScanning);
 				SET_NET_PWR_STATE_IDLE(prAdapter, prAisBssInfo->ucBssIndex);
+			}
 
 			if (prAdapter->rWifiVar.rScanInfo.fgSchedScanning) {
 				SET_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
@@ -1455,7 +1461,6 @@ aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 			cnmMemFree(prAdapter, prAisReq);
 
 	} else if (prAisReq->eReqType == AIS_REQUEST_SCAN) {
-		/* ... rest of your existing logic remains identical ... */
 		DBGLOG(AIS, LOUD, "[AIS%d] IDLE: Processing SCAN request\n", ucBssIndex);
 #if CFG_SUPPORT_ROAMING
 		prAisFsmInfo->fgIsRoamingScanPending = FALSE;
@@ -1506,7 +1511,6 @@ aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 
 	return fgIsTransition ? eNextState : AIS_STATE_IDLE;
 }
-
 
 /* ============================================================
  * STATE HANDLER: SEARCH
@@ -2077,6 +2081,7 @@ aisHandleState_SCAN_FAMILY(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	}
 
 	/* Apply the final MT7902 RNR override before sending */
+/* MOD: Disable RNR Override
 	if (prScanRequest->u4ChannelNum > 0) {
 		prScanReqMsg->eScanChannel     = SCAN_CHANNEL_SPECIFIED;
 		prScanReqMsg->ucChannelListNum = (uint8_t)prScanRequest->u4ChannelNum;
@@ -2088,7 +2093,7 @@ aisHandleState_SCAN_FAMILY(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 		       "[MT7902] RNR Fix: Overriding eScanChannel to SPECIFIED for %d channels\n",
 		       prScanReqMsg->ucChannelListNum);
 	}
-
+*/
 	/* Copy IE payload */
 	if (u2ScanIELen > 0) {
 		kalMemCopy(prScanReqMsg->aucIE, prScanRequest->pucIE, u2ScanIELen);
@@ -2858,140 +2863,113 @@ void aisFsmRunEventScanDone(IN struct ADAPTER *prAdapter,
 {
     struct MSG_SCN_SCAN_DONE *prScanDoneMsg;
     struct AIS_FSM_INFO *prAisFsmInfo;
-    enum ENUM_AIS_STATE eNextState;
-    uint8_t ucSeqNumOfCompMsg;
     struct CONNECTION_SETTINGS *prConnSettings;
-    enum ENUM_SCAN_STATUS eStatus = SCAN_STATUS_DONE;
     struct RADIO_MEASUREMENT_REQ_PARAMS *prRmReq;
-    struct BCN_RM_PARAMS *prBcnRmParam;
-    uint8_t ucBssIndex = 0;
-    u_int8_t fgIsScanReqIssued = FALSE;
+    enum ENUM_AIS_STATE eNextState;
+    uint8_t ucBssIndex;
+    uint8_t ucSeqNum;
+    enum ENUM_SCAN_STATUS eStatus;
 
-    DEBUGFUNC("aisFsmRunEventScanDone()");
+    if (!prAdapter || !prMsgHdr)
+        return;
 
+    /* --- 1. EXTRACTION & VALIDATION --- */
     prScanDoneMsg = (struct MSG_SCN_SCAN_DONE *)prMsgHdr;
     ucBssIndex = prScanDoneMsg->ucBssIndex;
+    ucSeqNum = prScanDoneMsg->ucSeqNum;
+    eStatus = prScanDoneMsg->eScanStatus;
 
     prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
-    if (prAisFsmInfo)
-        prAisFsmInfo->fgIsScanReporting = TRUE;
     prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
     prRmReq = aisGetRmReqParam(prAdapter, ucBssIndex);
-    prBcnRmParam = &prRmReq->rBcnRmParam;
 
-    ucSeqNumOfCompMsg = prScanDoneMsg->ucSeqNum;
-    eStatus = prScanDoneMsg->eScanStatus;
-    
-    /* Save this flag before we potentially clear it in the state transition */
-    fgIsScanReqIssued = prConnSettings->fgIsScanReqIssued;
-
-    /* Free the message immediately to prevent leaks */
-    cnmMemFree(prAdapter, prMsgHdr);
-
-    DBGLOG(AIS, INFO, "ScanDone Seq:%u, Status:%d, CurrentState:%d\n",
-           ucSeqNumOfCompMsg, eStatus, prAisFsmInfo->eCurrentState);
-
-    /* 1. Validate Sequence Number */
-    if (ucSeqNumOfCompMsg != prAisFsmInfo->ucSeqNumOfScanReq) {
-        DBGLOG(AIS, WARN, "SEQ NO mismatch: Msg %u vs Req %u. Ignoring.\n",
-               ucSeqNumOfCompMsg, prAisFsmInfo->ucSeqNumOfScanReq);
+    if (!prAisFsmInfo || !prConnSettings) {
+        cnmMemFree(prAdapter, prMsgHdr);
         return;
     }
 
-    /* 2. Stop the Watchdog Timer (Fixes the 15s timeout crash) */
+    prAisFsmInfo->fgIsScanReporting = TRUE;
+
+    DBGLOG(AIS, INFO, "ScanDone [BSS %u] Seq:%u, Status:%d, CurrentState:%u\n",
+           ucBssIndex, ucSeqNum, eStatus, (uint32_t)prAisFsmInfo->eCurrentState);
+
+    if (ucSeqNum != prAisFsmInfo->ucSeqNumOfScanReq) {
+        DBGLOG(AIS, WARN, "Discarding stale ScanDone (Seq %u != Expected %u)\n",
+               ucSeqNum, prAisFsmInfo->ucSeqNumOfScanReq);
+        prAisFsmInfo->fgIsScanReporting = FALSE;
+        cnmMemFree(prAdapter, prMsgHdr);
+        return;
+    }
+
+    /* --- 2. CLEANUP --- */
     prAisFsmInfo->fgIsScanning = FALSE;
     cnmTimerStopTimer(prAdapter, &prAisFsmInfo->rScanDoneTimer);
 
-    /* 3. FLUSH RNR GHOSTS (The Critical Fix) 
-     * Instead of trying to recursively scan 6GHz neighbors (which hangs the FSM),
-     * we drain the list and free the memory. This unblocks the driver.
-     */
-
-
-
-
-
-#if 0
-#if (CFG_SUPPORT_WIFI_RNR == 1)
-    if (!LINK_IS_EMPTY(&prAdapter->rNeighborAPInfoList)) {
-        struct NEIGHBOR_AP_INFO *prInfo, *prTemp;
-
-        DBGLOG(AIS, WARN, "RNR: Flushing %u neighbor reports to prevent FSM hang.\n",
-               prAdapter->rNeighborAPInfoList.u4NumElem);
-
-        LINK_FOR_EACH_ENTRY_SAFE(prInfo, prTemp, &prAdapter->rNeighborAPInfoList,
-                                 rLinkEntry, struct NEIGHBOR_AP_INFO) {
-            LINK_REMOVE_HEAD(&prAdapter->rNeighborAPInfoList, prInfo,
-                             struct NEIGHBOR_AP_INFO *);  /* was _T * — wrong */
-            cnmMemFree(prAdapter, prInfo);
-        }
-    }
-#endif
-#endif // attempt to fix 0 Bss found bug
-
-    /* 4. Determine Next State */
+    /* --- 3. STATE TRANSITION --- */
     eNextState = prAisFsmInfo->eCurrentState;
-
     switch (prAisFsmInfo->eCurrentState) {
     case AIS_STATE_SCAN:
-        /* If we were connecting, go to SEARCH to find the target.
-         * Otherwise, go back to IDLE so iwd can scan again. 
-         */
-        if (prConnSettings->fgIsConnReqIssued)
-            eNextState = AIS_STATE_SEARCH;
-        else
-            eNextState = AIS_STATE_IDLE;
+        eNextState = prConnSettings->fgIsConnReqIssued ? 
+                     AIS_STATE_SEARCH : AIS_STATE_IDLE;
         break;
-
     case AIS_STATE_ONLINE_SCAN:
     case AIS_STATE_LOOKING_FOR:
         scanGetCurrentEssChnlList(prAdapter, ucBssIndex);
 #if CFG_SUPPORT_ROAMING
         eNextState = aisFsmRoamingScanResultsUpdate(prAdapter, ucBssIndex);
 #else
-        eNextState = (prAisFsmInfo->eCurrentState == AIS_STATE_ONLINE_SCAN) ? 
+        eNextState = (prAisFsmInfo->eCurrentState == AIS_STATE_ONLINE_SCAN) ?
                       AIS_STATE_NORMAL_TR : AIS_STATE_SEARCH;
 #endif
         break;
-
     default:
-        /* If we are in IDLE but got a ScanDone, just stay in IDLE */
         break;
     }
 
-    /* 5. Perform State Transition */
-    if (eNextState != prAisFsmInfo->eCurrentState) {
+    if (eNextState != prAisFsmInfo->eCurrentState)
         aisFsmSteps(prAdapter, eNextState, ucBssIndex);
-    }
 
-    /* 6. Report to Userspace (Fixes 'Device Busy') 
-     * We MUST report this, or iw/iwd will hang forever.
-     */
-    if ((uint16_t)ucSeqNumOfCompMsg == prAisFsmInfo->u2SeqNumOfScanReport) {
+    /* --- 4. THE FIX: DATA HYDRATION & REPORTING --- */
+    if ((uint16_t)ucSeqNum == prAisFsmInfo->u2SeqNumOfScanReport) {
         prAisFsmInfo->u2SeqNumOfScanReport = AIS_SCN_REPORT_SEQ_NOT_SET;
         prConnSettings->fgIsScanReqIssued = FALSE;
 
-        /* Only report if RRM isn't hijacking the scan */
-        if (prRmReq->rBcnRmParam.eState != RM_ON_GOING) {
-            DBGLOG(AIS, INFO, "Reporting Scan Done to OS (Status: %d)\n", eStatus);
-            kalScanDone(prAdapter->prGlueInfo, ucBssIndex,
-                (eStatus == SCAN_STATUS_DONE) ? WLAN_STATUS_SUCCESS : WLAN_STATUS_FAILURE);
-        }
+
+
+
+if (prRmReq->rBcnRmParam.eState != RM_ON_GOING) {
+	
+	/* Populate the legacy ESS buffer */
+	scanUpdateEssResult(prAdapter);
+	
+	/* Print the SSIDs to the log - this will now actually work! */
+	scanLogEssResult(prAdapter);
+
+	uint32_t u4Status = (eStatus == SCAN_STATUS_DONE) ? 
+			      WLAN_STATUS_SUCCESS : WLAN_STATUS_FAILURE;
+	
+	DBGLOG(AIS, INFO, "Indicating %u BSS entries to Kernel\n", 
+	       prAdapter->rWlanInfo.u4ScanResultEssNum);
+	
+	kalScanDone(prAdapter->prGlueInfo, ucBssIndex, u4Status);
+}
+
+
+
     }
 
-    /* 7. Handle RRM (Radio Resource Management) */
-    if (prBcnRmParam->eState != RM_NO_REQUEST) {
-        if (prBcnRmParam->eState == RM_WAITING) {
+
+
+    /* --- 5. RRM / CLEANUP --- */
+    if (prRmReq->rBcnRmParam.eState != RM_NO_REQUEST) {
+        if (prRmReq->rBcnRmParam.eState == RM_WAITING)
             rrmDoBeaconMeasurement(prAdapter, ucBssIndex);
-        } else if (prBcnRmParam->rNormalScan.fgExist) {
-            /* If an RRM scan was buffered, trigger it now that we are IDLE */
-            prBcnRmParam->eState = RM_WAITING;
-            prBcnRmParam->rNormalScan.fgExist = FALSE;
-            aisFsmScanRequestAdv(prAdapter, &prBcnRmParam->rNormalScan.rScanRequest);
-        } else {
+        else
             rrmStartNextMeasurement(prAdapter, FALSE, ucBssIndex);
-        }
     }
+
+    prAisFsmInfo->fgIsScanReporting = FALSE;
+    cnmMemFree(prAdapter, prMsgHdr);
 }
 
 /*----------------------------------------------------------------------------*/

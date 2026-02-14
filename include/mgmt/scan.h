@@ -534,6 +534,9 @@ struct SCAN_PARAM {	/* Used by SCAN FSM */
 
 };
 
+
+void scanUpdateEssResult(struct ADAPTER *prAdapter);
+
 struct SCHED_SCAN_PARAM {	/* Used by SCAN FSM */
 	uint8_t ucSeqNum;
 	uint8_t ucBssIndex;              /* Network Type */

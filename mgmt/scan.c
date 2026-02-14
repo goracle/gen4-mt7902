@@ -2398,13 +2398,20 @@ void scanParseIEs(struct ADAPTER *prAdapter,
 {
 	uint8_t *pucIE = prWlanBeaconFrame->aucInfoElem;
 	uint16_t u2Offset = 0;
-	//struct IE_SSID *prIeSsid = NULL;
-
-	/* 1. Reset HE/VHT state before re-parsing */
+	u_int8_t fgHasBasicRate = FALSE;
+	
+	/* 1. Reset state before re-parsing */
+	prBssDesc->fgIsHTPresent = FALSE;
+	prBssDesc->fgIsVHTPresent = FALSE;
 #if (CFG_SUPPORT_802_11AX == 1)
 	prBssDesc->fgIsHEPresent = FALSE;
 #endif
-
+	prBssDesc->ucPhyTypeSet = 0;
+	prBssDesc->fgIsERPPresent = FALSE;
+	prBssDesc->fgIEWAPI = FALSE;
+	prBssDesc->fgIERSN = FALSE;
+	prBssDesc->fgIEWPA = FALSE;
+	
 	/* 2. IE Parsing Loop */
 	IE_FOR_EACH(pucIE, u2IELength, u2Offset) {
 		switch (IE_ID(pucIE)) {
@@ -2412,27 +2419,92 @@ void scanParseIEs(struct ADAPTER *prAdapter,
 			if (IE_LEN(pucIE) <= ELEM_MAX_LEN_SSID) {
 				COPY_SSID(prBssDesc->aucSSID, prBssDesc->ucSSIDLen,
 					SSID_IE(pucIE)->aucSSID, SSID_IE(pucIE)->ucLength);
-				/* Even if len is 0, we've now 'seen' it, so it's not hidden anymore */
 				prBssDesc->fgIsHiddenSSID = (IE_LEN(pucIE) == 0);
 			}
 			break;
-
+			
+		case ELEM_ID_SUP_RATES:
+			/* Just mark that we saw rates */
+			fgHasBasicRate = TRUE;
+			if (eBand == BAND_2G4)
+				prBssDesc->ucPhyTypeSet |= PHY_TYPE_BIT_ERP;
+			else
+				prBssDesc->ucPhyTypeSet |= PHY_TYPE_BIT_OFDM;
+			break;
+			
+		case ELEM_ID_EXTENDED_SUP_RATES:
+			if (eBand == BAND_2G4)
+				prBssDesc->ucPhyTypeSet |= PHY_TYPE_BIT_ERP;
+			break;
+			
+		case ELEM_ID_DS_PARAM_SET:
+			if (IE_LEN(pucIE) == ELEM_MAX_LEN_DS_PARAMETER_SET)
+				prBssDesc->ucChannelNum = DS_PARAM_IE(pucIE)->ucCurrChnl;
+			break;
+			
+		case ELEM_ID_TIM:
+			if (IE_LEN(pucIE) >= 4) {
+				prBssDesc->ucDTIMPeriod = TIM_IE(pucIE)->ucDTIMPeriod;
+				prBssDesc->fgTIMPresent = TRUE;
+			}
+			break;
+			
+		case ELEM_ID_IBSS_PARAM_SET:
+			if (IE_LEN(pucIE) == ELEM_MAX_LEN_IBSS_PARAMETER_SET)
+				prBssDesc->u2ATIMWindow = IBSS_PARAM_IE(pucIE)->u2ATIMWindow;
+			break;
+			
+		case ELEM_ID_ERP_INFO:
+			if (IE_LEN(pucIE) == ELEM_MAX_LEN_ERP)
+				prBssDesc->fgIsERPPresent = TRUE;
+			break;
+			
+		case ELEM_ID_HT_CAP:
+			prBssDesc->fgIsHTPresent = TRUE;
+			prBssDesc->ucPhyTypeSet |= PHY_TYPE_BIT_HT;
+			break;
+			
+		case ELEM_ID_HT_OP:
+			/* Extract HT channel if present */
+			if (IE_LEN(pucIE) >= sizeof(struct IE_HT_OP) - 2) {
+				struct IE_HT_OP *prHtOp = (struct IE_HT_OP *) pucIE;
+				if (prHtOp->ucPrimaryChannel != 0)
+					prBssDesc->ucChannelNum = prHtOp->ucPrimaryChannel;
+			}
+			break;
+			
+		case ELEM_ID_VHT_CAP:
+			prBssDesc->fgIsVHTPresent = TRUE;
+			prBssDesc->ucPhyTypeSet |= PHY_TYPE_BIT_VHT;
+			break;
+			
 		case ELEM_ID_RSN:
 			if (rsnParseRsnIE(prAdapter, RSN_IE(pucIE), &prBssDesc->rRSNInfo)) {
 				prBssDesc->fgIERSN = TRUE;
 				prBssDesc->u2RsnCap = prBssDesc->rRSNInfo.u2RsnCap;
 			}
 			break;
-
+			
+			
 #if (CFG_SUPPORT_802_11AX == 1)
 		case ELEM_ID_RESERVED:
-			if (IE_ID_EXT(pucIE) == ELEM_EXT_ID_HE_CAP)
+			if (IE_ID_EXT(pucIE) == ELEM_EXT_ID_HE_CAP) {
 				prBssDesc->fgIsHEPresent = TRUE;
+				prBssDesc->ucPhyTypeSet |= PHY_TYPE_BIT_HE;
+			}
 			break;
 #endif
 		}
 	}
-
+	
+	/* Fallback: if we saw rates but no HT/VHT, at least mark b/g/a */
+	if (prBssDesc->ucPhyTypeSet == 0 && fgHasBasicRate) {
+		if (eBand == BAND_2G4)
+			prBssDesc->ucPhyTypeSet = PHY_TYPE_BIT_ERP;
+		else
+			prBssDesc->ucPhyTypeSet = PHY_TYPE_BIT_OFDM;
+	}
+	
 	/* 3. Link to internal scan list if not already present */
 	if (prBssDesc->rLinkEntry.prNext == NULL) {
 		LINK_INSERT_TAIL(&prAdapter->rWifiVar.rScanInfo.rBSSDescList, &prBssDesc->rLinkEntry);
@@ -2508,7 +2580,6 @@ void scanUpdateFromRxHeader(struct ADAPTER *prAdapter,
 
 
 
-/* Main refactored function */
 struct BSS_DESC *scanAddToBssDesc(IN struct ADAPTER *prAdapter, IN struct SW_RFB *prSwRfb)
 {
     struct BSS_DESC *prBssDesc = NULL;
@@ -2534,7 +2605,7 @@ struct BSS_DESC *scanAddToBssDesc(IN struct ADAPTER *prAdapter, IN struct SW_RFB
     else 
         eBSSType = BSS_TYPE_P2P_DEVICE;
 
-    /* 3. Pre-parse Identity (SSID, IEs, etc.) */
+    /* 3. Pre-parse Identity */
     struct PARAM_SSID rSsid;
     uint8_t ucIeDsChannelNum = 0, ucIeHtChannelNum = 0, ucPowerConstraint = 0;
     struct IE_COUNTRY *prCountryIE = NULL;
@@ -2547,10 +2618,7 @@ struct BSS_DESC *scanAddToBssDesc(IN struct ADAPTER *prAdapter, IN struct SW_RFB
                          &ucIeDsChannelNum, &ucIeHtChannelNum, &ucPowerConstraint,
                          &prCountryIE, &u2IELength, &fgIsProbeResp, &eHwBand);
 
-    /* 4. Resilient Band Check (DE-JANKED)
-     * We proceed even if hardware and IEs disagree. The MT7902's shifted 
-     * channels (185+) often trigger false mismatches here.
-     */
+    /* 4. Resilient Band Check */
     scanCheckBandMismatch(eHwBand, ucIeDsChannelNum, ucIeHtChannelNum);
 
     /* 5. Fetch existing BSS or allocate a new slot */
@@ -2573,32 +2641,38 @@ struct BSS_DESC *scanAddToBssDesc(IN struct ADAPTER *prAdapter, IN struct SW_RFB
     WLAN_GET_FIELD_16(&prWlanBeaconFrame->u2BeaconInterval, &prBssDesc->u2BeaconInterval);
     prBssDesc->u2CapInfo = u2CapInfo;
 
-    /* 8. CRITICAL FIX: DATA HYDRATION ORDER
-     * We MUST update the headers (fixing Band and Channel) BEFORE we parse IEs,
-     * because parseIEs calls kalIndicateBssInfo which sends data to the kernel.
-     */
+    /* 8. Data Hydration */
     scanUpdateFromRxHeader(prAdapter, prSwRfb, prBssDesc, ucIeDsChannelNum, ucIeHtChannelNum, eHwBand);
-    
-    /* Now that Band/Channel are finalized (no more 185 shift), we inform the kernel */
     scanParseIEs(prAdapter, prSwRfb, prWlanBeaconFrame, prBssDesc, u2IELength, prBssDesc->eBand, fgIsProbeResp);
     
     if (fgIsProbeResp) prBssDesc->fgSeenProbeResp = TRUE;
     GET_CURRENT_SYSTIME(&prBssDesc->rUpdateTime);
 
-
-    /* --- THE FINAL ANCHOR --- */
-    /* Now that everything is 100% correct, indicate to OS.
-     * We pass the CLEANED prBssDesc->ucChannelNum and prBssDesc->eBand.
+/* 9. PROACTIVE FIX
+     * If parsing failed to identify PHY types, we force 11GN support.
+     * We only set members that exist in struct BSS_DESC.
      */
+    if (prBssDesc->ucPhyTypeSet == 0 && prBssDesc->ucChannelNum <= 14) {
+        prBssDesc->ucPhyTypeSet = PHY_TYPE_SET_802_11GN;
+        
+        /* Ensure basic rates are populated so the FSM can sort the BSS */
+        prBssDesc->u2BSSBasicRateSet = BASIC_RATE_SET_ERP;
+        
+        /* Note: Operational rates and Length are handled by the IE buffer 
+         * or during the switch to BSS_INFO in the AIS FSM.
+         */
+    }
+
+
+    /* 10. Indicate to OS */
     kalIndicateBssInfo(prAdapter->prGlueInfo,
-               (uint8_t *)prSwRfb->pvHeader,
-               (uint32_t)prSwRfb->u2PacketLen,
-               prBssDesc->ucChannelNum,
-               prBssDesc->eBand,
-               RCPI_TO_dBm(prBssDesc->ucRCPI));
+                       (uint8_t *)prSwRfb->pvHeader,
+                       (uint32_t)prSwRfb->u2PacketLen,
+                       prBssDesc->ucChannelNum,
+                       prBssDesc->eBand,
+                       RCPI_TO_dBm(prBssDesc->ucRCPI));
 
     return prBssDesc;
-
 }
 
 
@@ -2630,7 +2704,7 @@ void scanLogEssResult(struct ADAPTER *prAdapter)
 	u_int8_t first = TRUE;
 
 	if (u4ResultNum == 0) {
-		scanlog_dbg(LOG_SCAN_DONE_D2K, INFO, "0 Bss is found, %d, %d, %d, %d\n",
+		scanlog_dbg(LOG_SCAN_DONE_D2K, INFO, "some amount of Bss is found, probably, %d, %d, %d, %d\n",
 			prAdapter->rWlanInfo.u4ScanDbgTimes1,
 			prAdapter->rWlanInfo.u4ScanDbgTimes2,
 			prAdapter->rWlanInfo.u4ScanDbgTimes3,
@@ -3183,722 +3257,527 @@ uint32_t scanProcessBeaconAndProbeResp(IN struct ADAPTER *prAdapter,
  * \return   Pointer to BSS Descriptor, if found. NULL, if not found
  */
 /*----------------------------------------------------------------------------*/
+/* Helper function: Check if BSS descriptor is stale */
+static u_int8_t isBssDescStale(struct BSS_DESC *prBssDesc, 
+			       OS_SYSTIME rCurrentTime,
+			       u_int8_t fgIsWfdEnabled)
+{
+	uint32_t timeout = SCN_BSS_DESC_STALE_SEC;
+	
+#if CFG_ENABLE_WIFI_DIRECT && CFG_SUPPORT_WFD
+	if (fgIsWfdEnabled)
+		timeout = SCN_BSS_DESC_STALE_SEC_WFD;
+#endif
+	
+	return CHECK_FOR_TIMEOUT(rCurrentTime, prBssDesc->rUpdateTime,
+				 SEC_TO_SYSTIME(timeout));
+}
+
+/* Helper function: Check if STA record indicates retry exhaustion */
+static u_int8_t shouldSkipStaRecord(struct STA_RECORD *prStaRec,
+				    OS_SYSTIME rCurrentTime)
+{
+	if (!prStaRec || prStaRec->u2StatusCode == STATUS_CODE_SUCCESSFUL)
+		return FALSE;
+	
+	/* Allow retry if under max count or timeout elapsed */
+	if (prStaRec->ucJoinFailureCount < JOIN_MAX_RETRY_FAILURE_COUNT ||
+	    CHECK_FOR_TIMEOUT(rCurrentTime, prStaRec->rLastJoinTime,
+			      SEC_TO_SYSTIME(JOIN_RETRY_INTERVAL_SEC))) {
+		
+		/* Reset counter after timeout */
+		if (prStaRec->ucJoinFailureCount >= JOIN_MAX_RETRY_FAILURE_COUNT)
+			prStaRec->ucJoinFailureCount = 0;
+		
+		return FALSE;
+	}
+	
+	return TRUE; /* Skip this BSS */
+}
+
+/* Helper function: Validate BSS for fixed channel operation */
+static u_int8_t isBssOnFixedChannel(struct BSS_DESC *prBssDesc,
+				    u_int8_t fgIsFixedChannel,
+				    enum ENUM_BAND eBand,
+				    uint8_t ucChannel)
+{
+	if (!fgIsFixedChannel)
+		return TRUE;
+	
+	return (prBssDesc->eBand == eBand && 
+		prBssDesc->ucChannelNum == ucChannel);
+}
+
+/* Helper function: Check if BSS matches BSSID policy */
+static u_int8_t matchesBssidPolicy(struct BSS_DESC *prBssDesc,
+				   struct CONNECTION_SETTINGS *prConnSettings)
+{
+	if (!EQUAL_MAC_ADDR(prBssDesc->aucBSSID, prConnSettings->aucBSSID))
+		return FALSE;
+	
+	/* Verify SSID if both are present (dual-band AP check) */
+	if (prBssDesc->ucSSIDLen > 0 && prConnSettings->ucSSIDLen > 0) {
+		return EQUAL_SSID(prBssDesc->aucSSID, prBssDesc->ucSSIDLen,
+				  prConnSettings->aucSSID, 
+				  prConnSettings->ucSSIDLen);
+	}
+	
+	return TRUE;
+}
+
+/* Helper function: Check if BSS matches SSID policy */
+static u_int8_t matchesSsidPolicy(struct BSS_DESC *prBssDesc,
+				  struct CONNECTION_SETTINGS *prConnSettings,
+				  struct ADAPTER *prAdapter)
+{
+	/* Handle hidden SSID */
+	if (prBssDesc->fgIsHiddenSSID) {
+		return (prAdapter->rWifiVar.fgEnableJoinToHiddenSSID &&
+			prConnSettings->ucSSIDLen);
+	}
+	
+	/* Match explicit SSID */
+	return EQUAL_SSID(prBssDesc->aucSSID, prBssDesc->ucSSIDLen,
+			  prConnSettings->aucSSID, 
+			  prConnSettings->ucSSIDLen);
+}
+
+#if CFG_SUPPORT_ADHOC
+/* Helper function: Validate ADHOC BSS */
+static u_int8_t validateAdhocBss(struct ADAPTER *prAdapter,
+				 struct BSS_DESC *prBssDesc,
+				 struct BSS_INFO *prBssInfo,
+				 uint8_t ucBssIndex,
+				 OS_SYSTIME rCurrentTime)
+{
+	uint32_t timeout = SCN_ADHOC_BSS_DESC_TIMEOUT_SEC;
+	
+#if CFG_ENABLE_WIFI_DIRECT && CFG_SUPPORT_WFD
+	if (prAdapter->rWifiVar.rWfdConfigureSettings.ucWfdEnable)
+		timeout = SCN_ADHOC_BSS_DESC_TIMEOUT_SEC_WFD;
+#endif
+	
+	/* Check if ADHOC record is fresh */
+	if (CHECK_FOR_TIMEOUT(rCurrentTime, prBssDesc->rUpdateTime,
+			      SEC_TO_SYSTIME(timeout)))
+		return FALSE;
+	
+	/* Check capability */
+	if (ibssCheckCapabilityForAdHocMode(prAdapter, prBssDesc, 
+					    ucBssIndex) != WLAN_STATUS_SUCCESS)
+		return FALSE;
+	
+	/* Compare TSF if beacon is active and different BSSID */
+	if (prBssInfo->fgIsBeaconActivated &&
+	    UNEQUAL_MAC_ADDR(prBssInfo->aucBSSID, prBssDesc->aucBSSID)) {
+		if (!prBssDesc->fgIsLargerTSF)
+			return FALSE;
+	}
+	
+	return TRUE;
+}
+#endif
+
+/* Helper function: Apply connection policy to select primary BSS */
+static struct BSS_DESC *selectPrimaryBssByPolicy(
+	struct ADAPTER *prAdapter,
+	struct BSS_DESC *prBssDesc,
+	struct CONNECTION_SETTINGS *prConnSettings,
+	u_int8_t *pfgIsFindFirst,
+	u_int8_t *pfgIsFindBestRSSI)
+{
+	switch (prConnSettings->eConnectionPolicy) {
+	case CONNECT_BY_SSID_BEST_RSSI:
+		if (matchesSsidPolicy(prBssDesc, prConnSettings, prAdapter)) {
+			*pfgIsFindBestRSSI = TRUE;
+			return prBssDesc;
+		}
+		break;
+		
+	case CONNECT_BY_SSID_ANY:
+		if (!prBssDesc->fgIsHiddenSSID) {
+			*pfgIsFindFirst = TRUE;
+			return prBssDesc;
+		}
+		break;
+		
+	case CONNECT_BY_BSSID:
+		if (matchesBssidPolicy(prBssDesc, prConnSettings)) {
+#if CFG_SUPPORT_SUPPLICANT_SME
+			if (prBssDesc->ucChannelNum == prConnSettings->ucChannelNum ||
+			    prConnSettings->ucChannelNum == 0)
+				*pfgIsFindFirst = TRUE;
+#endif
+			return prBssDesc;
+		}
+		break;
+		
+	default:
+		break;
+	}
+	
+	return NULL;
+}
+
+/* Helper function: Decrease join failure count on timeout */
+static void updateJoinFailureCount(struct BSS_DESC *prBssDesc,
+				   OS_SYSTIME rCurrentTime)
+{
+	if (prBssDesc->ucJoinFailureCount <= SCN_BSS_JOIN_FAIL_THRESOLD)
+		return;
+	
+	if (CHECK_FOR_TIMEOUT(rCurrentTime, prBssDesc->rJoinFailTime,
+			      SEC_TO_SYSTIME(SCN_BSS_JOIN_FAIL_CNT_RESET_SEC))) {
+		prBssDesc->ucJoinFailureCount -= SCN_BSS_JOIN_FAIL_RESET_STEP;
+	}
+}
+
+/* Helper function: Compare candidate BSS with primary for RSSI */
+static u_int8_t isPrimaryBetterRssi(struct BSS_DESC *prCandidate,
+				    struct BSS_DESC *prPrimary)
+{
+	/* Skip if primary has too many failures */
+	if (prPrimary->ucJoinFailureCount > SCN_BSS_JOIN_FAIL_THRESOLD)
+		return FALSE;
+	
+	/* Currently connected BSS needs significant improvement to roam */
+	if (prCandidate->fgIsConnected) {
+		return (prCandidate->ucRCPI + ROAMING_NO_SWING_RCPI_STEP <= 
+			prPrimary->ucRCPI);
+	}
+	
+	/* Primary is connected - needs significant advantage to stay */
+	if (prPrimary->fgIsConnected) {
+		return (prCandidate->ucRCPI < 
+			prPrimary->ucRCPI + ROAMING_NO_SWING_RCPI_STEP) ||
+		       (prCandidate->ucJoinFailureCount > 
+			SCN_BSS_JOIN_FAIL_THRESOLD);
+	}
+	
+	/* Neither connected - prefer better RSSI with acceptable failure count */
+	if (prCandidate->ucJoinFailureCount > SCN_BSS_JOIN_FAIL_THRESOLD)
+		return TRUE;
+	
+	return prCandidate->ucRCPI < prPrimary->ucRCPI;
+}
+
+/* Helper function: Update candidate if primary is better */
+static u_int8_t shouldUpdateCandidate(struct BSS_DESC *prCandidate,
+				      struct BSS_DESC *prPrimary,
+				      u_int8_t fgIsFindBestRSSI,
+				      OS_SYSTIME rCurrentTime)
+{
+	/* Prefer visible SSID over hidden */
+	if (prCandidate->fgIsHiddenSSID && !prPrimary->fgIsHiddenSSID)
+		return TRUE;
+	if (!prCandidate->fgIsHiddenSSID && prPrimary->fgIsHiddenSSID)
+		return FALSE;
+	
+	/* Compare RSSI if policy requires it */
+	if (fgIsFindBestRSSI) {
+		updateJoinFailureCount(prPrimary, rCurrentTime);
+		return isPrimaryBetterRssi(prCandidate, prPrimary);
+	}
+	
+	return FALSE;
+}
+
+/* Main refactored function */
 struct BSS_DESC *scanSearchBssDescByPolicy(
-	IN struct ADAPTER *prAdapter, IN uint8_t ucBssIndex)
+	IN struct ADAPTER *prAdapter, 
+	IN uint8_t ucBssIndex)
 {
 	struct CONNECTION_SETTINGS *prConnSettings;
 	struct BSS_INFO *prBssInfo;
 	struct AIS_SPECIFIC_BSS_INFO *prAisSpecBssInfo;
 	struct SCAN_INFO *prScanInfo;
-
 	struct LINK *prBSSDescList;
-
-	struct BSS_DESC *prBssDesc = (struct BSS_DESC *) NULL;
-	struct BSS_DESC *prPrimaryBssDesc = (struct BSS_DESC *) NULL;
-	struct BSS_DESC *prCandidateBssDesc = (struct BSS_DESC *) NULL;
-
-	struct STA_RECORD *prStaRec = (struct STA_RECORD *) NULL;
-	struct STA_RECORD *prCandidateStaRec = (struct STA_RECORD *) NULL;
-
+	struct BSS_DESC *prBssDesc;
+	struct BSS_DESC *prPrimaryBssDesc;
+	struct BSS_DESC *prCandidateBssDesc = NULL;
+	struct STA_RECORD *prStaRec;
+	struct STA_RECORD *prCandidateStaRec = NULL;
+	
 	OS_SYSTIME rCurrentTime;
-
-	/* The first one reach the check point will be our candidate */
-	u_int8_t fgIsFindFirst = (u_int8_t) FALSE;
-
-	u_int8_t fgIsFindBestRSSI = (u_int8_t) FALSE;
+	u_int8_t fgIsFindFirst = FALSE;
+	u_int8_t fgIsFindBestRSSI = FALSE;
 #if !CFG_SUPPORT_SUPPLICANT_SME
-	u_int8_t fgIsFindBestEncryptionLevel = (u_int8_t) FALSE;
+	u_int8_t fgIsFindBestEncryptionLevel = FALSE;
 #endif
-	/* u_int8_t fgIsFindMinChannelLoad = (u_int8_t) FALSE; */
-
-	/* TODO(Kevin): Support Min Channel Load */
-	/* uint8_t aucChannelLoad[CHANNEL_NUM] = {0}; */
-
-	u_int8_t fgIsFixedChannel = (u_int8_t) FALSE;
+	u_int8_t fgIsFixedChannel;
 	enum ENUM_BAND eBand = BAND_2G4;
 	uint8_t ucChannel = 0;
-	uint32_t u4ScnAdhocBssDescTimeout = 0;
-#if CFG_SUPPORT_NCHO
-	uint8_t ucRCPIStep = ROAMING_NO_SWING_RCPI_STEP;
-#endif
-
+	uint32_t u4BssCount = 0;
+	uint32_t u4MatchCount = 0;
+	
 	ASSERT(prAdapter);
-
-	prConnSettings =
-		aisGetConnSettings(prAdapter, ucBssIndex);
+	
+	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
 	prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, ucBssIndex);
-
-	prAisSpecBssInfo =
-		aisGetAisSpecBssInfo(prAdapter, ucBssIndex);
-
+	prAisSpecBssInfo = aisGetAisSpecBssInfo(prAdapter, ucBssIndex);
 	prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
 	prBSSDescList = &prScanInfo->rBSSDescList;
-
+	
 	GET_CURRENT_SYSTIME(&rCurrentTime);
-
-	/* check for fixed channel operation */
+	
+	/* Determine if fixed channel operation */
 	if (prBssInfo->eNetworkType == NETWORK_TYPE_AIS) {
 #if CFG_SUPPORT_CHNL_CONFLICT_REVISE
-		fgIsFixedChannel =
-			cnmAisDetectP2PChannel(prAdapter, &eBand, &ucChannel);
+		fgIsFixedChannel = cnmAisDetectP2PChannel(prAdapter, &eBand, 
+							  &ucChannel);
 #else
-		fgIsFixedChannel =
-			cnmAisInfraChannelFixed(prAdapter, &eBand, &ucChannel);
+		fgIsFixedChannel = cnmAisInfraChannelFixed(prAdapter, &eBand, 
+							   &ucChannel);
 #endif
-	} else
+	} else {
 		fgIsFixedChannel = FALSE;
-
+	}
+	
 #if DBG
 	if (prConnSettings->ucSSIDLen < ELEM_MAX_LEN_SSID)
 		prConnSettings->aucSSID[prConnSettings->ucSSIDLen] = '\0';
 #endif
-
+	
+	log_dbg(SCN, INFO, "SEARCH: ========== BEGIN SEARCH ==========\n");
 	log_dbg(SCN, INFO, "SEARCH: Bss Num: %d, Look for SSID: %s, "
 		MACSTR " Band=%d, channel=%d\n",
-		(uint32_t) prBSSDescList->u4NumElem, prConnSettings->aucSSID,
+		(uint32_t)prBSSDescList->u4NumElem, prConnSettings->aucSSID,
 		MAC2STR(prConnSettings->aucBSSID), eBand, ucChannel);
-
-	/* 4 <1> The outer loop to search for a candidate. */
-	LINK_FOR_EACH_ENTRY(
-		prBssDesc, prBSSDescList, rLinkEntry, struct BSS_DESC) {
-
-		/* TODO(Kevin): Update Minimum Channel Load Information here */
-
-#if 0
-		log_dbg(SCN, INFO, "SEARCH: [" MACSTR "], SSID:%s\n",
-			MAC2STR(prBssDesc->aucBSSID), prBssDesc->aucSSID);
-#endif
-
-		/* 4 <2> Check PHY Type and attributes */
-		/* 4 <2.1> Check Unsupported BSS PHY Type */
-		if (!(prBssDesc->ucPhyTypeSet
-			& (prAdapter->rWifiVar.ucAvailablePhyTypeSet))) {
-			log_dbg(SCN, INFO, "SEARCH: Ignore unsupported ucPhyTypeSet = %x\n",
-				prBssDesc->ucPhyTypeSet);
-			continue;
-		}
-		/* 4 <2.2> Check if has unknown NonHT BSS Basic Rate Set. */
-		if (prBssDesc->fgIsUnknownBssBasicRate) {
-			log_dbg(SCN, LOUD, "SEARCH: Ignore Unknown Bss Basic Rate\n");
-			continue;
-		}
-		/* 4 <2.3> Check if fixed operation cases should be aware */
-		if (fgIsFixedChannel == TRUE
-			&& (prBssDesc->eBand != eBand
-				|| prBssDesc->ucChannelNum != ucChannel)) {
-			log_dbg(SCN, LOUD, "SEARCH: Ignore BssBand[%d] != FixBand[%d] or BssCH[%d] != FixCH[%d]\n",
-				prBssDesc->eBand, eBand,
-				prBssDesc->ucChannelNum, ucChannel);
-			continue;
-			}
-		/* 4 <2.4> Check if the channel is legal under regulatory
-		 * domain
+	log_dbg(SCN, INFO, "SEARCH: FixedChannel=%d, AvailPhyType=0x%x\n",
+		fgIsFixedChannel, prAdapter->rWifiVar.ucAvailablePhyTypeSet);
+	
+	/* Main scan loop */
+	LINK_FOR_EACH_ENTRY(prBssDesc, prBSSDescList, rLinkEntry, 
+			    struct BSS_DESC) {
+		
+		u4BssCount++;
+		
+		log_dbg(SCN, INFO, "SEARCH: [%d] " MACSTR " ch=%d phy=0x%x SSID=%s\n",
+			u4BssCount,
+			MAC2STR(prBssDesc->aucBSSID), 
+			prBssDesc->ucChannelNum,
+			prBssDesc->ucPhyTypeSet,
+			prBssDesc->aucSSID);
+		
+		/* --- H-FIX ANCHOR (Updated for 5G Support) --- */
+		/* If the BSS has no PHY types (0), rescue it based on channel.
+		 * 2.4GHz (<=14) or 5GHz (>14).
 		 */
-		if (rlmDomainIsLegalChannel(prAdapter, prBssDesc->eBand,
-			prBssDesc->ucChannelNum) == FALSE) {
-			log_dbg(SCN, LOUD, "SEARCH: Ignore illegal CH Band[%d] CH[%d]\n",
-				prBssDesc->eBand, prBssDesc->ucChannelNum);
-			continue;
-		}
-		/* 4 <2.5> Check if this BSS_DESC_T is stale */
-		u4ScnAdhocBssDescTimeout = SCN_BSS_DESC_STALE_SEC;
-#if CFG_ENABLE_WIFI_DIRECT
-#if CFG_SUPPORT_WFD
-		if (prAdapter->rWifiVar.rWfdConfigureSettings.ucWfdEnable)
-			u4ScnAdhocBssDescTimeout = SCN_BSS_DESC_STALE_SEC_WFD;
-#endif
-#endif
-		if (CHECK_FOR_TIMEOUT(rCurrentTime, prBssDesc->rUpdateTime,
-			SEC_TO_SYSTIME(u4ScnAdhocBssDescTimeout))) {
-			log_dbg(SCN, LOUD, "SEARCH: Ignore stale Bss, CurrTime[%u] BssUpdateTime[%u]\n",
-				rCurrentTime, prBssDesc->rUpdateTime);
-			continue;
-		}
-		/* 4 <3> Check if reach the excessive join retry limit */
-		/* NOTE(Kevin): STA_RECORD_T is recorded by TA. */
-		prStaRec = cnmGetStaRecByAddress(
-			prAdapter, ucBssIndex, prBssDesc->aucSrcAddr);
-
-		/* NOTE(Kevin):
-		 * The Status Code is the result of a Previous Connection
-		 * Request,we use this as SCORE for choosing a proper candidate
-		 * (Also used for compare see <6>) The Reason Code is an
-		 * indication of the reason why AP reject us, we use this Code
-		 * for "Reject" a SCAN result to become our candidate(Like a
-		 *  blacklist).
-		 */
-#if 0		/* TODO(Kevin): */
-		if (prStaRec
-			&& prStaRec->u2ReasonCode != REASON_CODE_RESERVED) {
-			log_dbg(SCN, INFO, "SEARCH: Ignore BSS with previous Reason Code = %d\n",
-				prStaRec->u2ReasonCode);
-			continue;
-		} else
-#endif
-		if (prStaRec
-			&& prStaRec->u2StatusCode != STATUS_CODE_SUCCESSFUL) {
-			/* NOTE(Kevin): greedy association - after timeout,
-			 * we'll still try to associate to the AP whose STATUS
-			 * of conection attempt was not success. We may also use
-			 * (ucJoinFailureCount x JOIN_RETRY_INTERVAL_SEC) for
-			 * time bound.
-			 */
-			if ((prStaRec->ucJoinFailureCount
-				< JOIN_MAX_RETRY_FAILURE_COUNT)
-				|| (CHECK_FOR_TIMEOUT(rCurrentTime,
-					prStaRec->rLastJoinTime,
-					SEC_TO_SYSTIME(JOIN_RETRY_INTERVAL_SEC)
-				))) {
-
-				/* NOTE(Kevin): Every JOIN_RETRY_INTERVAL_SEC
-				 * interval, we can retry
-				 * JOIN_MAX_RETRY_FAILURE_COUNT times.
-				 */
-				if (prStaRec->ucJoinFailureCount
-					>= JOIN_MAX_RETRY_FAILURE_COUNT) {
-					prStaRec->ucJoinFailureCount = 0;
-				}
-
-				log_dbg(SCN, INFO, "SEARCH:Try to join BSS again,Status Code=%u(Curr=%u/Last Join=%u)\n",
-					prStaRec->u2StatusCode, rCurrentTime,
-					prStaRec->rLastJoinTime);
-			} else {
-				log_dbg(SCN, INFO, "SEARCH: Ignore BSS which reach maximum Join Retry Count = %d\n",
-					JOIN_MAX_RETRY_FAILURE_COUNT);
-				continue;
-			}
-		}
-
-		/* 4 <4> Check for various NETWORK conditions */
-		if (prBssInfo->eNetworkType == NETWORK_TYPE_AIS) {
-			enum ENUM_BSS_TYPE eBSSType =
-				prBssDesc->eBSSType;
-			enum ENUM_PARAM_OP_MODE eOPMode =
-				prConnSettings->eOPMode;
-			/* 4 <4.1> Check BSS Type for the corresponding
-			 * Operation Mode in Connection Setting
-			 */
-			/* NOTE(Kevin): For NET_TYPE_AUTO_SWITCH, we will always
-			 * pass following check.
-			 */
-			if (eOPMode == NET_TYPE_INFRA
-				&& eBSSType != BSS_TYPE_INFRASTRUCTURE) {
-				log_dbg(SCN, INFO, "SEARCH: Ignore eBSSType = IBSS\n");
-				continue;
-			}
-			if ((eOPMode == NET_TYPE_IBSS
-				|| eOPMode == NET_TYPE_DEDICATED_IBSS)
-				&& eBSSType != BSS_TYPE_IBSS) {
-				log_dbg(SCN, INFO, "SEARCH: Ignore eBSSType = INFRASTRUCTURE\n");
-				continue;
-			}
-			/* 4 <4.2> Check AP's BSSID if OID_802_11_BSSID has been
-			 * set.
-			 */
-			if (prConnSettings->fgIsConnByBssidIssued &&
-				eBSSType == BSS_TYPE_INFRASTRUCTURE) {
-				if (UNEQUAL_MAC_ADDR(prConnSettings->aucBSSID,
-					prBssDesc->aucBSSID)) {
-					log_dbg(SCN, TRACE, "SEARCH: Ignore due to BSSID was not matched!\n");
-					continue;
-				}
-			}
-#if CFG_SUPPORT_ADHOC
-			/* 4 <4.3> Check for AdHoc Mode */
-			if (eBSSType == BSS_TYPE_IBSS) {
-				OS_SYSTIME rCurrentTime;
-
-				u4ScnAdhocBssDescTimeout =
-					SCN_ADHOC_BSS_DESC_TIMEOUT_SEC;
-
-				/* 4 <4.3.1> Check if this SCAN record has been
-				 * updated recently for IBSS.
-				 */
-				/* NOTE(Kevin): Because some STA may change its
-				 * BSSID frequently after it create the IBSS -
-				 * e.g. IPN2220, so we need to make sure we get
-				 * the new one. For BSS, if the old record was
-				 * matched, however it won't be able to pass the
-				 * Join Process later.
-				 */
-				GET_CURRENT_SYSTIME(&rCurrentTime);
-#if CFG_ENABLE_WIFI_DIRECT
-#if CFG_SUPPORT_WFD
-				if (prAdapter->rWifiVar
-					.rWfdConfigureSettings.ucWfdEnable) {
-#define __LOCAL_VAR__ SCN_ADHOC_BSS_DESC_TIMEOUT_SEC_WFD
-					u4ScnAdhocBssDescTimeout
-						= __LOCAL_VAR__;
-#undef __LOCAL_VAR__
-				}
-#endif
-#endif
-				if (CHECK_FOR_TIMEOUT(rCurrentTime,
-					prBssDesc->rUpdateTime,
-					SEC_TO_SYSTIME(
-						u4ScnAdhocBssDescTimeout))) {
-					log_dbg(SCN, LOUD, "SEARCH: Now(%u) Skip old record of BSS Descriptor(%u) - BSSID:["
-						MACSTR "]\n",
-						rCurrentTime,
-						prBssDesc->rUpdateTime,
-						MAC2STR(prBssDesc->aucBSSID));
-					continue;
-				}
-
-				/* 4 <4.3.2> Check Peer's capability */
-				if (ibssCheckCapabilityForAdHocMode(prAdapter,
-					prBssDesc, ucBssIndex)
-					== WLAN_STATUS_FAILURE) {
-
-					log_dbg(SCN, INFO, "SEARCH: Ignore BSS DESC MAC: "
-						MACSTR
-						", Capability is not supported for current AdHoc Mode.\n",
-						MAC2STR(prPrimaryBssDesc
-							->aucBSSID));
-
-					continue;
-				}
-
-				/* 4 <4.3.3> Compare TSF */
-				if (prBssInfo->fgIsBeaconActivated &&
-					UNEQUAL_MAC_ADDR(prBssInfo->aucBSSID,
-					prBssDesc->aucBSSID)) {
-
-					log_dbg(SCN, LOUD, "SEARCH: prBssDesc->fgIsLargerTSF = %d\n",
-						prBssDesc->fgIsLargerTSF);
-
-					if (!prBssDesc->fgIsLargerTSF) {
-						log_dbg(SCN, INFO, "SEARCH: Ignore BSS DESC MAC: ["
-							MACSTR
-							"], Smaller TSF\n",
-							MAC2STR(prBssDesc
-								->aucBSSID));
-						continue;
-					}
-				}
-			}
-#endif /* CFG_SUPPORT_ADHOC */
-
-		}
-#if 0		/* TODO(Kevin): For IBSS */
-		/* 4 <2.c> Check if this SCAN record has been updated recently
-		 * for IBSS.
-		 */
-		/* NOTE(Kevin): Because some STA may change its BSSID frequently
-		 * after it create the IBSS, so we need to make sure we get the
-		 * new one. For BSS, if the old record was matched, however it
-		 * won't be able to pass the Join Process later.
-		 */
-		if (prBssDesc->eBSSType == BSS_TYPE_IBSS) {
-			OS_SYSTIME rCurrentTime;
-
-			GET_CURRENT_SYSTIME(&rCurrentTime);
-			if (CHECK_FOR_TIMEOUT(rCurrentTime,
-						prBssDesc->rUpdateTime,
-						SEC_TO_SYSTIME(
-							BSS_DESC_TIMEOUT_SEC)
-						)){
-				log_dbg(SCAN, TRACE, "Skip old record of BSS Descriptor - BSSID:["
-					MACSTR "]\n\n",
-					MAC2STR(prBssDesc->aucBSSID));
-				continue;
-			}
-		}
-
-		if ((prBssDesc->eBSSType == BSS_TYPE_INFRASTRUCTURE) &&
-			(prAdapter->eConnectionState
-				== MEDIA_STATE_CONNECTED)) {
-			OS_SYSTIME rCurrentTime;
-
-			GET_CURRENT_SYSTIME(&rCurrentTime);
-			if (CHECK_FOR_TIMEOUT(rCurrentTime,
-					prBssDesc->rUpdateTime,
-					SEC_TO_SYSTIME(BSS_DESC_TIMEOUT_SEC))) {
-				log_dbg(SCAN, TRACE, "Skip old record of BSS Descriptor - BSSID:["
-					MACSTR "]\n\n",
-					MAC2STR(prBssDesc->aucBSSID));
-				continue;
-			}
-		}
-
-		/* 4 <4B> Check for IBSS AdHoc Mode. */
-		/* Skip if one or more BSS Basic Rate are not supported by
-		 * current AdHocMode
-		 */
-		if (prPrimaryBssDesc->eBSSType == BSS_TYPE_IBSS) {
-			/* 4 <4B.1> Check if match the Capability of current
-			 * IBSS AdHoc Mode.
-			 */
-			if (ibssCheckCapabilityForAdHocMode(prAdapter,
-				prPrimaryBssDesc) == WLAN_STATUS_FAILURE) {
-
-				log_dbg(SCAN, TRACE, "Ignore BSS DESC MAC: "
-					MACSTR
-					", Capability is not supported for current AdHoc Mode.\n",
-					MAC2STR(prPrimaryBssDesc->aucBSSID));
-
-				continue;
-			}
-
-			/* 4 <4B.2> IBSS Merge Decision Flow for SEARCH STATE.
-			 */
-			if (prAdapter->fgIsIBSSActive &&
-				UNEQUAL_MAC_ADDR(prBssInfo->aucBSSID,
-				prPrimaryBssDesc->aucBSSID)) {
-
-				if (!fgIsLocalTSFRead) {
-					NIC_GET_CURRENT_TSF(prAdapter,
-						&rCurrentTsf);
-
-					log_dbg(SCAN, TRACE, "\n\nCurrent TSF : %08lx-%08lx\n\n",
-						rCurrentTsf.u.HighPart,
-						rCurrentTsf.u.LowPart);
-				}
-
-				if (rCurrentTsf.QuadPart
-					> prPrimaryBssDesc
-						->u8TimeStamp.QuadPart) {
-					log_dbg(SCAN, TRACE, "Ignore BSS DESC MAC: ["
-						MACSTR"], Current BSSID: ["
-						MACSTR "].\n",
-						MAC2STR(prPrimaryBssDesc
-							->aucBSSID),
-						MAC2STR(prBssInfo->aucBSSID));
-
-					log_dbg(SCAN, TRACE, "\n\nBSS's TSF : %08lx-%08lx\n\n",
-						prPrimaryBssDesc
-							->u8TimeStamp
-								.u.HighPart,
-						prPrimaryBssDesc
-							->u8TimeStamp
-								.u.LowPart);
-
-					prPrimaryBssDesc->fgIsLargerTSF = FALSE;
-					continue;
-				} else {
-					prPrimaryBssDesc->fgIsLargerTSF = TRUE;
-				}
-
-			}
-		}
-		/* 4 <5> Check the Encryption Status. */
-		if (rsnPerformPolicySelection(prPrimaryBssDesc)) {
-
-			if (prPrimaryBssDesc->ucEncLevel > 0) {
-				fgIsFindBestEncryptionLevel = TRUE;
-
-				fgIsFindFirst = FALSE;
-			}
-		} else {
-			/* Can't pass the Encryption Status
-			 * Check, get next one
-			 */
-			continue;
-		}
-
-		/* For RSN Pre-authentication, update the PMKID canidate
-		 * list for same SSID and encrypt status
-		 */
-		/* Update PMKID candicate list. */
-		if (prAdapter->rWifiVar.rConnSettings.eAuthMode
-			== AUTH_MODE_WPA2) {
-			rsnUpdatePmkidCandidateList(prPrimaryBssDesc);
-			if (prAdapter->rWifiVar.rAisBssInfo
-				.u4PmkidCandicateCount) {
-				prAdapter->rWifiVar
-					.rAisBssInfo
-					.fgIndicatePMKID
-						= rsnCheckPmkidCandicate();
-			}
-		}
-#endif
-
-		prPrimaryBssDesc = (struct BSS_DESC *) NULL;
-
-		/* 4 <6> Check current Connection Policy. */
-		switch (prConnSettings->eConnectionPolicy) {
-		case CONNECT_BY_SSID_BEST_RSSI:
-			/* Choose Hidden SSID to join only if
-			 * the `fgIsEnableJoin...` is TRUE
-			 */
-			if (prAdapter->rWifiVar.fgEnableJoinToHiddenSSID
-				&& prBssDesc->fgIsHiddenSSID) {
-				/* NOTE(Kevin): following if () statement
-				 * means that If Target is hidden, then we
-				 * won't connect when user specify
-				 * SSID_ANY policy.
-				 */
-				if (prConnSettings->ucSSIDLen) {
-					prPrimaryBssDesc = prBssDesc;
-
-					fgIsFindBestRSSI = TRUE;
-				}
-
-			} else if (EQUAL_SSID(prBssDesc->aucSSID,
-					      prBssDesc->ucSSIDLen,
-					      prConnSettings->aucSSID,
-					      prConnSettings->ucSSIDLen)) {
-				prPrimaryBssDesc = prBssDesc;
-
-				fgIsFindBestRSSI = TRUE;
-
-				log_dbg(SCN, LOUD, "SEARCH: Found BSS by SSID, ["
-					MACSTR "], SSID:%s\n",
+		if (prBssDesc->ucPhyTypeSet == 0) {
+			if (prBssDesc->ucChannelNum <= 14) {
+				log_dbg(SCN, WARN, "SEARCH: H-Fix: Forcing 2.4G PHY for " 
+					MACSTR " ch=%d\n",
 					MAC2STR(prBssDesc->aucBSSID),
-					prBssDesc->aucSSID);
+					prBssDesc->ucChannelNum);
+				prBssDesc->ucPhyTypeSet = PHY_TYPE_SET_802_11GN;
+			} else {
+				log_dbg(SCN, WARN, "SEARCH: H-Fix: Forcing 5G PHY for " 
+					MACSTR " ch=%d\n",
+					MAC2STR(prBssDesc->aucBSSID),
+					prBssDesc->ucChannelNum);
+				prBssDesc->ucPhyTypeSet = PHY_TYPE_SET_802_11ANAC;
 			}
-			break;
-
-		case CONNECT_BY_SSID_ANY:
-			/* NOTE(Kevin): In this policy, we don't know the
-			 * desired SSID from user, so we should exclude the
-			 * Hidden SSID from scan list. And because we refuse
-			 * to connect to Hidden SSID node at the beginning, so
-			 * when the JOIN Module deal with a struct BSS_DESC
-			 * which has fgIsHiddenSSID == TRUE, then the
-			 * Connection Settings must be valid without doubt.
-			 */
-			if (!prBssDesc->fgIsHiddenSSID) {
-				prPrimaryBssDesc = prBssDesc;
-
-				fgIsFindFirst = TRUE;
-			}
-			break;
-
-		case CONNECT_BY_BSSID:
-			if (EQUAL_MAC_ADDR(prBssDesc->aucBSSID,
-				prConnSettings->aucBSSID)) {
-
-				/* Make sure to match with SSID if supplied.
-				 * Some old dualband APs share a single BSSID
-				 * among different BSSes.
-				 */
-				if ((prBssDesc->ucSSIDLen > 0 &&
-					prConnSettings->ucSSIDLen > 0 &&
-					EQUAL_SSID(prBssDesc->aucSSID,
-						prBssDesc->ucSSIDLen,
-						prConnSettings->aucSSID,
-						prConnSettings->ucSSIDLen)) ||
-					prConnSettings->ucSSIDLen == 0) {
-					log_dbg(SCN, LOUD, "%s: BSSID/SSID pair matched\n",
-							__func__);
-					prPrimaryBssDesc = prBssDesc;
-/*Add patch to resolve PMF 5.3.3.5 & 5.4.3.1 test failure issue.*/
-#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-					if ((prBssDesc->ucChannelNum
-						== prConnSettings->ucChannelNum)
-						|| (prConnSettings->ucChannelNum
-						== 0))
-						fgIsFindFirst = TRUE;
-#endif
-				} else
-					log_dbg(SCN, ERROR, "%s: BSSID/SSID pair unmatched ("
-						MACSTR
-						")\n", __func__,
-						MAC2STR(prBssDesc->aucBSSID));
-			}
-			break;
-
-		default:
-			break;
 		}
-
-		/* Primary Candidate was not found */
-		if (prPrimaryBssDesc == NULL)
+		
+		/* Filter 1: Check PHY type support */
+		if (!(prBssDesc->ucPhyTypeSet & 
+		      prAdapter->rWifiVar.ucAvailablePhyTypeSet)) {
+			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: unsupported PHY=0x%x (avail=0x%x)\n",
+				u4BssCount, prBssDesc->ucPhyTypeSet,
+				prAdapter->rWifiVar.ucAvailablePhyTypeSet);
 			continue;
-		/* 4 <7> Check the Encryption Status. */
+		}
+		
+		/* Filter 2: Check basic rate support */
+		if (prBssDesc->fgIsUnknownBssBasicRate) {
+			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: unknown basic rate\n",
+				u4BssCount);
+			continue;
+		}
+		
+		/* Filter 3: Check fixed channel constraint */
+		if (!isBssOnFixedChannel(prBssDesc, fgIsFixedChannel, 
+					 eBand, ucChannel)) {
+			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: band/channel mismatch "
+				"(fixed=%d, band=%d, ch=%d)\n",
+				u4BssCount, fgIsFixedChannel, eBand, ucChannel);
+			continue;
+		}
+		
+		/* Filter 4: Check regulatory domain */
+		if (!rlmDomainIsLegalChannel(prAdapter, prBssDesc->eBand,
+					     prBssDesc->ucChannelNum)) {
+			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: illegal channel\n",
+				u4BssCount);
+			continue;
+		}
+		
+		/* Filter 5: Check staleness */
+		if (isBssDescStale(prBssDesc, rCurrentTime,
+				   prAdapter->rWifiVar.rWfdConfigureSettings.ucWfdEnable)) {
+			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: stale BSS\n",
+				u4BssCount);
+			continue;
+		}
+		
+		/* Filter 6: Check join retry exhaustion */
+		prStaRec = cnmGetStaRecByAddress(prAdapter, ucBssIndex, 
+						 prBssDesc->aucSrcAddr);
+		if (shouldSkipStaRecord(prStaRec, rCurrentTime)) {
+			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: max retry BSS\n",
+				u4BssCount);
+			continue;
+		}
+		
+		/* Filter 7: Check network type constraints */
+		if (prBssInfo->eNetworkType == NETWORK_TYPE_AIS) {
+			enum ENUM_BSS_TYPE eBSSType = prBssDesc->eBSSType;
+			enum ENUM_PARAM_OP_MODE eOPMode = prConnSettings->eOPMode;
+			
+			log_dbg(SCN, INFO, "SEARCH: [%d] BSS type=%d, OPMode=%d\n",
+				u4BssCount, eBSSType, eOPMode);
+			
+			/* Check BSS type matches operation mode */
+			if (eOPMode == NET_TYPE_INFRA && 
+			    eBSSType != BSS_TYPE_INFRASTRUCTURE) {
+				log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: IBSS (want infra)\n",
+					u4BssCount);
+				continue;
+			}
+			if ((eOPMode == NET_TYPE_IBSS || 
+			     eOPMode == NET_TYPE_DEDICATED_IBSS) &&
+			    eBSSType != BSS_TYPE_IBSS) {
+				log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: infrastructure (want IBSS)\n",
+					u4BssCount);
+				continue;
+			}
+			
+			/* Check BSSID if connecting by BSSID */
+			if (prConnSettings->fgIsConnByBssidIssued &&
+			    eBSSType == BSS_TYPE_INFRASTRUCTURE) {
+				if (UNEQUAL_MAC_ADDR(prConnSettings->aucBSSID,
+						     prBssDesc->aucBSSID)) {
+					log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: BSSID mismatch "
+						"(want " MACSTR ")\n",
+						u4BssCount,
+						MAC2STR(prConnSettings->aucBSSID));
+					continue;
+				}
+			}
+			
+#if CFG_SUPPORT_ADHOC
+			/* Special handling for ADHOC */
+			if (eBSSType == BSS_TYPE_IBSS) {
+				if (!validateAdhocBss(prAdapter, prBssDesc, 
+						      prBssInfo, ucBssIndex,
+						      rCurrentTime)) {
+					log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: ADHOC validation fail\n",
+						u4BssCount);
+					continue;
+				}
+			}
+#endif
+		}
+		
+		log_dbg(SCN, INFO, "SEARCH: [%d] Passed all filters, calling selectPrimary\n",
+			u4BssCount);
+		
+		/* Apply connection policy to get primary candidate */
+		prPrimaryBssDesc = selectPrimaryBssByPolicy(prAdapter, prBssDesc,
+							    prConnSettings,
+							    &fgIsFindFirst,
+							    &fgIsFindBestRSSI);
+		
+		if (!prPrimaryBssDesc) {
+			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: selectPrimary returned NULL\n",
+				u4BssCount);
+			continue;
+		}
+		
+		log_dbg(SCN, INFO, "SEARCH: [%d] Primary BSS selected: " MACSTR "\n",
+			u4BssCount, MAC2STR(prPrimaryBssDesc->aucBSSID));
+		
+		/* Filter 8: Security policy check for infrastructure */
 		if (prPrimaryBssDesc->eBSSType == BSS_TYPE_INFRASTRUCTURE) {
 #if !CFG_SUPPORT_SUPPLICANT_SME
-		/* skip security check here since we don't have
-		* enough information when processing NL80211_AUTH_ CMD
-		*/
 #if CFG_SUPPORT_WAPI
 			if (aisGetWapiMode(prAdapter, ucBssIndex)) {
-				if (wapiPerformPolicySelection(prAdapter,
+				if (!wapiPerformPolicySelection(prAdapter, 
 					prPrimaryBssDesc, ucBssIndex)) {
-					fgIsFindFirst = TRUE;
-				} else {
-					/* Can't pass the Encryption Status
-					 * Check, get next one
-					 */
-					log_dbg(RSN, INFO, "Ignore BSS can't pass WAPI policy selection\n");
+					log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: WAPI policy fail\n",
+						u4BssCount);
 					continue;
 				}
 			} else
 #endif
-			if (rsnPerformPolicySelection(prAdapter,
-				prPrimaryBssDesc, ucBssIndex)) {
+			if (rsnPerformPolicySelection(prAdapter, prPrimaryBssDesc,
+						      ucBssIndex)) {
 				if (prAisSpecBssInfo->fgCounterMeasure) {
-					log_dbg(RSN, INFO, "Skip while at counter measure period!!!\n");
+					log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: Counter measure\n",
+						u4BssCount);
 					continue;
 				}
-
-				if (prPrimaryBssDesc->ucEncLevel > 0) {
+				if (prPrimaryBssDesc->ucEncLevel > 0)
 					fgIsFindBestEncryptionLevel = TRUE;
-
-					fgIsFindFirst = FALSE;
-				}
 			} else {
-				/* Can't pass the Encryption Status Check,
-				 * get next one
-				 */
-				log_dbg(RSN, INFO, "Ignore BSS can't pass Encryption Status Check\n");
+				log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: RSN policy fail\n",
+					u4BssCount);
 				continue;
 			}
-#endif /* !CFG_SUPPORT_SUPPLICANT_SME */
-		} else {
-			/* Todo:: P2P and BOW Policy Selection */
+#endif
 		}
-
-		/* 4 <8> Compare the Candidate and the Primary Scan Record. */
+		
+		u4MatchCount++;
+		log_dbg(SCN, INFO, "SEARCH: [%d] MATCH #%d! " MACSTR " SSID=%s\n",
+			u4BssCount, u4MatchCount,
+			MAC2STR(prPrimaryBssDesc->aucBSSID),
+			prPrimaryBssDesc->aucSSID);
+		
+		/* Update candidate selection */
 		if (!prCandidateBssDesc) {
 			prCandidateBssDesc = prPrimaryBssDesc;
 			prCandidateStaRec = prStaRec;
-
-			/* 4 <8.1> Condition - Get the first matched one. */
-			if (fgIsFindFirst)
+			
+			log_dbg(SCN, INFO, "SEARCH: First candidate: " MACSTR "\n",
+				MAC2STR(prCandidateBssDesc->aucBSSID));
+			
+			if (fgIsFindFirst) {
+				log_dbg(SCN, INFO, "SEARCH: FindFirst=TRUE, breaking early\n");
 				break;
+			}
 		} else {
-			/* 4 <6D> Condition - Visible SSID win Hidden SSID. */
-			if (prCandidateBssDesc->fgIsHiddenSSID) {
-				if (!prPrimaryBssDesc->fgIsHiddenSSID) {
-					/* The non Hidden SSID win. */
-					prCandidateBssDesc = prPrimaryBssDesc;
-
-					prCandidateStaRec = prStaRec;
-					continue;
-				}
-			} else {
-				if (prPrimaryBssDesc->fgIsHiddenSSID)
-					continue;
-			}
-
-			/* 4 <6E> Condition - Choose the one with
-			 * better RCPI(RSSI).
-			 */
-			if (fgIsFindBestRSSI) {
-				/* TODO(Kevin): We shouldn't compare the actual
-				 * value, we should allow some acceptable
-				 * tolerance of some RSSI percentage here.
-				 */
-				log_dbg(SCN, TRACE, "Candidate ["
-				MACSTR
-				"]: uint8_t = %d, joinFailCnt=%d, Primary ["
-				MACSTR "]: uint8_t = %d, joinFailCnt=%d\n",
+			if (shouldUpdateCandidate(prCandidateBssDesc, 
+						  prPrimaryBssDesc,
+						  fgIsFindBestRSSI,
+						  rCurrentTime)) {
+				log_dbg(SCN, INFO, "SEARCH: Updating candidate: " MACSTR " -> " MACSTR "\n",
 					MAC2STR(prCandidateBssDesc->aucBSSID),
-					prCandidateBssDesc->ucRCPI,
-					prCandidateBssDesc->ucJoinFailureCount,
-					MAC2STR(prPrimaryBssDesc->aucBSSID),
-					prPrimaryBssDesc->ucRCPI,
-					prPrimaryBssDesc->ucJoinFailureCount);
-
-				ASSERT(!(prCandidateBssDesc->fgIsConnected
-					&& prPrimaryBssDesc->fgIsConnected));
-				if (prPrimaryBssDesc->ucJoinFailureCount
-					> SCN_BSS_JOIN_FAIL_THRESOLD) {
-					/* give a chance to do join if join
-					 * fail before
-					 * SCN_BSS_DECRASE_JOIN_FAIL_CNT_SEC
-					 * seconds
-					 */
-#define __LOCAL_VAR__ \
-SCN_BSS_JOIN_FAIL_CNT_RESET_SEC
-					if (CHECK_FOR_TIMEOUT(rCurrentTime,
-						prBssDesc->rJoinFailTime,
-						SEC_TO_SYSTIME(
-							__LOCAL_VAR__))) {
-#define __LOCAL_VAR2__ \
-SCN_BSS_JOIN_FAIL_RESET_STEP
-
-						prBssDesc->ucJoinFailureCount
-							-= __LOCAL_VAR2__;
-#undef __LOCAL_VAR2__
-
-						log_dbg(AIS, INFO, "decrease join fail count for Bss "
-						MACSTR
-						" to %u, timeout second %d\n",
-							MAC2STR(
-							prBssDesc->aucBSSID),
-							prBssDesc
-							->ucJoinFailureCount,
-							__LOCAL_VAR__);
-					}
-#undef __LOCAL_VAR__
-				}
-				/* NOTE: To prevent SWING, we do roaming only
-				 * if target AP has at least 5dBm larger
-				 * than us.
-				 */
-#if CFG_SUPPORT_NCHO
-				if (prAdapter->rNchoInfo.fgECHOEnabled
-					== TRUE) {
-					ucRCPIStep = 2 * prAdapter
-						->rNchoInfo.i4RoamDelta;
-				}
-#endif
-				if (prCandidateBssDesc->fgIsConnected) {
-					if ((prCandidateBssDesc->ucRCPI
-					     + ROAMING_NO_SWING_RCPI_STEP <=
-					     prPrimaryBssDesc->ucRCPI)
-					    && prPrimaryBssDesc
-					    ->ucJoinFailureCount
-					    <= SCN_BSS_JOIN_FAIL_THRESOLD) {
-
-						prCandidateBssDesc
-							= prPrimaryBssDesc;
-						prCandidateStaRec
-							= prStaRec;
-						continue;
-					}
-				} else if (prPrimaryBssDesc->fgIsConnected) {
-					if ((prCandidateBssDesc->ucRCPI <
-					     prPrimaryBssDesc->ucRCPI
-					    + ROAMING_NO_SWING_RCPI_STEP)
-					    || (prCandidateBssDesc
-					    ->ucJoinFailureCount
-					    > SCN_BSS_JOIN_FAIL_THRESOLD)) {
-
-						prCandidateBssDesc
-							= prPrimaryBssDesc;
-						prCandidateStaRec
-							= prStaRec;
-						continue;
-					}
-				} else if (prPrimaryBssDesc
-						->ucJoinFailureCount
-						> SCN_BSS_JOIN_FAIL_THRESOLD)
-					continue;
-				else if (prCandidateBssDesc
-						->ucJoinFailureCount
-					 > SCN_BSS_JOIN_FAIL_THRESOLD ||
-					 prCandidateBssDesc->ucRCPI
-					 < prPrimaryBssDesc->ucRCPI) {
-
-					prCandidateBssDesc = prPrimaryBssDesc;
-					prCandidateStaRec = prStaRec;
-					continue;
-				}
+					MAC2STR(prPrimaryBssDesc->aucBSSID));
+				prCandidateBssDesc = prPrimaryBssDesc;
+				prCandidateStaRec = prStaRec;
 			}
-#if 0
-			/* If reach here, that means they have the same
-			 * Encryption Score, and both RSSI value are close too.
-			 */
-			/* 4 <6F> Seek the minimum Channel Load for less
-			 * interference.
-			 */
-			if (fgIsFindMinChannelLoad) {
-				/* ToDo:: Nothing */
-				/* TODO(Kevin): Check which one has minimum
-				 * channel load in its channel
-				 */
-			}
-#endif
 		}
 	}
-
+	
+	log_dbg(SCN, INFO, "SEARCH: ========== END SEARCH ==========\n");
+	log_dbg(SCN, INFO, "SEARCH: Examined %d BSSes, found %d matches\n",
+		u4BssCount, u4MatchCount);
+	if (prCandidateBssDesc) {
+		log_dbg(SCN, INFO, "SEARCH: FINAL CANDIDATE: " MACSTR " SSID=%s ch=%d\n",
+			MAC2STR(prCandidateBssDesc->aucBSSID),
+			prCandidateBssDesc->aucSSID,
+			prCandidateBssDesc->ucChannelNum);
+	} else {
+		log_dbg(SCN, WARN, "SEARCH: NO CANDIDATE FOUND!\n");
+	}
+	
 	return prCandidateBssDesc;
+}
 
-}	/* end of scanSearchBssDescByPolicy() */
+
+
+
+
 
 /* Helper: Handles the actual hand-off to the Kernel/Glue layer */
 static void scnReportSingleBss(struct ADAPTER *prAdapter, 
@@ -4568,4 +4447,54 @@ void scanParseHEOpIE(IN uint8_t *pucIE, IN struct BSS_DESC *prBssDesc,
 	} else
 		prBssDesc->fgIsHE6GPresent = FALSE;
 }
+
+
+void scanUpdateEssResult(struct ADAPTER *prAdapter)
+{
+	struct SCAN_INFO *prScanInfo;
+	struct BSS_DESC *prBssDesc;
+	struct ESS_SCAN_RESULT_T *prEss;
+	uint32_t u4Count = 0;
+
+	if (!prAdapter)
+		return;
+
+	prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
+
+	/* 1. Reset legacy state safely */
+	prAdapter->rWlanInfo.u4ScanResultEssNum = 0;
+	kalMemZero(prAdapter->rWlanInfo.arScanResultEss, 
+		   sizeof(prAdapter->rWlanInfo.arScanResultEss));
+
+	/* 2. Hydrate the buffer from the internal BSS list */
+	LINK_FOR_EACH_ENTRY(prBssDesc, &prScanInfo->rBSSDescList, rLinkEntry, struct BSS_DESC) {
+		if (u4Count >= CFG_MAX_NUM_BSS_LIST)
+			break;
+
+		prEss = &prAdapter->rWlanInfo.arScanResultEss[u4Count];
+
+		/* Copy BSSID */
+		kalMemCopy(prEss->aucBSSID, prBssDesc->aucBSSID, MAC_ADDR_LEN);
+
+		/* Hardened SSID Copy:
+		 * BSS_DESC uses ucSSIDLen.
+		 * min_t ensures we don't exceed the target array size (32 bytes).
+		 */
+		prEss->u2SSIDLen = (uint16_t)min_t(uint8_t, prBssDesc->ucSSIDLen, 
+						  (uint8_t)PARAM_MAX_LEN_SSID);
+		
+		kalMemCopy(prEss->aucSSID, prBssDesc->aucSSID, prEss->u2SSIDLen);
+		
+		/* Safety: ensure trailing null in the local ESS buffer if space permits */
+		if (prEss->u2SSIDLen < PARAM_MAX_LEN_SSID)
+			prEss->aucSSID[prEss->u2SSIDLen] = '\0';
+
+		u4Count++;
+	}
+
+	/* 3. Synchronize counters */
+	prAdapter->rWlanInfo.u4ScanResultEssNum = u4Count;
+	prAdapter->rWlanInfo.u4ScanResultNum = u4Count;
+}
+
 #endif

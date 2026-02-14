@@ -715,80 +715,76 @@ void halShowPdmaInfo(IN struct ADAPTER *prAdapter)
 		prAdapter->chip_info->prDebugOps->showHifInfo(prAdapter);
 }
 
+
 bool halShowHostCsrInfo(IN struct ADAPTER *prAdapter)
 {
-	uint32_t i = 0, u4Value = 0;
+	uint32_t i = 0, u4Value = 0, u4TestVal = 0;
 	bool fgIsDriverOwn = false;
 	bool fgEnClock = false;
+	bool fgBusDead = false;
 
-	DBGLOG(HAL, INFO, "Host CSR Configuration Info:\n\n");
+	DBGLOG(HAL, INFO, "🔍 MT7902 CSR Diagnostic Sweep Starting...\n");
 
+	/* 1. Hardware Presence & Bus Integrity Check */
 	HAL_MCR_RD(prAdapter, HOST_CSR_BASE, &u4Value);
-	DBGLOG(HAL, INFO, "Get 0x87654321: 0x%08x = 0x%08x\n",
-		HOST_CSR_BASE, u4Value);
-
-	HAL_MCR_RD(prAdapter, HOST_CSR_DRIVER_OWN_INFO, &u4Value);
-	DBGLOG(HAL, INFO, "Driver own info: 0x%08x = 0x%08x\n",
-		HOST_CSR_BASE, u4Value);
-	fgIsDriverOwn = (u4Value & PCIE_LPCR_HOST_SET_OWN) == 0;
-
-	for (i = 0; i < 5; i++) {
-		HAL_MCR_RD(prAdapter, HOST_CSR_MCU_PORG_COUNT, &u4Value);
-		DBGLOG(HAL, INFO,
-			"MCU programming Counter info (no sync): 0x%08x = 0x%08x\n",
-			HOST_CSR_MCU_PORG_COUNT, u4Value);
+	if (u4Value == 0xFFFFFFFF) {
+		DBGLOG(HAL, ERROR, "💥 FATAL: PCI Bus returned 0xFFFFFFFF. Link is down or device is in D3cold!\n");
+		return false;
+	}
+	if (u4Value == 0x00000000) {
+		DBGLOG(HAL, WARN, "💤 Bus returned 0x0. Clock gating or ASPM likely blocking access.\n");
+		fgBusDead = true;
 	}
 
-	HAL_MCR_RD(prAdapter, HOST_CSR_RGU, &u4Value);
-	DBGLOG(HAL, INFO, "RGU Info: 0x%08x = 0x%08x\n", HOST_CSR_RGU, u4Value);
+	DBGLOG(HAL, INFO, "Get 0x87654321: 0x%08x = 0x%08x\n", HOST_CSR_BASE, u4Value);
+
+	/* 2. Ownership Verification */
+	HAL_MCR_RD(prAdapter, HOST_CSR_DRIVER_OWN_INFO, &u4Value);
+	fgIsDriverOwn = (u4Value & PCIE_LPCR_HOST_SET_OWN) == 0;
+	DBGLOG(HAL, INFO, "Driver Ownership: [%s] (Raw: 0x%08x)\n", 
+		fgIsDriverOwn ? "OWNED" : "FIRMWARE-LOCKED", u4Value);
+
+	/* 3. MCU Counter - Check for "Frozen" Hardware */
+	for (i = 0; i < 3; i++) {
+		HAL_MCR_RD(prAdapter, HOST_CSR_MCU_PORG_COUNT, &u4Value);
+		DBGLOG(HAL, INFO, "MCU Prog Counter [%d]: 0x%08x\n", i, u4Value);
+		kalUdelay(10);
+	}
+
+	/* 4. Power & Clock State Diagnostics */
+	HAL_MCR_RD(prAdapter, HOST_CSR_MCU_PWR_STAT, &u4Value);
+	DBGLOG(HAL, INFO, "MCU Power Stat (Bit 5 is Key): 0x%08x\n", u4Value);
 
 	HAL_MCR_RD(prAdapter, HOST_CSR_HIF_BUSY_CORQ_WFSYS_ON, &u4Value);
-	DBGLOG(HAL, INFO, "HIF_BUSY / CIRQ / WFSYS_ON info: 0x%08x = 0x%08x\n",
-		HOST_CSR_HIF_BUSY_CORQ_WFSYS_ON, u4Value);
+	DBGLOG(HAL, INFO, "HIF/WFSYS Status: 0x%08x\n", u4Value);
 
-	HAL_MCR_RD(prAdapter, HOST_CSR_PINMUX_MON_FLAG, &u4Value);
-	DBGLOG(HAL, INFO, "Pinmux/mon_flag info: 0x%08x = 0x%08x\n",
-		HOST_CSR_PINMUX_MON_FLAG, u4Value);
-
-	HAL_MCR_RD(prAdapter, HOST_CSR_MCU_PWR_STAT, &u4Value);
-	DBGLOG(HAL, INFO, "Bit[5] mcu_pwr_stat: 0x%08x = 0x%08x\n",
-		HOST_CSR_MCU_PWR_STAT, u4Value);
-
+	/* 5. Mailbox & Firmware Status */
 	HAL_MCR_RD(prAdapter, HOST_CSR_FW_OWN_SET, &u4Value);
-	DBGLOG(HAL, INFO, "Bit[15] fw_own_stat: 0x%08x = 0x%08x\n",
-		HOST_CSR_FW_OWN_SET, u4Value);
+	DBGLOG(HAL, INFO, "Firmware Own Stat (Bit 15): 0x%08x\n", u4Value);
 
 	HAL_MCR_RD(prAdapter, HOST_CSR_MCU_SW_MAILBOX_0, &u4Value);
-	DBGLOG(HAL, INFO, "WF Mailbox[0]: 0x%08x = 0x%08x\n",
-		HOST_CSR_MCU_SW_MAILBOX_0, u4Value);
+	DBGLOG(HAL, INFO, "WF Mailbox[0] (FW Handshake): 0x%08x\n", u4Value);
 
-	HAL_MCR_RD(prAdapter, HOST_CSR_MCU_SW_MAILBOX_1, &u4Value);
-	DBGLOG(HAL, INFO, "MCU Mailbox[1]: 0x%08x = 0x%08x\n",
-		HOST_CSR_MCU_SW_MAILBOX_1, u4Value);
-
-	HAL_MCR_RD(prAdapter, HOST_CSR_MCU_SW_MAILBOX_2, &u4Value);
-	DBGLOG(HAL, INFO, "BT Mailbox[2]: 0x%08x = 0x%08x\n",
-		HOST_CSR_MCU_SW_MAILBOX_2, u4Value);
-
-	HAL_MCR_RD(prAdapter, HOST_CSR_MCU_SW_MAILBOX_3, &u4Value);
-	DBGLOG(HAL, INFO, "GPS Mailbox[3]: 0x%08x = 0x%08x\n",
-		HOST_CSR_MCU_SW_MAILBOX_3, u4Value);
-
-	HAL_MCR_RD(prAdapter, HOST_CSR_CONN_CFG_ON, &u4Value);
-	DBGLOG(HAL, INFO, "Conn_cfg_on info: 0x%08x = 0x%08x\n",
-		HOST_CSR_CONN_CFG_ON, u4Value);
-
+	/* 6. Memory Hardening / Write-Back Verification */
+	DBGLOG(HAL, INFO, "Testing Register Write-Back (HCLK Toggle)...\n");
 	HAL_MCR_WR(prAdapter, HOST_CSR_DRIVER_OWN_INFO, 0x00030000);
-	kalUdelay(1);
-	HAL_MCR_RD(prAdapter, HOST_CSR_DRIVER_OWN_INFO, &u4Value);
-	DBGLOG(HAL, INFO, "Bit[17]/[16], Get HCLK info: 0x%08x = 0x%08x\n",
-		HOST_CSR_DRIVER_OWN_INFO, u4Value);
+	kalUdelay(5);
+	HAL_MCR_RD(prAdapter, HOST_CSR_DRIVER_OWN_INFO, &u4TestVal);
+	
+	fgEnClock = ((u4TestVal & BIT(17)) != 0) && ((u4TestVal & BIT(16)) != 0);
+	
+	if (!fgEnClock && !fgBusDead) {
+		DBGLOG(HAL, ERROR, "⚠️ Write-Back Failed! Wrote 0x30000, Read 0x%08x. Registers are RO or Gated.\n", u4TestVal);
+	}
 
-	/* check clock is enabled */
-	fgEnClock = ((u4Value & BIT(17)) != 0) && ((u4Value & BIT(16)) != 0);
+	DBGLOG(HAL, INFO, "🏁 Diagnostic Results: DriverOwn=%d, ClockEnabled=%d, BusResponsive=%d\n", 
+		fgIsDriverOwn, fgEnClock, !fgBusDead);
 
-	return fgIsDriverOwn && fgEnClock;
+	return fgIsDriverOwn && fgEnClock && !fgBusDead;
 }
+
+
+
 
 void haldumpPhyInfo(struct ADAPTER *prAdapter)
 {

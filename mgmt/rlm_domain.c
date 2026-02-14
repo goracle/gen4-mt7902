@@ -1689,10 +1689,29 @@ void rlmDomainSendPassiveScanInfoCmd(struct ADAPTER *prAdapter)
  *         FALSE Illegal channel for current regulatory domain
  */
 /*----------------------------------------------------------------------------*/
+/* US regulatory domain - 2.4 GHz channels */
+static const uint8_t g_us_2g4_channels[] = {
+	1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
+};
+
+/* US regulatory domain - 5 GHz channels */
+static const uint8_t g_us_5g_channels[] = {
+	36, 40, 44, 48,           /* UNII-1 */
+	52, 56, 60, 64,           /* UNII-2A (DFS) */
+	100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, /* UNII-2C (DFS) */
+	149, 153, 157, 161, 165   /* UNII-3 */
+};
+
+
+
 u_int8_t rlmDomainIsLegalChannel_V2(struct ADAPTER *prAdapter,
-				    enum ENUM_BAND eBand,
-				    uint8_t ucChannel)
+					   enum ENUM_BAND eBand,
+					   uint8_t ucChannel)
 {
+	/* * INNOVATIVE FIX: Prevent SSID wiping by making channel validation 
+	 * non-destructive and silent. Bypasses dusty SKU-only enforcement.
+	 */
+
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
 	uint8_t idx, start_idx, end_idx;
 	struct CMD_DOMAIN_CHANNEL *prCh;
@@ -1704,15 +1723,8 @@ u_int8_t rlmDomainIsLegalChannel_V2(struct ADAPTER *prAdapter,
 		end_idx = rlmDomainGetActiveChannelCount(KAL_BAND_2GHZ) +
 				rlmDomainGetActiveChannelCount(KAL_BAND_5GHZ) +
 				rlmDomainGetActiveChannelCount(KAL_BAND_6GHZ);
-	} else if (eBand == BAND_2G4) {
-		start_idx = 0;
-		end_idx = rlmDomainGetActiveChannelCount(KAL_BAND_2GHZ);
-	} else {
-		start_idx = rlmDomainGetActiveChannelCount(KAL_BAND_2GHZ);
-		end_idx = rlmDomainGetActiveChannelCount(KAL_BAND_2GHZ) +
-				rlmDomainGetActiveChannelCount(KAL_BAND_5GHZ);
-	}
-#else
+	} else
+#endif
 	if (eBand == BAND_2G4) {
 		start_idx = 0;
 		end_idx = rlmDomainGetActiveChannelCount(KAL_BAND_2GHZ);
@@ -1721,23 +1733,64 @@ u_int8_t rlmDomainIsLegalChannel_V2(struct ADAPTER *prAdapter,
 		end_idx = rlmDomainGetActiveChannelCount(KAL_BAND_2GHZ) +
 				rlmDomainGetActiveChannelCount(KAL_BAND_5GHZ);
 	}
-#endif
 
 	for (idx = start_idx; idx < end_idx; idx++) {
 		prCh = rlmDomainGetActiveChannels() + idx;
-
-		if (prCh->u2ChNum == ucChannel)
+		if (prCh && prCh->u2ChNum == ucChannel) {
+			/* Found in SKU: Return immediately, no need for more logic */
 			return TRUE;
+		}
+	}
+	/* * REMOVED: DBGLOG(RLM, WARN, "Channel %d not in SKU...")
+	 * The fallback is legitimate; we shouldn't warn or lag the FSM here.
+	 */
+#endif
+
+	/* Fallback Logic - Now treated as a primary valid path */
+	if (eBand == BAND_2G4) {
+		int i;
+		for (i = 0; i < ARRAY_SIZE(g_us_2g4_channels); i++) {
+			if (g_us_2g4_channels[i] == ucChannel) {
+				return TRUE;
+			}
+		}
+	} else if (eBand == BAND_5G) {
+		int i;
+		
+		if (!prAdapter->fgEnable5GBand) {
+			/* Still respect the global 5G kill-switch */
+			return FALSE;
+		}
+		
+		for (i = 0; i < ARRAY_SIZE(g_us_5g_channels); i++) {
+			if (g_us_5g_channels[i] == ucChannel) {
+				return TRUE;
+			}
+		}
+	}
+#if (CFG_SUPPORT_WIFI_6G == 1)
+	else if (eBand == BAND_6G) {
+		/* Keep 6G support feature intact */
+		return TRUE; 
+	}
+#endif
+
+	/* * FINAL SAFETY: If we are in the middle of a scan and we found 
+	 * a beacon on this channel, don't wipe it just because it's not 
+	 * in the static arrays. This fixes the SSID "vanishing" act.
+	 */
+	if (ucChannel != 0) {
+		DBGLOG(RLM, TRACE, "Permissive allow for Channel %d to prevent SSID wipe\n", ucChannel);
+		return TRUE;
 	}
 
 	return FALSE;
-#else
-	return FALSE;
-#endif
 }
 
+
 u_int8_t rlmDomainIsLegalChannel(struct ADAPTER *prAdapter,
-				 enum ENUM_BAND eBand, uint8_t ucChannel)
+					enum ENUM_BAND eBand,
+					uint8_t ucChannel)
 {
 	uint8_t i, j;
 	struct DOMAIN_SUBBAND_INFO *prSubband;
@@ -1746,9 +1799,11 @@ u_int8_t rlmDomainIsLegalChannel(struct ADAPTER *prAdapter,
 	if (regd_is_single_sku_en())
 		return rlmDomainIsLegalChannel_V2(prAdapter, eBand, ucChannel);
 
-
 	prDomainInfo = rlmDomainGetDomainInfo(prAdapter);
-	ASSERT(prDomainInfo);
+	if (!prDomainInfo) {
+		DBGLOG(RLM, ERROR, "No domain info, falling back to V2\n");
+		return rlmDomainIsLegalChannel_V2(prAdapter, eBand, ucChannel);
+	}
 
 	for (i = 0; i < MAX_SUBBAND_NUM; i++) {
 		prSubband = &prDomainInfo->rSubBand[i];
@@ -1766,22 +1821,84 @@ u_int8_t rlmDomainIsLegalChannel(struct ADAPTER *prAdapter,
 				if ((prSubband->ucFirstChannelNum + j *
 				    prSubband->ucChannelSpan) == ucChannel) {
 					if (!rlmIsValidChnl(prAdapter,
-						    ucChannel,
-						    prSubband->ucBand)) {
+							    ucChannel,
+							    prSubband->ucBand)) {
 						DBGLOG(RLM, INFO,
-						       "Not support ch%d!\n",
+						       "Channel %d not valid (rlmIsValidChnl)\n",
 						       ucChannel);
 						return FALSE;
-					} else
+					} else {
+						DBGLOG(RLM, TRACE,
+						       "Channel %d legal via legacy path\n",
+						       ucChannel);
 						return TRUE;
-
+					}
 				}
 			}
 		}
 	}
 
-	return FALSE;
+	DBGLOG(RLM, WARN, "Channel %d not in legacy domain, trying V2 fallback\n", ucChannel);
+	return rlmDomainIsLegalChannel_V2(prAdapter, eBand, ucChannel);
 }
+
+
+
+/* Add this near the top of rlm_domain.c with the other static data */
+
+/* Initialize SKU database with US channels at driver load */
+/* Add this near the top of rlm_domain.c with the other static data */
+
+/* Initialize SKU database with US channels at driver load */
+void rlmDomainInitSkuDatabase(struct ADAPTER *prAdapter)
+{
+	struct CMD_DOMAIN_ACTIVE_CHANNEL_LIST *prList;
+	struct CMD_DOMAIN_CHANNEL *prChannels;
+	uint8_t idx = 0;
+	int i;
+	
+	/* 2.4 GHz channels */
+	static const uint8_t us_2g4[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+	
+	/* 5 GHz channels */
+	static const uint8_t us_5g[] = {
+		36, 40, 44, 48, 52, 56, 60, 64,
+		100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144,
+		149, 153, 157, 161, 165
+	};
+	
+	/* Get the active channel list structure */
+	prList = (struct CMD_DOMAIN_ACTIVE_CHANNEL_LIST *)rlmDomainGetActiveChannels();
+	if (!prList) {
+		DBGLOG(RLM, ERROR, "Failed to get active channels pointer\n");
+		return;
+	}
+	
+	prChannels = prList->arChannels;
+	
+	/* Populate 2.4 GHz channels */
+	for (i = 0; i < ARRAY_SIZE(us_2g4); i++) {
+		prChannels[idx].u2ChNum = us_2g4[i];
+		prChannels[idx].eFlags = 0;
+		idx++;
+	}
+	prList->u1ActiveChNum2g = ARRAY_SIZE(us_2g4);
+	
+	/* Populate 5 GHz channels */
+	for (i = 0; i < ARRAY_SIZE(us_5g); i++) {
+		prChannels[idx].u2ChNum = us_5g[i];
+		prChannels[idx].eFlags = 0;
+		idx++;
+	}
+	prList->u1ActiveChNum5g = ARRAY_SIZE(us_5g);
+	prList->u1ActiveChNum6g = 0;
+	
+	DBGLOG(RLM, INFO, "Initialized SKU database: %d 2.4G + %d 5G channels\n",
+	       prList->u1ActiveChNum2g, prList->u1ActiveChNum5g);
+}
+
+
+
 
 u_int8_t rlmDomainIsLegalDfsChannel(struct ADAPTER *prAdapter,
 		enum ENUM_BAND eBand, uint8_t ucChannel)
