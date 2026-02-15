@@ -236,6 +236,11 @@ struct AIS_FSM_INFO {
 	enum ENUM_AIS_STATE ePreviousState;
 	enum ENUM_AIS_STATE eCurrentState;
 
+  uint32_t u4ScanReportStartTime;  /* <--- Add this line here */
+/* New members for dynamic timeout logic */
+    uint32_t u4ScanStartTime;     /* Track when the hardware sweep began */
+    uint32_t u4ScanChannelNum;    /* Number of channels in the current sweep */
+
 	u_int8_t fgTryScan;
 
 	u_int8_t fgIsScanning;

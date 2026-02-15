@@ -287,7 +287,7 @@ enum ENUM_KAL_DUMP_FILE_TYPE_E {
 	DUMP_FILE_NUM
 };
 
-#ifdef CONFIG_ANDROID		/* Defined in Android kernel source */
+#if defined(CONFIG_ANDROID) || (KERNEL_VERSION(4, 9, 0) <= LINUX_VERSION_CODE)
 #if (KERNEL_VERSION(4, 9, 0) <= CFG80211_VERSION_CODE)
 #define KAL_WAKE_LOCK_T struct wakeup_source
 #else
@@ -577,29 +577,14 @@ kalCfg80211VendorEventAlloc(struct wiphy *wiphy, struct wireless_dev *wdev,
 /*----------------------------------------------------------------------------*/
 #if CFG_ENABLE_WAKE_LOCK
 /* CFG_ENABLE_WAKE_LOCK is defined in config.h ANDROID defined */
-#if (KERNEL_VERSION(5, 1, 0) <= LINUX_VERSION_CODE)
-/* TODO: wakeup_source_init/wakeup_source_trash removed from v5.1
-* Update KAL_WAKE_LOCK_INIT/DESTROY to equivalent ways
-*/
+#if (KERNEL_VERSION(5, 4, 0) <= LINUX_VERSION_CODE)
 #define KAL_WAKE_LOCK_INIT(_prAdapter, _prWakeLock, _pcName) ({ \
-	_prWakeLock = kalMemAlloc(sizeof(KAL_WAKE_LOCK_T), \
-		VIR_MEM_TYPE); \
-	if (!_prWakeLock) { \
-		DBGLOG(HAL, ERROR, \
-			"KAL_WAKE_LOCK_INIT init fail!\n"); \
-	} \
-	else { \
-		memset(_prWakeLock, 0, sizeof(*(_prWakeLock))); \
-		(_prWakeLock)->name = _pcName; \
-		wakeup_source_add(_prWakeLock); \
-	} \
+	_prWakeLock = wakeup_source_register(NULL, _pcName); \
 })
 
 #define KAL_WAKE_LOCK_DESTROY(_prAdapter, _prWakeLock) ({ \
 	if (_prWakeLock) { \
-		wakeup_source_remove(_prWakeLock); \
-		kalMemFree(_prWakeLock, VIR_MEM_TYPE, \
-			sizeof(KAL_WAKE_LOCK_T)); \
+		wakeup_source_unregister(_prWakeLock); \
 		_prWakeLock = NULL; \
 	} \
 })

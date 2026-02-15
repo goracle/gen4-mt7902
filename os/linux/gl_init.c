@@ -104,7 +104,7 @@
  *******************************************************************************
  */
 /* #define MAX_IOREQ_NUM   10 */
-struct semaphore g_halt_sem;
+//struct semaphore g_halt_sem;
 int g_u4HaltFlag;
 atomic_t g_wlanRemoving;
 static enum ENUM_NVRAM_STATE g_NvramFsm = NVRAM_STATE_INIT;
@@ -1995,122 +1995,90 @@ static void wlanSetMulticastList(struct net_device *prDev)
 /* FIXME: Since we cannot sleep in the wlanSetMulticastList, we arrange
  * another workqueue for sleeping. We don't want to block
  * main_thread, so we can't let tx_thread to do this
- */
-
-static void wlanSetMulticastListWorkQueue(
-	struct work_struct *work)
+ */ //did i fix it? ~ claire
+static void wlanSetMulticastListWorkQueue(struct work_struct *work)
 {
+    struct GLUE_INFO *prGlueInfo = NULL;
+    uint32_t u4PacketFilter = 0;
+    uint32_t u4SetInfoLen;
+    struct net_device *prDev = gPrDev;
+    struct ADAPTER *prAdapter = NULL;
+    uint8_t ucBssIndex = 0;
+    uint8_t fgWaitResp = FALSE; /* Stay non-blocking */
 
-	struct GLUE_INFO *prGlueInfo = NULL;
-	uint32_t u4PacketFilter = 0;
-	uint32_t u4SetInfoLen;
-	struct net_device *prDev = gPrDev;
-	uint8_t ucBssIndex = 0;
-	uint32_t rStatus = WLAN_STATUS_SUCCESS;
+    ucBssIndex = wlanGetBssIdx(prDev);
+    if (!IS_BSS_INDEX_VALID(ucBssIndex))
+        return;
 
-	ucBssIndex = wlanGetBssIdx(prDev);
-	if (!IS_BSS_INDEX_VALID(ucBssIndex))
-		return;
+    /* 🛡️ STATE CHECK: Direct check of the halt flag. 
+     * No more semaphore blocking here. */
+    if (g_u4HaltFlag) {
+        DBGLOG(INIT, WARN, "HW Halted. Skipping Multicast update.\n");
+        return;
+    }
 
-	DBGLOG(INIT, INFO, "ucBssIndex = %d\n", ucBssIndex);
+    prGlueInfo = (prDev != NULL) ? *((struct GLUE_INFO **)netdev_priv(prDev)) : NULL;
+    
+    if (!prDev || !prGlueInfo || !prGlueInfo->prAdapter)
+        return;
 
-	down(&g_halt_sem);
-	if (g_u4HaltFlag) {
-		up(&g_halt_sem);
-		return;
-	}
+    prAdapter = prGlueInfo->prAdapter;
 
-	prGlueInfo = (prDev != NULL) ? *((struct GLUE_INFO **)
-					 netdev_priv(prDev)) : NULL;
-	ASSERT(prDev);
-	ASSERT(prGlueInfo);
-	if (!prDev || !prGlueInfo) {
-		DBGLOG(INIT, WARN,
-		       "abnormal dev or skb: prDev(0x%p), prGlueInfo(0x%p)\n",
-		       prDev, prGlueInfo);
-		up(&g_halt_sem);
-		return;
-	}
+    /* 🕵️ HEARTBEAT: If the bus is already failing, don't even try. */
+    if (prAdapter->fgIsChipNoAck || prAdapter->fgIsChipAssert || prAdapter->fgIsRadioOff) {
+        DBGLOG(INIT, WARN, "Bus bad (NoAck:%d). Aborting WorkQueue.\n", prAdapter->fgIsChipNoAck);
+        return;
+    }
 
-	if (!prGlueInfo->u4ReadyFlag) {
-		DBGLOG(REQ, WARN, "driver is not ready\n");
-		up(&g_halt_sem);
-		return;
-	}
+    /* Logic for filter flags remains same... */
+    if (prDev->flags & IFF_PROMISC)
+        u4PacketFilter |= PARAM_PACKET_FILTER_PROMISCUOUS;
+    if (prDev->flags & IFF_BROADCAST)
+        u4PacketFilter |= PARAM_PACKET_FILTER_BROADCAST;
+    if (prDev->flags & IFF_MULTICAST) {
+        if ((prDev->flags & IFF_ALLMULTI) || (netdev_mc_count(prDev) > MAX_NUM_GROUP_ADDR))
+            u4PacketFilter |= PARAM_PACKET_FILTER_ALL_MULTICAST;
+        else
+            u4PacketFilter |= PARAM_PACKET_FILTER_MULTICAST;
+    }
 
-	DBGLOG(INIT, INFO,
-	       "wlanSetMulticastListWorkQueue prDev->flags:0x%x\n",
-	       prDev->flags);
+    /* 🚀 FIRE AND FORGET:
+     * We've already removed the semaphore from kalIoctl, 
+     * so this call is now much safer. */
+    kalIoctl(prGlueInfo, wlanoidSetCurrentPacketFilter, &u4PacketFilter,
+             sizeof(u4PacketFilter), FALSE, FALSE, fgWaitResp, &u4SetInfoLen);
 
-	if (prDev->flags & IFF_PROMISC)
-		u4PacketFilter |= PARAM_PACKET_FILTER_PROMISCUOUS;
+    if (u4PacketFilter & PARAM_PACKET_FILTER_MULTICAST) {
+        struct netdev_hw_addr *ha;
+        uint8_t *prMCAddrList = NULL;
+        uint32_t i = 0;
 
-	if (prDev->flags & IFF_BROADCAST)
-		u4PacketFilter |= PARAM_PACKET_FILTER_BROADCAST;
+        /* Second check before memory allocation */
+        if (g_u4HaltFlag) return;
 
-	if (prDev->flags & IFF_MULTICAST) {
-		if ((prDev->flags & IFF_ALLMULTI)
-		    || (netdev_mc_count(prDev) > MAX_NUM_GROUP_ADDR))
-			u4PacketFilter |= PARAM_PACKET_FILTER_ALL_MULTICAST;
-		else
-			u4PacketFilter |= PARAM_PACKET_FILTER_MULTICAST;
-	}
+        prMCAddrList = kalMemAlloc(MAX_NUM_GROUP_ADDR * ETH_ALEN, VIR_MEM_TYPE);
+        if (!prMCAddrList) return;
 
-	up(&g_halt_sem);
+        netif_addr_lock_bh(prDev);
+        netdev_for_each_mc_addr(ha, prDev) {
+            if (i < MAX_NUM_GROUP_ADDR) {
+                kalMemCopy((prMCAddrList + i * ETH_ALEN), ha->addr, ETH_ALEN);
+                i++;
+            }
+        }
+        netif_addr_unlock_bh(prDev);
 
-	if (kalIoctl(prGlueInfo,
-		     wlanoidSetCurrentPacketFilter,
-		     &u4PacketFilter,
-		     sizeof(u4PacketFilter), FALSE, FALSE, TRUE,
-		     &u4SetInfoLen) != WLAN_STATUS_SUCCESS) {
-		return;
-	}
+        /* 🏁 FINAL CALL:
+         * We pass the updated list to our rewritten, semaphore-free handler. */
+        kalIoctlByBssIdx(prGlueInfo, wlanoidSetMulticastList, prMCAddrList, 
+                         (i * ETH_ALEN), FALSE, FALSE, fgWaitResp, 
+                         &u4SetInfoLen, ucBssIndex);
 
-	if (u4PacketFilter & PARAM_PACKET_FILTER_MULTICAST) {
-		/* Prepare multicast address list */
-		struct netdev_hw_addr *ha;
-		uint8_t *prMCAddrList = NULL;
-		uint32_t i = 0;
+        kalMemFree(prMCAddrList, VIR_MEM_TYPE, MAX_NUM_GROUP_ADDR * ETH_ALEN);
+    }
+}
 
-		down(&g_halt_sem);
-		if (g_u4HaltFlag) {
-			up(&g_halt_sem);
-			return;
-		}
 
-		prMCAddrList = kalMemAlloc(MAX_NUM_GROUP_ADDR * ETH_ALEN,
-					   VIR_MEM_TYPE);
-		if (!prMCAddrList) {
-			DBGLOG(INIT, WARN, "prMCAddrList memory alloc fail!\n");
-			up(&g_halt_sem);
-			return;
-		}
-
-		/* Avoid race condition with kernel net subsystem */
-		netif_addr_lock_bh(prDev);
-
-		netdev_for_each_mc_addr(ha, prDev) {
-			if (i < MAX_NUM_GROUP_ADDR) {
-				kalMemCopy((prMCAddrList + i * ETH_ALEN),
-					   GET_ADDR(ha), ETH_ALEN);
-				i++;
-			}
-		}
-
-		netif_addr_unlock_bh(prDev);
-
-		up(&g_halt_sem);
-
-		rStatus = kalIoctlByBssIdx(prGlueInfo,
-			 wlanoidSetMulticastList, prMCAddrList, (i * ETH_ALEN),
-			 FALSE, FALSE, TRUE, &u4SetInfoLen,
-			 ucBssIndex);
-
-		kalMemFree(prMCAddrList, VIR_MEM_TYPE,
-			   MAX_NUM_GROUP_ADDR * ETH_ALEN);
-	}
-
-}				/* end of wlanSetMulticastList() */
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -2969,7 +2937,7 @@ static void wlanCreateWirelessDevice(void)
 	int ret = 0;
 
 	/* --- Defensive: ensure global halt semaphore exists early (prevents NULL down()) --- */
-	sema_init(&g_halt_sem, 1);
+	//sema_init(&g_halt_sem, 1);
 
 	/* 1) Allocate wireless_dev structs first */
 	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
@@ -3342,6 +3310,12 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 	prAdapter = (struct ADAPTER *) wlanAdapterCreate(
 			    prGlueInfo);
 
+/* After: prAdapter = (struct ADAPTER *) wlanAdapterCreate(prGlueInfo); */
+if (prAdapter) {
+    DBGLOG(INIT, WARN, "SAA: [NET_CREATE] Adapter born. Initial rWifiVar MAC=" MACSTR "\n",
+           MAC2STR(prAdapter->rWifiVar.aucMacAddress));
+}
+
 	if (!prAdapter) {
 		DBGLOG(INIT, ERROR,
 		       "Allocating memory to adapter failed\n");
@@ -3399,6 +3373,12 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 			CFG_MAX_TXQ_NUM);
 #endif /* end of CFG_SUPPORT_PERSIST_NETDEV */
 
+/* After: prDevHandler = alloc_netdev_mq(...) */
+if (prDevHandler) {
+    DBGLOG(INIT, WARN, "SAA: [NET_CREATE] NetDev %d allocated. Linux default MAC=" MACSTR "\n",
+           i, MAC2STR(prDevHandler->dev_addr));
+}
+
 		if (!prDevHandler) {
 			DBGLOG(INIT, ERROR,
 				"Allocating memory to net_device context failed\n");
@@ -3446,6 +3426,8 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 			MEDIA_STATE_DISCONNECTED,
 			i);
 	}
+
+
 
 	prGlueInfo->prDevHandler = gprWdev[0]->netdev;
 
@@ -3530,6 +3512,26 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 	init_waitqueue_head(&(prGlueInfo->waitq_fwdump));
 	skb_queue_head_init(&(prGlueInfo->rFwDumpSkbQueue));
 #endif
+
+
+/* 🧬 FORCE CONFIG MAC INJECTION - KERNEL 6.18 COMPLIANT 🧬 */
+if (prAdapter && prGlueInfo->prDevHandler) {
+    uint8_t *pucCfgMac = prAdapter->rWifiVar.aucMacAddress;
+    struct net_device *prNetDev = prGlueInfo->prDevHandler;
+
+    /* Use the standard Linux helper instead of the missing utils function */
+    if (!is_zero_ether_addr(pucCfgMac)) {
+        DBGLOG(INIT, WARN, "SAA: Injecting Config MAC %pM into net_device\n", pucCfgMac);
+        
+        /* 1. Use the proper kernel helper for const dev_addr (Fixes Error 3565) */
+        eth_hw_addr_set(prNetDev, pucCfgMac);
+        
+        /* 2. Sync internal driver state */
+        kalMemCopy(prAdapter->rMyMacAddr, pucCfgMac, 6);
+    } else {
+        DBGLOG(INIT, ERROR, "SAA: Config MAC is zero! NetDev will use random/HW MAC.\n");
+    }
+}
 
 	return prWdev;
 
@@ -3627,21 +3629,29 @@ void wlanSetSuspendMode(struct GLUE_INFO *prGlueInfo,
 	uint32_t u4SetInfoLen = 0;
 	uint32_t u4Idx = 0;
 
-	if (!prGlueInfo)
+	if (!prGlueInfo || !prGlueInfo->prAdapter)
 		return;
 
+	/* ⚡ GLOBAL SAFETY: If we're already halted, don't touch the bus.
+	 * Transitioning power states on a stuck chip is a recipe for a Kernel Panic. */
+	if (g_u4HaltFlag || prGlueInfo->prAdapter->fgIsChipNoAck) {
+		DBGLOG(INIT, WARN, "Abort Suspend/Resume: Hardware is already dead/halted.\n");
+		return;
+	}
 
 	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
 		prDev = wlanGetNetDev(prGlueInfo, u4Idx);
 		if (!prDev)
 			continue;
 
-		/* new filter should not include p2p mask */
 #if CFG_ENABLE_WIFI_DIRECT_CFG_80211
 		u4PacketFilter =
 			prGlueInfo->prAdapter->u4OsPacketFilter &
 			(~PARAM_PACKET_FILTER_P2P_MASK);
 #endif
+		/* Note: We use TRUE for fgWaitResp here because the kernel suspend 
+		 * path expects synchronous completion, but we rely on the 5s 
+		 * timeout we added to kalIoctlByBssIdx to prevent a permanent hang. */
 		if (kalIoctl(prGlueInfo,
 			wlanoidSetCurrentPacketFilter,
 			&u4PacketFilter,
@@ -3663,24 +3673,20 @@ void wlanSetSuspendMode(struct GLUE_INFO *prGlueInfo,
 			uint8_t *prMCAddrList = NULL;
 			uint32_t i = 0;
 
-			down(&g_halt_sem);
-			if (g_u4HaltFlag) {
-				up(&g_halt_sem);
+			/* 🛡️ REPLACED: No more down(&g_halt_sem). 
+			 * If the chip died during suspend/resume, we exit immediately. */
+			if (g_u4HaltFlag)
 				return;
-			}
 
 			prMCAddrList = kalMemAlloc(
 				MAX_NUM_GROUP_ADDR * ETH_ALEN, VIR_MEM_TYPE);
 			if (!prMCAddrList) {
-				DBGLOG(INIT, WARN,
-					"prMCAddrList memory alloc fail!\n");
-				up(&g_halt_sem);
+				DBGLOG(INIT, WARN, "prMCAddrList memory alloc fail!\n");
 				continue;
 			}
 
 			/* Avoid race condition with kernel net subsystem */
 			netif_addr_lock_bh(prDev);
-
 			netdev_for_each_mc_addr(ha, prDev) {
 				if (i < MAX_NUM_GROUP_ADDR) {
 					kalMemCopy(
@@ -3689,14 +3695,14 @@ void wlanSetSuspendMode(struct GLUE_INFO *prGlueInfo,
 					i++;
 				}
 			}
-
 			netif_addr_unlock_bh(prDev);
 
-			up(&g_halt_sem);
-
-			kalIoctl(prGlueInfo, wlanoidSetMulticastList,
-				prMCAddrList, (i * ETH_ALEN), FALSE, FALSE,
-				TRUE, &u4SetInfoLen);
+			/* Double check halt status before firing the IOCTL */
+			if (!g_u4HaltFlag) {
+				kalIoctl(prGlueInfo, wlanoidSetMulticastList,
+					prMCAddrList, (i * ETH_ALEN), FALSE, FALSE,
+					TRUE, &u4SetInfoLen);
+			}
 
 			kalMemFree(prMCAddrList, VIR_MEM_TYPE,
 				MAX_NUM_GROUP_ADDR * ETH_ALEN);
@@ -3706,6 +3712,8 @@ void wlanSetSuspendMode(struct GLUE_INFO *prGlueInfo,
 		wlanNotifyFwSuspend(prGlueInfo, prDev, fgEnable);
 	}
 }
+
+
 
 #if CFG_ENABLE_EARLY_SUSPEND
 static struct early_suspend wlan_early_suspend_desc = {
@@ -4348,6 +4356,10 @@ label_exit:
 /*----------------------------------------------------------------------------*/
 uint32_t wlanConnac2XDownloadBufferBin(struct ADAPTER *prAdapter)
 {
+/* --- THE "I DON'T HAVE THE DATA" BYPASS --- */
+    DBGLOG(INIT, WARN, "MT7902-FIX: Bypassing Efuse Buffer Mode (No NVRAM/6G FW)\n");
+    return WLAN_STATUS_SUCCESS;
+
 	struct mt66xx_chip_info *prChipInfo = NULL;
 	uint32_t chip_id = 0;
 	struct GLUE_INFO *prGlueInfo = NULL;
@@ -4375,12 +4387,10 @@ uint32_t wlanConnac2XDownloadBufferBin(struct ADAPTER *prAdapter)
 	DBGLOG(INIT, INFO, "ucEfuseBUfferModeCal is %x\n",
 		prAdapter->rWifiVar.ucEfuseBufferModeCal);
 
-	// ===== ADD THIS =====
 if (prAdapter->rWifiVar.ucEfuseBufferModeCal == LOAD_EEPROM_BIN) {
     DBGLOG(INIT, WARN, "MT7902-FIX: Forcing EFUSE mode (no binary file available)\n");
     prAdapter->rWifiVar.ucEfuseBufferModeCal = LOAD_EFUSE;
 }
-	// ====================
 
 
 	prChipInfo = prAdapter->chip_info;
@@ -6640,27 +6650,22 @@ wlanOffNotifyCfg80211Disconnect(IN struct GLUE_INFO *prGlueInfo)
 static void wlanRemove(void)
 {
 	struct net_device *prDev = NULL;
-	struct WLANDEV_INFO *prWlandevInfo = NULL;
 	struct GLUE_INFO *prGlueInfo = NULL;
 	struct ADAPTER *prAdapter = NULL;
-	u_int8_t fgResult = FALSE;
 
 	DBGLOG(INIT, INFO, "Remove wlan!\n");
 
+	/* 1. Prevent Re-entry */
 	if (atomic_read(&g_wlanRemoving)) {
-		DBGLOG(INIT, ERROR, "wlanRemove in process\n");
+		DBGLOG(INIT, ERROR, "wlanRemove already in progress\n");
 		return;
 	}
 	atomic_set(&g_wlanRemoving, 1);
 
-	/*reset NVRAM State to ready for the next wifi-no*/
 	if (g_NvramFsm == NVRAM_STATE_SEND_TO_FW)
 		g_NvramFsm = NVRAM_STATE_READY;
 
 #if CFG_CHIP_RESET_SUPPORT
-	/* During chip reset, use simplify remove flow first
-	 * if anything goes wrong in wlanOffAtReset then goes to normal flow
-	 */
 	if (fgSimplifyResetFlow) {
 		if (wlanOffAtReset() == WLAN_STATUS_SUCCESS) {
 			atomic_set(&g_wlanRemoving, 0);
@@ -6669,247 +6674,43 @@ static void wlanRemove(void)
 	}
 #endif
 
+	/* 2. Fast-track the Halted State */
 	kalSetHalted(TRUE);
+	
+	/* ⚡ INNOVATION: Atomic set of the halt flag. 
+	 * We no longer use down/up on g_halt_sem. This prevents wlanRemove 
+	 * from hanging if a background thread is stuck in an IOCTL. */
+	g_u4HaltFlag = 1;
+	smp_wmb(); /* Memory barrier to ensure all CPUs see the halt immediately */
 
-	/* 4 <0> Sanity check */
-	ASSERT(u4WlanDevNum <= CFG_MAX_WLAN_DEVICES);
-	if (u4WlanDevNum == 0) {
-		DBGLOG(INIT, ERROR, "u4WlanDevNum = 0\n");
-		atomic_set(&g_wlanRemoving, 0);
-		return;
-	}
-#if (CFG_ENABLE_WIFI_DIRECT && CFG_MTK_ANDROID_WMT)
-	register_set_p2p_mode_handler(NULL);
-#endif
-	if (u4WlanDevNum > 0
-	    && u4WlanDevNum <= CFG_MAX_WLAN_DEVICES) {
+	/* 3. Cleanup Net Devices */
+	if (u4WlanDevNum > 0 && u4WlanDevNum <= CFG_MAX_WLAN_DEVICES) {
 		prDev = arWlanDevInfo[u4WlanDevNum - 1].prDev;
-		prWlandevInfo = &arWlanDevInfo[u4WlanDevNum - 1];
 	}
 
-	ASSERT(prDev);
 	if (prDev == NULL) {
 		DBGLOG(INIT, ERROR, "prDev is NULL\n");
-		atomic_set(&g_wlanRemoving, 0);
-		return;
+		goto exit_removing;
 	}
 
 	prGlueInfo = *((struct GLUE_INFO **) netdev_priv(prDev));
-	ASSERT(prGlueInfo);
 	if (prGlueInfo == NULL) {
-		DBGLOG(INIT, INFO, "prGlueInfo is NULL\n");
 		wlanFreeNetDev();
-		atomic_set(&g_wlanRemoving, 0);
-		return;
+		goto exit_removing;
 	}
 
-#if (CONFIG_WLAN_SERVICE == 1)
-	wlanServiceExit(prGlueInfo);
-#endif
-
-	/* to avoid that wpa_supplicant/hostapd triogger new cfg80211 command */
-	prGlueInfo->u4ReadyFlag = 0;
-#if CFG_MTK_ANDROID_WMT
-	update_driver_loaded_status(prGlueInfo->u4ReadyFlag);
-#endif
-
-	/* Have tried to do scan done here, but the exception occurs for */
-	/* the P2P scan. Keep the original design that scan done in the	 */
-	/* p2pStop/wlanStop.						 */
-
-#if WLAN_INCLUDE_PROC
-	procRemoveProcfs();
-#endif /* WLAN_INCLUDE_PROC */
-#if WLAN_INCLUDE_SYS
-	sysRemoveSysfs();
-#endif /* WLAN_INCLUDE_SYS */
-
-		/* Replay any regulatory domain cached during early boot */
-		rlmDomainReplayPendingRegdom(prAdapter);
-#if (CFG_SUPPORT_SNIFFER_RADIOTAP == 1)
-	sysRemoveMonDbgFs();
-#endif
 	prAdapter = prGlueInfo->prAdapter;
-#if (CFG_SUPPORT_PERMON == 1)
-	kalPerMonDestroy(prGlueInfo);
-#endif
-
-#if CFG_SUPPORT_TPENHANCE_MODE
-	wlanTpeUninit(prGlueInfo);
-#endif /* CFG_SUPPORT_TPENHANCE_MODE */
-
-	/* Need to get A-DIE ver anytime when device plug in,
-	 * or will fail on the case with insert different A-DIE card.
-	 */
-	prAdapter->chip_info->u4ADieVer = 0xFFFFFFFF;
-
-	prAdapter->CurNoResSeqID = 0;
-
-	/* complete possible pending oid, which may block wlanRemove some time
-	 * and then whole chip reset may failed
-	 */
-	if (kalIsResetting())
-		wlanReleasePendingOid(prGlueInfo->prAdapter, 1);
-
-#if CFG_ENABLE_BT_OVER_WIFI
-	if (prGlueInfo->rBowInfo.fgIsNetRegistered) {
-		bowNotifyAllLinkDisconnected(prGlueInfo->prAdapter);
-		/* wait 300ms for BoW module to send deauth */
-		kalMsleep(300);
-	}
-#endif
-
-	wlanOffNotifyCfg80211Disconnect(prGlueInfo);
-
-	/* 20150205 work queue for sched_scan */
-
-	flush_delayed_work(&sched_workq);
-
-#if CFG_REDIRECT_OID_SUPPORT
-	flush_delayed_work(&oid_workq);
-#endif
-
-#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-#if CFG_SUPPORT_CFG80211_QUEUE
-	flush_delayed_work(&cfg80211_workq);
-#endif
-#endif
-
-#if CFG_AP_80211KVR_INTERFACE
-	cancel_delayed_work_sync(&prAdapter->prGlueInfo->rChanNoiseControlWork);
-	cancel_delayed_work_sync(&prAdapter->prGlueInfo->rChanNoiseGetInfoWork);
-#endif
-
-	down(&g_halt_sem);
-	g_u4HaltFlag = 1;
-	up(&g_halt_sem);
-
-	/* 4 <2> Mark HALT, notify main thread to stop, and clean up queued
-	 *       requests
-	 */
-	set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
-
-	/* Stop works */
-#if CFG_SUPPORT_MULTITHREAD
-	flush_work(&prGlueInfo->rTxMsduFreeWork);
-#endif
-	cancel_delayed_work_sync(&prGlueInfo->rRxPktDeAggWork);
-
-	nicSerDeInit(prGlueInfo->prAdapter);
-
-	wlanOffStopWlanThreads(prGlueInfo);
-
-	if (HAL_IS_TX_DIRECT(prAdapter)) {
-		if (prAdapter->fgTxDirectInited) {
-#if CFG80211_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
-			timer_delete_sync(&prAdapter->rTxDirectSkbTimer);
-			timer_delete_sync(&prAdapter->rTxDirectHifTimer);
-#else
-			del_timer_sync(&prAdapter->rTxDirectSkbTimer);
-			del_timer_sync(&prAdapter->rTxDirectHifTimer);
-#endif
-		}
-	}
-
-	/* Destroy wakelock */
-	wlanWakeLockUninit(prGlueInfo);
-
-	kalMemSet(&(prGlueInfo->prAdapter->rWlanInfo), 0,
-		  sizeof(struct WLAN_INFO));
-
-#if CFG_ENABLE_WIFI_DIRECT
-	if (prGlueInfo->prAdapter->fgIsP2PRegistered) {
-		DBGLOG(INIT, INFO, "p2pNetUnregister...\n");
-		p2pNetUnregister(prGlueInfo, FALSE);
-		DBGLOG(INIT, INFO, "p2pRemove...\n");
-		/*p2pRemove must before wlanAdapterStop */
-		p2pRemove(prGlueInfo);
-	}
-#endif
-
-#if CFG_SUPPORT_NAN
-	if (prGlueInfo->prAdapter->fgIsNANRegistered) {
-		DBGLOG(INIT, INFO, "NANNetUnregister...\n");
-		nanNetUnregister(prGlueInfo, FALSE);
-		DBGLOG(INIT, INFO, "nanRemove...\n");
-		/* nanRemove must before wlanAdapterStop */
-		nanRemove(prGlueInfo);
-	}
-	kalReleaseUserSock(prGlueInfo);
-#endif
-
-#if CFG_ENABLE_BT_OVER_WIFI
-	if (prGlueInfo->rBowInfo.fgIsRegistered)
-		glUnregisterAmpc(prGlueInfo);
-#endif
-
-#if (CFG_MET_PACKET_TRACE_SUPPORT == 1)
-	kalMetRemoveProcfs();
-#endif
-
-#if CFG_MET_TAG_SUPPORT
-	if (GL_MET_TAG_UNINIT() != 0)
-		DBGLOG(INIT, ERROR, "MET_TAG_UNINIT error!\n");
-#endif
-
-	/* 4 <4> wlanAdapterStop */
-#if CFG_SUPPORT_AGPS_ASSIST
-	kalIndicateAgpsNotify(prAdapter, AGPS_EVENT_WLAN_OFF, NULL,
-			      0);
-#endif
-
-	wlanAdapterStop(prAdapter);
-
-	HAL_LP_OWN_SET(prAdapter, &fgResult);
-	DBGLOG(INIT, INFO, "HAL_LP_OWN_SET(%d)\n",
-	       (uint32_t) fgResult);
-
-	/* 4 <x> Stopping handling interrupt and free IRQ */
-	glBusFreeIrq(prDev, prGlueInfo);
-
-	/* 4 <5> Release the Bus */
-	glBusRelease(prDev);
-
-#if (CFG_SUPPORT_TRACE_TC4 == 1)
-	wlanDebugTC4Uninit();
-#endif
-	/* 4 <6> Unregister the card */
+	prGlueInfo->u4ReadyFlag = 0;
+	/*Unregister and Destroy */
 	wlanNetUnregister(prDev->ieee80211_ptr);
-
-	flush_delayed_work(&workq);
-
-	/* 4 <7> Destroy the device */
 	wlanNetDestroy(prDev->ieee80211_ptr);
 
-	glTaskletUninit(prGlueInfo);
-
-	/* 4 <8> Unregister early suspend callback */
-#if CFG_ENABLE_EARLY_SUSPEND
-	glUnregisterEarlySuspend(&wlan_early_suspend_desc);
-#endif
-
-#if !CFG_SUPPORT_PERSIST_NETDEV
-	{
-		uint32_t u4Idx = 0;
-
-		for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
-			if (gprWdev[u4Idx] && gprWdev[u4Idx]->netdev)
-				gprWdev[u4Idx]->netdev = NULL;
-		}
-	}
-#endif
-
-	/* 4 <9> Unregister notifier callback */
 	wlanUnregisterInetAddrNotifier();
-
-#if CFG_CHIP_RESET_SUPPORT & !CFG_WMT_RESET_API_SUPPORT
-	fgIsResetting = FALSE;
-#if (CFG_SUPPORT_CONNINFRA == 1)
-	update_driver_reset_status(fgIsResetting);
-#endif
-#endif
+	glTaskletUninit(prGlueInfo); // Add this back in
+exit_removing:
 	atomic_set(&g_wlanRemoving, 0);
-}				/* end of wlanRemove() */
+}
+
 
 /*----------------------------------------------------------------------------*/
 /*!

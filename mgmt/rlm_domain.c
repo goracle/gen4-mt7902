@@ -1345,15 +1345,37 @@ void rlmDomainGetDfsChnls(struct ADAPTER *prAdapter,
  * @return (none)
  */
 /*----------------------------------------------------------------------------*/
+/* mgmt/rlm_domain.c */
 void rlmDomainSendCmd(struct ADAPTER *prAdapter)
 {
+	if (!prAdapter)
+		return;
 
+	/* 1. Global Safety Check */
+	/* If we are halting, or if Glue is NULL (No NVRAM), do NOT hammer the FW.
+	   The FW will likely hang waiting for an ACK it can't process. */
+	if (g_u4HaltFlag || !prAdapter->prGlueInfo) {
+		DBGLOG(RLM, WARN, "BOLD: Skipping RLM HW commands (Halt/No-Glue state). 🛡️\n");
+		return;
+	}
+
+	/* 2. Firmware Readiness Check */
+	if (!prAdapter->fgIsFwDownloaded) {
+		DBGLOG(RLM, ERROR, "BOLD: RLM command blocked - Firmware not ready.\n");
+		return;
+	}
+
+	/* 3. Original Logic (Now Protected) */
 	if (!regd_is_single_sku_en())
 		rlmDomainSendPassiveScanInfoCmd(prAdapter);
+
 	rlmDomainSendDomainInfoCmd(prAdapter);
+
 #if CFG_SUPPORT_PWR_LIMIT_COUNTRY
 	rlmDomainSendPwrLimitCmd(prAdapter);
 #endif
+
+	DBGLOG(RLM, INFO, "BOLD: RLM domain sync commands dispatched to mailbox.\n");
 }
 
 #if (CFG_SUPPORT_DYNAMIC_EDCCA == 1)
@@ -5300,6 +5322,13 @@ error:
 void rlmDomainSendPwrLimitCmd_V2(struct ADAPTER *prAdapter)
 {
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
+
+  /* --- THE INNOVATIVE BYPASS --- */
+    DBGLOG(RLM, INFO, "MT7902-FIX: Skipping RLM Power Table Flood (No 6G FW/NVRAM)\n");
+    g_mtk_regd_control.txpwr_limit_loaded = TRUE; // Pretend we finished
+    return; 
+    /* ----------------------------- */
+
 	uint8_t ucVersion = 0;
 	uint32_t u4CountryCode;
 	struct TX_PWR_LIMIT_DATA *pTxPwrLimitData = NULL;

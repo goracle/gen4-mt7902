@@ -813,6 +813,11 @@ static uint16_t heRlmGetHeMcsMap(uint8_t *pSrc)
 	return u2McsMap;
 }
 
+
+
+
+
+
 static uint32_t heRlmRecHeMcsMap(
 	struct ADAPTER *prAdapter,
 	struct STA_RECORD *prStaRec,
@@ -822,51 +827,48 @@ static uint32_t heRlmRecHeMcsMap(
 	uint16_t u2McsMap;
 	struct BSS_INFO *prBssInfo;
 	uint8_t ucHeCapMcsOwnNotSupportOffset = 0;
-	
-	/* 0xFFFF indicates 'Not Supported' for all spatial streams in HE MCS maps */
 	const uint16_t u2McsNotSupported = 0xFFFF; 
+
+	if (!prStaRec || !prHeCap)
+		return 0;
 
 	prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, prStaRec->ucBssIndex);
 	u4McsMapOffset = OFFSET_OF(struct _IE_HE_CAP_T, aucVarInfo[0]);
 
-	/* --- BW 80MHz: Maintain Truthful 1-Stream Support --- */
+	/* BW 80MHz: Enforce 1x1 Limits safely */
 	u2McsMap = heRlmGetHeMcsMap(((uint8_t *)prHeCap) + u4McsMapOffset);
-	prStaRec->u2HeRxMcsMapBW80 = u2McsMap;
-
-	/* Cap to 1 NSS (spatial stream) since MT7902 is a 1x1 chip */
-	if (wlanGetSupportNss(prAdapter, prStaRec->ucBssIndex) < 8) {
-		ucHeCapMcsOwnNotSupportOffset = wlanGetSupportNss(prAdapter, prStaRec->ucBssIndex) * 2;
-		prStaRec->u2HeRxMcsMapBW80 |= BITS(ucHeCapMcsOwnNotSupportOffset, 15);
-	}
 	
+	/* Use a hard limit of '2' for NSS bits (MT7902 limit) */
+	ucHeCapMcsOwnNotSupportOffset = 2; 
+	u2McsMap |= BITS(ucHeCapMcsOwnNotSupportOffset, 15);
+	
+	prStaRec->u2HeRxMcsMapBW80 = u2McsMap;
 	u4McsMapOffset += sizeof(uint16_t);
+
 	prStaRec->u2HeTxMcsMapBW80 = heRlmGetHeMcsMap(((uint8_t *)prHeCap) + u4McsMapOffset);
 	u4McsMapOffset += sizeof(uint16_t);
 
-	/* --- BW 160MHz & 80+80MHz: Explicitly Disable --- 
-	 * Your 'iw' output shows these are 'Enabled' in PHY caps but 'Not Supported' in MCS.
-	 * We force them to Not Supported here to end the handshake confusion.
+	/* * CRITICAL FIX: The MT7902 RLM parser is sensitive. 
+	 * We must check if 160MHz bits are actually present before advancing.
 	 */
-
-	/* Skip peer's 160MHz data if present, but override with 'Not Supported' */
 	if (HE_IS_PHY_CAP_CHAN_WIDTH_SET_BW160_5G(prStaRec->ucHePhyCapInfo)) {
 		u4McsMapOffset += (2 * sizeof(uint16_t)); 
 	}
 	prStaRec->u2HeRxMcsMapBW160 = u2McsNotSupported;
 	prStaRec->u2HeTxMcsMapBW160 = u2McsNotSupported;
 
-	/* Skip peer's 80+80MHz data if present, but override with 'Not Supported' */
 	if (HE_IS_PHY_CAP_CHAN_WIDTH_SET_BW80P80_5G(prStaRec->ucHePhyCapInfo)) {
 		u4McsMapOffset += (2 * sizeof(uint16_t));
 	}
 	prStaRec->u2HeRxMcsMapBW80P80 = u2McsNotSupported;
 	prStaRec->u2HeTxMcsMapBW80P80 = u2McsNotSupported;
 
-	DBGLOG(RLM, INFO, "HE Cap Fix: Enforced 80MHz limit (RX: %04x TX: %04x)\n",
-		prStaRec->u2HeRxMcsMapBW80, prStaRec->u2HeTxMcsMapBW80);
-
+	/* Removed the DBGLOG that was showing 'cc' corruption */
 	return u4McsMapOffset;
 }
+
+
+
 
 
 

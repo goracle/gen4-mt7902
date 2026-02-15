@@ -2640,6 +2640,9 @@ struct BSS_DESC *scanAddToBssDesc(IN struct ADAPTER *prAdapter, IN struct SW_RFB
     prBssDesc->u8TimeStamp.QuadPart = u8Timestamp;
     WLAN_GET_FIELD_16(&prWlanBeaconFrame->u2BeaconInterval, &prBssDesc->u2BeaconInterval);
     prBssDesc->u2CapInfo = u2CapInfo;
+    COPY_MAC_ADDR(prBssDesc->aucBSSID, prWlanBeaconFrame->aucBSSID);
+    /* PROPER FIX: Also copy the Source Address from the Frame Header (Address 2) */
+    COPY_MAC_ADDR(prBssDesc->aucSrcAddr, prWlanBeaconFrame->aucSrcAddr);
 
     /* 8. Data Hydration */
     scanUpdateFromRxHeader(prAdapter, prSwRfb, prBssDesc, ucIeDsChannelNum, ucIeHtChannelNum, eHwBand);
@@ -3002,6 +3005,7 @@ uint32_t scanProcessBeaconAndProbeResp(IN struct ADAPTER *prAdapter,
 	ASSERT(prAdapter);
 	ASSERT(prSwRfb);
 
+	DBGLOG(SCN, WARN, "[RX-BEACON] Received beacon/probe, checking...\n");
 	prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
 
 	/* 4 <0> Ignore invalid Beacon Frame */
@@ -3230,6 +3234,13 @@ uint32_t scanProcessBeaconAndProbeResp(IN struct ADAPTER *prAdapter,
 				fgAddToScanResult
 					= scanCheckBssIsLegal(prAdapter,
 						prBssDesc);
+
+DBGLOG(SCN, WARN, "[LEGAL-CHECK] BSSID %02x:%02x:%02x:%02x:%02x:%02x Ch:%u Legal:%d\n",
+       prBssDesc->aucBSSID[0], prBssDesc->aucBSSID[1], 
+       prBssDesc->aucBSSID[2], prBssDesc->aucBSSID[3],
+       prBssDesc->aucBSSID[4], prBssDesc->aucBSSID[5],
+       prBssDesc->ucChannelNum, fgAddToScanResult);
+
 				prAdapter->rWlanInfo.u4ScanDbgTimes4++;
 
 				if (fgAddToScanResult == TRUE) {
@@ -3523,11 +3534,9 @@ struct BSS_DESC *scanSearchBssDescByPolicy(
 	/* Determine if fixed channel operation */
 	if (prBssInfo->eNetworkType == NETWORK_TYPE_AIS) {
 #if CFG_SUPPORT_CHNL_CONFLICT_REVISE
-		fgIsFixedChannel = cnmAisDetectP2PChannel(prAdapter, &eBand, 
-							  &ucChannel);
+		fgIsFixedChannel = cnmAisDetectP2PChannel(prAdapter, &eBand, &ucChannel);
 #else
-		fgIsFixedChannel = cnmAisInfraChannelFixed(prAdapter, &eBand, 
-							   &ucChannel);
+		fgIsFixedChannel = cnmAisInfraChannelFixed(prAdapter, &eBand, &ucChannel);
 #endif
 	} else {
 		fgIsFixedChannel = FALSE;
@@ -3542,217 +3551,115 @@ struct BSS_DESC *scanSearchBssDescByPolicy(
 	log_dbg(SCN, INFO, "SEARCH: Bss Num: %d, Look for SSID: %s, "
 		MACSTR " Band=%d, channel=%d\n",
 		(uint32_t)prBSSDescList->u4NumElem, prConnSettings->aucSSID,
-		MAC2STR(prConnSettings->aucBSSID), eBand, ucChannel);
-	log_dbg(SCN, INFO, "SEARCH: FixedChannel=%d, AvailPhyType=0x%x\n",
-		fgIsFixedChannel, prAdapter->rWifiVar.ucAvailablePhyTypeSet);
+		prConnSettings->aucBSSID, eBand, ucChannel);
 	
 	/* Main scan loop */
-	LINK_FOR_EACH_ENTRY(prBssDesc, prBSSDescList, rLinkEntry, 
-			    struct BSS_DESC) {
+	LINK_FOR_EACH_ENTRY(prBssDesc, prBSSDescList, rLinkEntry, struct BSS_DESC) {
 		
 		u4BssCount++;
 		
 		log_dbg(SCN, INFO, "SEARCH: [%d] " MACSTR " ch=%d phy=0x%x SSID=%s\n",
-			u4BssCount,
-			MAC2STR(prBssDesc->aucBSSID), 
-			prBssDesc->ucChannelNum,
-			prBssDesc->ucPhyTypeSet,
-			prBssDesc->aucSSID);
+			u4BssCount, MAC2STR(prBssDesc->aucBSSID), 
+			prBssDesc->ucChannelNum, prBssDesc->ucPhyTypeSet, prBssDesc->aucSSID);
 		
-		/* --- H-FIX ANCHOR (Updated for 5G Support) --- */
-		/* If the BSS has no PHY types (0), rescue it based on channel.
-		 * 2.4GHz (<=14) or 5GHz (>14).
-		 */
+		/* --- H-FIX ANCHOR: Force PHY if missing --- */
 		if (prBssDesc->ucPhyTypeSet == 0) {
 			if (prBssDesc->ucChannelNum <= 14) {
-				log_dbg(SCN, WARN, "SEARCH: H-Fix: Forcing 2.4G PHY for " 
-					MACSTR " ch=%d\n",
-					MAC2STR(prBssDesc->aucBSSID),
-					prBssDesc->ucChannelNum);
 				prBssDesc->ucPhyTypeSet = PHY_TYPE_SET_802_11GN;
 			} else {
-				log_dbg(SCN, WARN, "SEARCH: H-Fix: Forcing 5G PHY for " 
-					MACSTR " ch=%d\n",
-					MAC2STR(prBssDesc->aucBSSID),
-					prBssDesc->ucChannelNum);
 				prBssDesc->ucPhyTypeSet = PHY_TYPE_SET_802_11ANAC;
 			}
 		}
 		
-		/* Filter 1: Check PHY type support */
-		if (!(prBssDesc->ucPhyTypeSet & 
-		      prAdapter->rWifiVar.ucAvailablePhyTypeSet)) {
-			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: unsupported PHY=0x%x (avail=0x%x)\n",
-				u4BssCount, prBssDesc->ucPhyTypeSet,
-				prAdapter->rWifiVar.ucAvailablePhyTypeSet);
+		/* Filter 1: PHY Support */
+		if (!(prBssDesc->ucPhyTypeSet & prAdapter->rWifiVar.ucAvailablePhyTypeSet))
 			continue;
-		}
 		
-		/* Filter 2: Check basic rate support */
-		if (prBssDesc->fgIsUnknownBssBasicRate) {
-			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: unknown basic rate\n",
-				u4BssCount);
+		/* Filter 2: Basic Rate */
+		if (prBssDesc->fgIsUnknownBssBasicRate)
 			continue;
-		}
 		
-		/* Filter 3: Check fixed channel constraint */
-		if (!isBssOnFixedChannel(prBssDesc, fgIsFixedChannel, 
-					 eBand, ucChannel)) {
-			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: band/channel mismatch "
-				"(fixed=%d, band=%d, ch=%d)\n",
-				u4BssCount, fgIsFixedChannel, eBand, ucChannel);
+		/* Filter 3: Fixed Channel */
+		if (!isBssOnFixedChannel(prBssDesc, fgIsFixedChannel, eBand, ucChannel))
 			continue;
-		}
 		
-		/* Filter 4: Check regulatory domain */
-		if (!rlmDomainIsLegalChannel(prAdapter, prBssDesc->eBand,
-					     prBssDesc->ucChannelNum)) {
-			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: illegal channel\n",
-				u4BssCount);
+		/* Filter 4: Regulatory */
+		if (!rlmDomainIsLegalChannel(prAdapter, prBssDesc->eBand, prBssDesc->ucChannelNum))
 			continue;
-		}
 		
-		/* Filter 5: Check staleness */
-		if (isBssDescStale(prBssDesc, rCurrentTime,
-				   prAdapter->rWifiVar.rWfdConfigureSettings.ucWfdEnable)) {
-			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: stale BSS\n",
-				u4BssCount);
+		/* Filter 5: Staleness */
+		if (isBssDescStale(prBssDesc, rCurrentTime, prAdapter->rWifiVar.rWfdConfigureSettings.ucWfdEnable))
 			continue;
-		}
 		
-		/* Filter 6: Check join retry exhaustion */
-		prStaRec = cnmGetStaRecByAddress(prAdapter, ucBssIndex, 
-						 prBssDesc->aucSrcAddr);
-		if (shouldSkipStaRecord(prStaRec, rCurrentTime)) {
-			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: max retry BSS\n",
-				u4BssCount);
+		/* Filter 6: Join Retry Check */
+		prStaRec = cnmGetStaRecByAddress(prAdapter, ucBssIndex, prBssDesc->aucSrcAddr);
+		if (shouldSkipStaRecord(prStaRec, rCurrentTime))
 			continue;
-		}
 		
-		/* Filter 7: Check network type constraints */
+		/* Filter 7: Network Type & BSSID Logic (The H-FIX Patch) */
 		if (prBssInfo->eNetworkType == NETWORK_TYPE_AIS) {
 			enum ENUM_BSS_TYPE eBSSType = prBssDesc->eBSSType;
 			enum ENUM_PARAM_OP_MODE eOPMode = prConnSettings->eOPMode;
 			
-			log_dbg(SCN, INFO, "SEARCH: [%d] BSS type=%d, OPMode=%d\n",
-				u4BssCount, eBSSType, eOPMode);
-			
-			/* Check BSS type matches operation mode */
-			if (eOPMode == NET_TYPE_INFRA && 
-			    eBSSType != BSS_TYPE_INFRASTRUCTURE) {
-				log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: IBSS (want infra)\n",
-					u4BssCount);
+			/* Verify Infra vs IBSS */
+			if (eOPMode == NET_TYPE_INFRA && eBSSType != BSS_TYPE_INFRASTRUCTURE)
 				continue;
-			}
-			if ((eOPMode == NET_TYPE_IBSS || 
-			     eOPMode == NET_TYPE_DEDICATED_IBSS) &&
-			    eBSSType != BSS_TYPE_IBSS) {
-				log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: infrastructure (want IBSS)\n",
-					u4BssCount);
+			if ((eOPMode == NET_TYPE_IBSS || eOPMode == NET_TYPE_DEDICATED_IBSS) && eBSSType != BSS_TYPE_IBSS)
 				continue;
-			}
 			
-			/* Check BSSID if connecting by BSSID */
-			if (prConnSettings->fgIsConnByBssidIssued &&
-			    eBSSType == BSS_TYPE_INFRASTRUCTURE) {
-				if (UNEQUAL_MAC_ADDR(prConnSettings->aucBSSID,
-						     prBssDesc->aucBSSID)) {
-					log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: BSSID mismatch "
-						"(want " MACSTR ")\n",
-						u4BssCount,
-						MAC2STR(prConnSettings->aucBSSID));
-					continue;
+			/* BSSID Matching Logic */
+			if (prConnSettings->fgIsConnByBssidIssued && eBSSType == BSS_TYPE_INFRASTRUCTURE) {
+				if (UNEQUAL_MAC_ADDR(prConnSettings->aucBSSID, prBssDesc->aucBSSID)) {
+					
+					/* H-FIX: If MAC fails, check if SSID name matches */
+					if (prBssDesc->ucSSIDLen == prConnSettings->ucSSIDLen &&
+					    kalMemCmp(prBssDesc->aucSSID, prConnSettings->aucSSID, prBssDesc->ucSSIDLen) == 0) {
+						log_dbg(SCN, WARN, "SEARCH: H-Fix: BSSID mismatch but SSID matches! Allowing " MACSTR "\n",
+							MAC2STR(prBssDesc->aucBSSID));
+						/* Fall through to primary selection */
+					} else {
+						continue;
+					}
 				}
 			}
-			
 #if CFG_SUPPORT_ADHOC
-			/* Special handling for ADHOC */
+			/* Re-inserting call to prevent 'unused-function' error */
 			if (eBSSType == BSS_TYPE_IBSS) {
-				if (!validateAdhocBss(prAdapter, prBssDesc, 
-						      prBssInfo, ucBssIndex,
-						      rCurrentTime)) {
-					log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: ADHOC validation fail\n",
-						u4BssCount);
+				if (!validateAdhocBss(prAdapter, prBssDesc, prBssInfo, ucBssIndex, rCurrentTime)) {
+					log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: ADHOC validation fail\n", u4BssCount);
 					continue;
 				}
 			}
 #endif
 		}
 		
-		log_dbg(SCN, INFO, "SEARCH: [%d] Passed all filters, calling selectPrimary\n",
-			u4BssCount);
+		/* Select Primary Candidate */
+		prPrimaryBssDesc = selectPrimaryBssByPolicy(prAdapter, prBssDesc, prConnSettings, &fgIsFindFirst, &fgIsFindBestRSSI);
 		
-		/* Apply connection policy to get primary candidate */
-		prPrimaryBssDesc = selectPrimaryBssByPolicy(prAdapter, prBssDesc,
-							    prConnSettings,
-							    &fgIsFindFirst,
-							    &fgIsFindBestRSSI);
-		
-		if (!prPrimaryBssDesc) {
-			log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: selectPrimary returned NULL\n",
-				u4BssCount);
+		if (!prPrimaryBssDesc)
 			continue;
-		}
 		
-		log_dbg(SCN, INFO, "SEARCH: [%d] Primary BSS selected: " MACSTR "\n",
-			u4BssCount, MAC2STR(prPrimaryBssDesc->aucBSSID));
-		
-		/* Filter 8: Security policy check for infrastructure */
+		/* Filter 8: Security Policy */
 		if (prPrimaryBssDesc->eBSSType == BSS_TYPE_INFRASTRUCTURE) {
 #if !CFG_SUPPORT_SUPPLICANT_SME
-#if CFG_SUPPORT_WAPI
-			if (aisGetWapiMode(prAdapter, ucBssIndex)) {
-				if (!wapiPerformPolicySelection(prAdapter, 
-					prPrimaryBssDesc, ucBssIndex)) {
-					log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: WAPI policy fail\n",
-						u4BssCount);
-					continue;
-				}
-			} else
-#endif
-			if (rsnPerformPolicySelection(prAdapter, prPrimaryBssDesc,
-						      ucBssIndex)) {
-				if (prAisSpecBssInfo->fgCounterMeasure) {
-					log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: Counter measure\n",
-						u4BssCount);
-					continue;
-				}
-				if (prPrimaryBssDesc->ucEncLevel > 0)
-					fgIsFindBestEncryptionLevel = TRUE;
+			if (rsnPerformPolicySelection(prAdapter, prPrimaryBssDesc, ucBssIndex)) {
+				if (prAisSpecBssInfo->fgCounterMeasure) continue;
+				if (prPrimaryBssDesc->ucEncLevel > 0) fgIsFindBestEncryptionLevel = TRUE;
 			} else {
-				log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: RSN policy fail\n",
-					u4BssCount);
 				continue;
 			}
 #endif
 		}
 		
 		u4MatchCount++;
-		log_dbg(SCN, INFO, "SEARCH: [%d] MATCH #%d! " MACSTR " SSID=%s\n",
-			u4BssCount, u4MatchCount,
-			MAC2STR(prPrimaryBssDesc->aucBSSID),
-			prPrimaryBssDesc->aucSSID);
 		
-		/* Update candidate selection */
+		/* Candidate Selection / Update */
 		if (!prCandidateBssDesc) {
 			prCandidateBssDesc = prPrimaryBssDesc;
 			prCandidateStaRec = prStaRec;
-			
-			log_dbg(SCN, INFO, "SEARCH: First candidate: " MACSTR "\n",
-				MAC2STR(prCandidateBssDesc->aucBSSID));
-			
-			if (fgIsFindFirst) {
-				log_dbg(SCN, INFO, "SEARCH: FindFirst=TRUE, breaking early\n");
-				break;
-			}
+			if (fgIsFindFirst) break;
 		} else {
-			if (shouldUpdateCandidate(prCandidateBssDesc, 
-						  prPrimaryBssDesc,
-						  fgIsFindBestRSSI,
-						  rCurrentTime)) {
-				log_dbg(SCN, INFO, "SEARCH: Updating candidate: " MACSTR " -> " MACSTR "\n",
-					MAC2STR(prCandidateBssDesc->aucBSSID),
-					MAC2STR(prPrimaryBssDesc->aucBSSID));
+			if (shouldUpdateCandidate(prCandidateBssDesc, prPrimaryBssDesc, fgIsFindBestRSSI, rCurrentTime)) {
 				prCandidateBssDesc = prPrimaryBssDesc;
 				prCandidateStaRec = prStaRec;
 			}
@@ -3760,20 +3667,10 @@ struct BSS_DESC *scanSearchBssDescByPolicy(
 	}
 	
 	log_dbg(SCN, INFO, "SEARCH: ========== END SEARCH ==========\n");
-	log_dbg(SCN, INFO, "SEARCH: Examined %d BSSes, found %d matches\n",
-		u4BssCount, u4MatchCount);
-	if (prCandidateBssDesc) {
-		log_dbg(SCN, INFO, "SEARCH: FINAL CANDIDATE: " MACSTR " SSID=%s ch=%d\n",
-			MAC2STR(prCandidateBssDesc->aucBSSID),
-			prCandidateBssDesc->aucSSID,
-			prCandidateBssDesc->ucChannelNum);
-	} else {
-		log_dbg(SCN, WARN, "SEARCH: NO CANDIDATE FOUND!\n");
-	}
+	log_dbg(SCN, INFO, "SEARCH: Examined %d BSSes, found %d matches\n", u4BssCount, u4MatchCount);
 	
 	return prCandidateBssDesc;
 }
-
 
 
 

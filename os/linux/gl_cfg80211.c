@@ -1160,13 +1160,15 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		return -EINVAL;
 	rOpMode.ucBssIdx = ucBssIndex;
 
-	DBGLOG(REQ, INFO, "auth to  BSS [" MACSTR "]\n",
+	DBGLOG(REQ, INFO, "auth to BSS [" MACSTR "]\n",
 		MAC2STR((uint8_t *)req->bss->bssid));
 	DBGLOG(REQ, INFO, "auth_type:%d\n", req->auth_type);
 
 	prConnSettings = aisGetConnSettings(prGlueInfo->prAdapter, ucBssIndex);
 
-	/* <1>Set OP mode */
+	/* ====================================================================
+	 * <1> Set OP mode
+	 * ==================================================================== */
 	if (prConnSettings->eOPMode > NET_TYPE_AUTO_SWITCH)
 		rOpMode.eOpMode = NET_TYPE_AUTO_SWITCH;
 	else
@@ -1178,76 +1180,79 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 			   FALSE, FALSE, TRUE, &u4BufLen);
 
 	if (rStatus != WLAN_STATUS_SUCCESS) {
-		DBGLOG(INIT, INFO,
-			"wlanoidSetInfrastructureMode fail 0x%x\n",
+		DBGLOG(INIT, ERROR,
+			"wlanoidSetInfrastructureMode failed: 0x%x\n",
 			rStatus);
 		return -EFAULT;
 	}
 
-	/*<2> Set Auth data */
+	/* ====================================================================
+	 * <2> Set Auth data (for SAE, etc.)
+	 * ==================================================================== */
 	prConnSettings->ucAuthDataLen = 0;
+
 #if KERNEL_VERSION(4, 10, 0) > CFG80211_VERSION_CODE
-	if (req->sae_data_len != 0) {
+	if (req->sae_data && req->sae_data_len > 0) {
 		if (req->sae_data_len > AUTH_DATA_MAX_LEN) {
-			DBGLOG(INIT, WARN,
-				"request auth with unexpected len:%zu\n",
-				req->sae_data_len);
-			return -EFAULT;
+			DBGLOG(REQ, ERROR,
+				"SAE data too large: %zu > %d\n",
+				req->sae_data_len, AUTH_DATA_MAX_LEN);
+			return -EINVAL;
 		}
 
 		kalMemCopy(prConnSettings->aucAuthData,
-			req->sae_data, req->sae_data_len);
-		prConnSettings->ucAuthDataLen = req->sae_data_len;
+			   req->sae_data, req->sae_data_len);
+		prConnSettings->ucAuthDataLen = (uint8_t)req->sae_data_len;
 
-		DBGLOG(INIT, INFO,
-			"Dump auth data in connectSettings, auth len:%d\n",
+		DBGLOG(REQ, INFO, "SAE auth data: %d bytes\n",
 			prConnSettings->ucAuthDataLen);
-		DBGLOG_MEM8(REQ, INFO,
-			prConnSettings->aucAuthData, req->sae_data_len);
+		DBGLOG_MEM8(REQ, TRACE,
+			    prConnSettings->aucAuthData, req->sae_data_len);
 	}
 #else
-	if (req->auth_data_len != 0) {
+	if (req->auth_data && req->auth_data_len > 0) {
 		if (req->auth_data_len > AUTH_DATA_MAX_LEN) {
-			DBGLOG(INIT, WARN,
-				"request auth with unexpected len:%zu\n",
-				req->auth_data_len);
-			return -EFAULT;
+			DBGLOG(REQ, ERROR,
+				"Auth data too large: %zu > %d\n",
+				req->auth_data_len, AUTH_DATA_MAX_LEN);
+			return -EINVAL;
 		}
 
 		kalMemCopy(prConnSettings->aucAuthData,
-			req->auth_data, req->auth_data_len);
-		prConnSettings->ucAuthDataLen = req->auth_data_len;
+			   req->auth_data, req->auth_data_len);
+		prConnSettings->ucAuthDataLen = (uint8_t)req->auth_data_len;
 
-		DBGLOG(INIT, INFO,
-			"Dump auth data in connectSettings, auth len:%d\n",
+		DBGLOG(REQ, INFO, "Auth data: %d bytes\n",
 			prConnSettings->ucAuthDataLen);
-		DBGLOG_MEM8(REQ, INFO,
-			prConnSettings->aucAuthData, req->auth_data_len);
+		DBGLOG_MEM8(REQ, TRACE,
+			    prConnSettings->aucAuthData, req->auth_data_len);
 	}
 #endif
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-	/*<3> Set ChannelNum */
-	if (req->bss->channel->center_freq) {
+	/* ====================================================================
+	 * <3> Set Channel Number from BSS info
+	 * ==================================================================== */
+	if (req->bss && req->bss->channel && req->bss->channel->center_freq) {
 		prConnSettings->ucChannelNum =
-			nicFreq2ChannelNum(
-				req->bss->channel->center_freq * 1000);
-		DBGLOG(RSN, INFO,
-			"set prConnSettings->ucChannelNum:%d\n",
+			nicFreq2ChannelNum(req->bss->channel->center_freq * 1000);
+		DBGLOG(RSN, INFO, "Channel: %d\n",
 			prConnSettings->ucChannelNum);
 	} else {
 		prConnSettings->ucChannelNum = 0;
-		DBGLOG(RSN, INFO,
-			"req->bss->channel->center_freq is NULL.\n");
+		DBGLOG(RSN, WARN, "BSS channel info unavailable\n");
 	}
 #endif
 
 #if CFG_SUPPORT_REPLAY_DETECTION
-	/* reset Detect replay information */
+	/* Reset replay detection state */
 	prDetRplyInfo = aisGetDetRplyInfo(prGlueInfo->prAdapter, ucBssIndex);
 	kalMemZero(prDetRplyInfo, sizeof(struct GL_DETECT_REPLAY_INFO));
 #endif
 
+	/* ====================================================================
+	 * <4> Set Authentication Algorithm
+	 * ==================================================================== */
 	switch (req->auth_type) {
 	case NL80211_AUTHTYPE_OPEN_SYSTEM:
 		if (!(prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg &
@@ -1257,6 +1262,7 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg |=
 						AUTH_TYPE_OPEN_SYSTEM;
 		break;
+		
 	case NL80211_AUTHTYPE_SHARED_KEY:
 		if (!(prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg &
 						AUTH_TYPE_SHARED_KEY))
@@ -1265,6 +1271,7 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg |=
 						AUTH_TYPE_SHARED_KEY;
 		break;
+		
 	case NL80211_AUTHTYPE_SAE:
 		if (!(prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg &
 						AUTH_TYPE_SAE))
@@ -1273,41 +1280,48 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg |=
 						AUTH_TYPE_SAE;
 		break;
+		
 #if CFG_SUPPORT_802_11R
 	case NL80211_AUTHTYPE_FT:
-		if (!(prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg
-			& AUTH_TYPE_FAST_BSS_TRANSITION))
+		if (!(prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg &
+			AUTH_TYPE_FAST_BSS_TRANSITION))
 			fgNewAuthParam = TRUE;
 		prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg |= 
 			AUTH_TYPE_FAST_BSS_TRANSITION;
 		break;
 #endif
+		
 	default:
 		DBGLOG(REQ, WARN,
-			"Auth type : %u not support, use default OPEN system\n",
-			(uint8_t) req->auth_type);
+			"Unsupported auth type %u, defaulting to OPEN\n",
+			req->auth_type);
 		prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg = 0;
 		prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg |=
 						AUTH_TYPE_OPEN_SYSTEM;
 		break;
 	}
-	DBGLOG(REQ, INFO, "Auth Algorithm : %u\n",
-			prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg);
+	
+	DBGLOG(REQ, INFO, "Auth algorithm: 0x%x\n",
+		prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg);
 
 #if CFG_SUPPORT_PASSPOINT
 	prGlueInfo->fgConnectHS20AP = FALSE;
 #endif
 
-	if (req->key_len != 0) {
+	/* ====================================================================
+	 * <5> Handle WEP keys (for SHARED_KEY auth)
+	 * ==================================================================== */
+	if (req->key && req->key_len > 0) {
 		if (!(prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg &
-						AUTH_TYPE_SHARED_KEY))
+						AUTH_TYPE_SHARED_KEY)) {
 			DBGLOG(REQ, WARN,
-				"Auth Algorithm : %u with wep key\n",
+				"WEP key provided but auth is not SHARED_KEY (alg=0x%x)\n",
 				prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg);
+		}
 
 		if (req->key_len > MAX_KEY_LEN) {
-			DBGLOG(REQ, WARN,
-				"WEP key length (%zu) exceeds maximum (%u)\n",
+			DBGLOG(REQ, ERROR,
+				"WEP key too large: %zu > %u\n",
 				req->key_len, MAX_KEY_LEN);
 			return -EINVAL;
 		}
@@ -1315,105 +1329,182 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		prWepKey = &wepKey;
 		kalMemZero(prWepKey, sizeof(struct PARAM_WEP));
 
-		prWepKey->u4Length = OFFSET_OF(
-			struct PARAM_WEP, aucKeyMaterial) + req->key_len;
-		prWepKey->u4KeyLength = (uint32_t) req->key_len;
-		prWepKey->u4KeyIndex = (uint32_t) req->key_idx;
+		prWepKey->u4Length = OFFSET_OF(struct PARAM_WEP,
+						aucKeyMaterial) + req->key_len;
+		prWepKey->u4KeyLength = (uint32_t)req->key_len;
+		prWepKey->u4KeyIndex = (uint32_t)req->key_idx;
 		prWepKey->u4KeyIndex |= IS_TRANSMIT_KEY;
 
 		kalMemCopy(prWepKey->aucKeyMaterial,
-			req->key, prWepKey->u4KeyLength);
+			   req->key, prWepKey->u4KeyLength);
 
-		rStatus = kalIoctl(prGlueInfo,
-			wlanoidSetAddWep, prWepKey,
-			prWepKey->u4Length,
-			FALSE, FALSE, TRUE, &u4BufLen);
+		rStatus = kalIoctl(prGlueInfo, wlanoidSetAddWep,
+				   prWepKey, prWepKey->u4Length,
+				   FALSE, FALSE, TRUE, &u4BufLen);
 
 		if (rStatus != WLAN_STATUS_SUCCESS) {
-			DBGLOG(INIT, WARN,
-				"wlanoidSetAddWep fail 0x%x\n", rStatus);
+			DBGLOG(REQ, ERROR,
+				"wlanoidSetAddWep failed: 0x%x\n", rStatus);
 			return -EFAULT;
 		}
 
-		DBGLOG(REQ, INFO, 
-			"WEP key installed: idx=%u, len=%u, txkey=%d\n",
+		DBGLOG(REQ, INFO,
+			"WEP key installed: idx=%u len=%u tx=%d\n",
 			prWepKey->u4KeyIndex & ~IS_TRANSMIT_KEY,
 			prWepKey->u4KeyLength,
 			!!(prWepKey->u4KeyIndex & IS_TRANSMIT_KEY));
 	}
 
+	/* ====================================================================
+	 * <6> Prepare connection parameters
+	 * ==================================================================== */
 	kalMemZero(&rNewSsid, sizeof(struct PARAM_CONNECT));
-
 	rNewSsid.pucBssid = (uint8_t *)req->bss->bssid;
+
 	if (!EQUAL_MAC_ADDR(rNewSsid.pucBssid, prConnSettings->aucBSSID)) {
-		DBGLOG(REQ, INFO, "previous connect bssid is " MACSTR "\n",
-			MAC2STR((uint8_t *)prConnSettings->aucBSSID));
+		DBGLOG(REQ, INFO,
+			"BSSID changed: " MACSTR " -> " MACSTR "\n",
+			MAC2STR(prConnSettings->aucBSSID),
+			MAC2STR(rNewSsid.pucBssid));
 		fgNewAuthParam = TRUE;
 	}
 
+	/* ====================================================================
+	 * <7> Extract SSID from IEs (FIXED VERSION)
+	 * ==================================================================== */
 #if CFG_SUPPORT_802_11V_BSS_TRANSITION_MGT || CFG_SUPPORT_802_11R
-	DBGLOG(REQ, WARN, "SSID len %d, ssid %s, %d\n",
-		req->bss->ies->len, SSID_IE(req->bss->ies->data)->aucSSID,
-		SSID_IE(req->bss->ies->data)->ucLength);
+	if (req->bss && req->bss->ies && req->bss->ies->len >= 2) {
+		const uint8_t *pucIE = req->bss->ies->data;
+		const uint8_t *pucIEEnd = pucIE + req->bss->ies->len;
 
-	if (req->bss->ies->len != 0 &&
-		IE_ID(req->bss->ies->data) == ELEM_ID_SSID) {
-		rNewSsid.pucSsid = SSID_IE(req->bss->ies->data)->aucSSID;
-		rNewSsid.u4SsidLen = SSID_IE(req->bss->ies->data)->ucLength;
+		/* Parse IEs to find SSID element (ID = 0) */
+		while (pucIE + 2 <= pucIEEnd) {
+			uint8_t ucElemId = pucIE[0];
+			uint8_t ucElemLen = pucIE[1];
+
+			/* Bounds check */
+			if (pucIE + 2 + ucElemLen > pucIEEnd) {
+				DBGLOG(REQ, WARN,
+					"IE overflow: id=%u len=%u remaining=%zu\n",
+					ucElemId, ucElemLen,
+					(size_t)(pucIEEnd - pucIE));
+				break;
+			}
+
+
+			if (ucElemId == ELEM_ID_SSID) {
+				/* Found SSID IE */
+				if (ucElemLen > 0 && ucElemLen <= 32) {
+					/* Cast away const - driver expects non-const pointer */
+					rNewSsid.pucSsid = (uint8_t *)&pucIE[2];
+					rNewSsid.u4SsidLen = ucElemLen;
+
+					/* FIXED: Create null-terminated copy for safe logging */
+					char ssid_str[33];  /* 32 bytes + null */
+					kalMemCopy(ssid_str, &pucIE[2], ucElemLen);
+					ssid_str[ucElemLen] = '\0';
+
+					DBGLOG(REQ, INFO,
+						"Parsed SSID from IEs: len=%u ssid='%s'\n",
+						ucElemLen,
+						(ucElemLen > 0) ? ssid_str : "(hidden)");
+				} else if (ucElemLen == 0) {
+					/* Hidden SSID */
+					rNewSsid.pucSsid = (uint8_t *)&pucIE[2];
+					rNewSsid.u4SsidLen = 0;
+
+					DBGLOG(REQ, INFO, "Parsed SSID from IEs: len=0 (hidden)\n");
+				} else {
+					DBGLOG(REQ, WARN,
+						"Invalid SSID length: %u\n",
+						ucElemLen);
+				}
+				break;
+			}
+
+			/* Move to next IE */
+			pucIE += 2 + ucElemLen;
+		}
+	} else {
+		DBGLOG(REQ, INFO, "No IEs provided in auth request\n");
 	}
 #endif
 
+	/* ====================================================================
+	 * <8> Handle FT (802.11r) IEs
+	 * ==================================================================== */
 #if CFG_SUPPORT_802_11R
 	if (req->auth_type == NL80211_AUTHTYPE_FT) {
-		rStatus = kalIoctl(prGlueInfo, wlanoidUpdateFtIes,
-			(void *)(uint8_t *)req->ie, req->ie_len,
-			FALSE, FALSE, FALSE, &u4InfoBufLen);
-		if (rStatus != WLAN_STATUS_SUCCESS) {
-			DBGLOG(REQ, WARN, "update FTIE fail:%x\n", rStatus);
-			return -EINVAL;
+		if (req->ie && req->ie_len > 0) {
+			rStatus = kalIoctl(prGlueInfo, wlanoidUpdateFtIes,
+					   (void *)req->ie, req->ie_len,
+					   FALSE, FALSE, FALSE, &u4InfoBufLen);
+			if (rStatus != WLAN_STATUS_SUCCESS) {
+				DBGLOG(REQ, ERROR,
+					"wlanoidUpdateFtIes failed: 0x%x\n",
+					rStatus);
+				return -EINVAL;
+			}
+			DBGLOG(REQ, INFO, "FT IEs updated: %zu bytes\n",
+				req->ie_len);
 		}
 	}
 #endif
 
+	/* ====================================================================
+	 * <9> Initiate connection/authentication
+	 * ==================================================================== */
 	prConnSettings->fgIsSendAssoc = FALSE;
+
 	if (!prConnSettings->fgIsConnInitialized || fgNewAuthParam) {
-		if (fgNewAuthParam)
-			DBGLOG(REQ, WARN, "auth param update\n");
-		
+		if (fgNewAuthParam) {
+			DBGLOG(REQ, INFO,
+				"New auth parameters, reinitializing connection\n");
+		}
+
 		rStatus = kalIoctl(prGlueInfo, wlanoidSetConnect,
-			(void *)&rNewSsid, sizeof(struct PARAM_CONNECT),
-			FALSE, FALSE, FALSE, &u4BufLen);
+				   (void *)&rNewSsid,
+				   sizeof(struct PARAM_CONNECT),
+				   FALSE, FALSE, FALSE, &u4BufLen);
 
 		if (rStatus != WLAN_STATUS_SUCCESS) {
-			DBGLOG(REQ, WARN, "set SSID:%x\n", rStatus);
+			DBGLOG(REQ, ERROR,
+				"wlanoidSetConnect failed: 0x%x\n", rStatus);
 			return -EINVAL;
 		}
 	} else {
+		/* Already connected, just send auth frame */
 		rStatus = kalIoctlByBssIdx(prGlueInfo, wlanoidSendAuthAssoc,
-			(void *)req->bss->bssid, MAC_ADDR_LEN,
-			FALSE, FALSE, TRUE, &u4BufLen, ucBssIndex);
+					    (void *)req->bss->bssid,
+					    MAC_ADDR_LEN,
+					    FALSE, FALSE, TRUE,
+					    &u4BufLen, ucBssIndex);
 		if (rStatus != WLAN_STATUS_SUCCESS) {
-			DBGLOG(REQ, WARN, "send auth failed:%x\n", rStatus);
+			DBGLOG(REQ, ERROR,
+				"wlanoidSendAuthAssoc failed: 0x%x\n",
+				rStatus);
 			return -EINVAL;
 		}
 	}
 
+	/* ====================================================================
+	 * <10> Handle deferred WEP key installation
+	 * ==================================================================== */
 	if (fgAddWepPending) {
-		rStatus = kalIoctl(prGlueInfo,
-			wlanoidSetAddWep, prWepKey,
-			prWepKey->u4Length,
-			FALSE, FALSE, TRUE, &u4BufLen);
+		rStatus = kalIoctl(prGlueInfo, wlanoidSetAddWep,
+				   prWepKey, prWepKey->u4Length,
+				   FALSE, FALSE, TRUE, &u4BufLen);
 
 		if (rStatus != WLAN_STATUS_SUCCESS) {
-			DBGLOG(INIT, INFO,
-				"wlanoidSetAddWep fail 0x%x\n", rStatus);
+			DBGLOG(REQ, ERROR,
+				"Deferred wlanoidSetAddWep failed: 0x%x\n",
+				rStatus);
 			return -EFAULT;
 		}
 	}
 
 	return 0;
 }
-
 
 
 

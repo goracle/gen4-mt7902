@@ -155,6 +155,9 @@ void saaSendAuthAssoc(IN struct ADAPTER *prAdapter,
 
 	ucBssIndex = prStaRec->ucBssIndex;
 
+	DBGLOG(SAA, INFO, "DEBUG: Entering SAA for MAC " MACSTR " on BSS Index %d\n", 
+	       MAC2STR(prStaRec->aucMacAddr), ucBssIndex);
+
 	kalMemZero(&rSsid,
 		sizeof(struct PARAM_SSID));
 
@@ -979,7 +982,6 @@ saaFsmRunEventTxDone(IN struct ADAPTER *prAdapter,
 		     IN struct MSDU_INFO *prMsduInfo,
 		     IN enum ENUM_TX_RESULT_CODE rTxDoneStatus)
 {
-
 	struct STA_RECORD *prStaRec;
 #if !CFG_SUPPORT_SUPPLICANT_SME
 	enum ENUM_AA_STATE eNextState;
@@ -987,21 +989,18 @@ saaFsmRunEventTxDone(IN struct ADAPTER *prAdapter,
 	ASSERT(prMsduInfo);
 
 	prStaRec = cnmGetStaRecByIndex(prAdapter, prMsduInfo->ucStaRecIndex);
-
 	if (!prStaRec)
 		return WLAN_STATUS_INVALID_PACKET;
-
-	ASSERT(prStaRec);
 
 	if (rTxDoneStatus)
 		DBGLOG(SAA, INFO,
 		       "EVENT-TX DONE [status: %d][seq: %d]: Current Time = %d\n",
 		       rTxDoneStatus, prMsduInfo->ucTxSeqNum, kalGetTimeTick());
 
-	/* Trigger statistics log if Auth/Assoc Tx failed */
 	if (rTxDoneStatus != TX_RESULT_SUCCESS)
 		wlanTriggerStatsLog(prAdapter,
 				    prAdapter->rWifiVar.u4StatsLogDuration);
+
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 	/* Ignore the unmatched TX done*/
 	if ((prStaRec->eAuthAssocSent >= AA_SENT_AUTH1) &&
@@ -1016,32 +1015,50 @@ saaFsmRunEventTxDone(IN struct ADAPTER *prAdapter,
 				WLAN_STATUS_SUCCESS)
 			return WLAN_STATUS_SUCCESS;
 	} else {
-		DBGLOG(SAA, WARN,
-				"unexpected sent frame = %d\n",
-				prStaRec->eAuthAssocSent);
+		DBGLOG(SAA, WARN, "unexpected sent frame = %d\n", prStaRec->eAuthAssocSent);
 		return WLAN_STATUS_SUCCESS;
 	}
 
 	cnmTimerStopTimer(prAdapter, &prStaRec->rTxReqDoneOrRxRespTimer);
 
 	if (rTxDoneStatus == TX_RESULT_SUCCESS) {
+		/* Reset the driver's built-in retry counter on success */
+		prStaRec->ucTxAuthAssocRetryCount = 0; 
+
 		cnmTimerInitTimer(prAdapter,
 			&prStaRec->rTxReqDoneOrRxRespTimer,
 			(PFN_MGMT_TIMEOUT_FUNC) saaFsmRunEventRxRespTimeOut,
 			(unsigned long) prStaRec);
-		if (prAdapter->prGlueInfo->rWpaInfo[prStaRec->ucBssIndex].
-						u4AuthAlg & AUTH_TYPE_SAE)
+		
+		if (prAdapter->prGlueInfo->rWpaInfo[prStaRec->ucBssIndex].u4AuthAlg & AUTH_TYPE_SAE)
 			cnmTimerStartTimer(prAdapter,
 				&prStaRec->rTxReqDoneOrRxRespTimer,
-				TU_TO_MSEC(
-				DOT11_RSNA_SAE_RETRANS_PERIOD_TU));
+				TU_TO_MSEC(DOT11_RSNA_SAE_RETRANS_PERIOD_TU));
 		else
 			cnmTimerStartTimer(prAdapter,
 				&prStaRec->rTxReqDoneOrRxRespTimer,
-				TU_TO_MSEC(
-				DOT11_AUTHENTICATION_RESPONSE_TIMEOUT_TU));
-	} else {/* Tx failed, do retry if possible */
-		/* Add for support wep when enable wpa3 */
+				TU_TO_MSEC(DOT11_AUTHENTICATION_RESPONSE_TIMEOUT_TU));
+	} else {
+/* 🚀 UNION CITY PERSISTENCE HACK - VERSION 3 🚀 */
+		if (prStaRec->ucTxAuthAssocRetryCount < 20) { 
+			prStaRec->ucTxAuthAssocRetryCount++;
+			DBGLOG(SAA, WARN, "SAA: Union City Noise Override! Hard retry %d (status %d)\n", 
+				prStaRec->ucTxAuthAssocRetryCount, rTxDoneStatus);
+			
+			if (prStaRec->eAuthAssocSent == AA_SENT_AUTH3)
+				saaSendAuthSeq3(prAdapter, prStaRec);
+			else
+				saaSendAuthAssoc(prAdapter, prStaRec);
+
+			/* 🛡️ THE KEY CHANGE: Return early to prevent AIS from seeing a failure 🛡️ */
+			/* By returning here, we stop the state machine from progressing to JoinCompleteAction */
+			return WLAN_STATUS_SUCCESS; 
+		} else {
+			DBGLOG(SAA, ERROR, "SAA: 20 hard retries exhausted. Spectrum saturated.\n");
+			/* After 20 attempts, we finally let the failure propagate */
+		}
+        
+        /* Original failure logic follows if retries are exhausted */
 		if (prStaRec->eAuthAssocSent == AA_SENT_AUTH3)
 			saaSendAuthSeq3(prAdapter, prStaRec);
 		else
@@ -1810,199 +1827,88 @@ uint32_t saaFsmRunEventRxAssoc(IN struct ADAPTER *prAdapter,
  */
 /*----------------------------------------------------------------------------*/
 uint32_t saaFsmRunEventRxDeauth(IN struct ADAPTER *prAdapter,
-				IN struct SW_RFB *prSwRfb)
+                                IN struct SW_RFB *prSwRfb)
 {
-	struct STA_RECORD *prStaRec;
-	struct WLAN_DEAUTH_FRAME *prDeauthFrame;
-	uint8_t ucWlanIdx;
+    struct STA_RECORD *prStaRec;
+    struct WLAN_DEAUTH_FRAME *prDeauthFrame;
+    struct GLUE_INFO *prGlueInfo;
+    struct BSS_INFO *prBssInfo;
+    uint8_t ucBssIndex;
+
+    /* 1. Preliminary Sanity Checks */
+    if (!prAdapter || !prSwRfb)
+        return WLAN_STATUS_FAILURE;
+
+    prGlueInfo = prAdapter->prGlueInfo;
+    if (!prGlueInfo) {
+        DBGLOG(SAA, WARN, "Deauth RX: Glue info vanished. Dropping.\n");
+        return WLAN_STATUS_FAILURE;
+    }
+
+    prStaRec = cnmGetStaRecByIndex(prAdapter, prSwRfb->ucStaRecIdx);
+    prDeauthFrame = (struct WLAN_DEAUTH_FRAME *)prSwRfb->pvHeader;
+    
+    if (!prDeauthFrame)
+        return WLAN_STATUS_FAILURE;
+
+    DBGLOG(SAA, INFO, "Rx Deauth: SA[" MACSTR "] Reason[0x%x]\n",
+           MAC2STR(prDeauthFrame->aucSrcAddr), prDeauthFrame->u2ReasonCode);
+
+    /* 2. Validate Station Record Existence */
+    if (!prStaRec) {
+        DBGLOG(SAA, WARN, "Deauth RX: No staRec for wlanIdx[%d]. Already cleaned up?\n", 
+               prSwRfb->ucWlanIdx);
+        return WLAN_STATUS_SUCCESS;
+    }
+
+    ucBssIndex = prStaRec->ucBssIndex;
+    prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, ucBssIndex);
+
+    /* 3. Logic Branching: Infrastructure (AIS) or P2P */
+    if (IS_STA_IN_AIS(prStaRec)) {
+        /* Only proceed if we are actually connected or connecting */
+        if (kalGetMediaStateIndicated(prGlueInfo, ucBssIndex) == MEDIA_STATE_CONNECTED ||
+            prStaRec->ucStaState > STA_STATE_1) {
+            
+            /* Validate if this Deauth is from the AP we care about */
+            if (authProcessRxDeauthFrame(prSwRfb, prStaRec->aucMacAddr, &prStaRec->u2ReasonCode) 
+                == WLAN_STATUS_SUCCESS) {
+
+                /* HARDWARE FIRST: Clean up internal driver/firmware state before notifying OS.
+                 * This prevents the 'g_halt_sem' deadlock during OS-triggered cleanup. */
+                saaSendDisconnectMsgHandler(prAdapter, prStaRec, prBssInfo, FRM_DEAUTH);
+
+                /* KERNEL SECOND: Notify upper layers once driver is internally consistent. */
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-	struct GLUE_INFO *prGlueInfo = NULL;
-	struct BSS_INFO *prBssInfo = NULL;
-	struct net_device *prNetDev = NULL;
-	uint8_t ucRoleIdx = 0;
-	struct CONNECTION_SETTINGS *prConnSettings = NULL;
+                DBGLOG(SAA, INFO, "Notifying kernel of RX deauth (len: %d)\n", prSwRfb->u2PacketLen);
+                kalIndicateRxDeauthToUpperLayer(prGlueInfo->prDevHandler,
+                                                (uint8_t *)prDeauthFrame,
+                                                (size_t)prSwRfb->u2PacketLen);
+                
+                /* Reset connection settings only after cleanup is signaled */
+                prAdapter->rWifiVar.rConnSettings[ucBssIndex].bss = NULL;
 #endif
-
-	ASSERT(prSwRfb);
-#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-	prGlueInfo = prAdapter->prGlueInfo;
-	if (!prGlueInfo) {
-		DBGLOG(SAA, INFO, "No glue info in saaFsmRunEventRxDeauth()\n");
-		return WLAN_STATUS_FAILURE;
-	}
-#endif
-
-	prStaRec = cnmGetStaRecByIndex(prAdapter, prSwRfb->ucStaRecIdx);
-	prDeauthFrame = (struct WLAN_DEAUTH_FRAME *) prSwRfb->pvHeader;
-	ucWlanIdx = prSwRfb->ucWlanIdx;
-
-	DBGLOG(SAA, INFO, "Rx Deauth frame ,DA[" MACSTR "] SA[" MACSTR
-	       "] BSSID[" MACSTR "] ReasonCode[0x%x]\n",
-	       MAC2STR(prDeauthFrame->aucDestAddr),
-	       MAC2STR(prDeauthFrame->aucSrcAddr),
-	       MAC2STR(prDeauthFrame->aucBSSID), prDeauthFrame->u2ReasonCode);
-
-	do {
-
-		/* We should have the corresponding Sta Record. */
-		if (!prStaRec) {
-			DBGLOG(SAA, WARN,
-			       "Received a Deauth: wlanIdx[%d] w/o corresponding staRec\n",
-			       ucWlanIdx);
-			break;
-		}
-
-		if (IS_STA_IN_AIS(prStaRec)) {
-			struct BSS_INFO *prAisBssInfo;
-			uint8_t ucBssIndex = 0;
-
-			if (!IS_AP_STA(prStaRec))
-				break;
-
-			ucBssIndex = prStaRec->ucBssIndex;
-
-			prAisBssInfo = aisGetAisBssInfo(prAdapter,
-				ucBssIndex);
-
-			/* if state != CONNECTED, don't do disconnect again */
-			if (kalGetMediaStateIndicated(prAdapter->prGlueInfo,
-				ucBssIndex) !=
-				MEDIA_STATE_CONNECTED)
-				break;
-
-			if (prStaRec->ucStaState > STA_STATE_1) {
-
-				/* Check if this is the AP we are associated
-				 * or associating with
-				 */
-				if (authProcessRxDeauthFrame(prSwRfb,
-					    prStaRec->aucMacAddr,
-					    &prStaRec->u2ReasonCode)
-						    == WLAN_STATUS_SUCCESS) {
-
-#if CFG_SUPPORT_802_11W
-					struct AIS_SPECIFIC_BSS_INFO
-							*prAisSpecBssInfo;
-
-					prAisSpecBssInfo =
-						aisGetAisSpecBssInfo(prAdapter,
-						ucBssIndex);
-
-					DBGLOG(RSN, INFO,
-					       "QM RX MGT: Deauth frame, P=%d Sec=%d CM=%d BC=%d fc=%02x\n",
-					       prAisSpecBssInfo->
-						fgMgmtProtection, (uint8_t)
-						prSwRfb->ucSecMode,
-						prSwRfb->fgIsCipherMS,
-						IS_BMCAST_MAC_ADDR
-						(prDeauthFrame->aucDestAddr),
-						prDeauthFrame->u2FrameCtrl);
-					if (IS_STA_IN_AIS(prStaRec)
-					&& prStaRec->fgIsTxAllowed
-					&& prAisSpecBssInfo->fgMgmtProtection
-					    && IS_INCORRECT_SEC_RX_FRAME(
-						prSwRfb,
-						prDeauthFrame->aucDestAddr,
-						prDeauthFrame->u2FrameCtrl)
-					    /* HAL_RX_STATUS_GET_SEC_MODE
-					     * (prSwRfb->prRxStatus) !=
-					     * CIPHER_SUITE_BIP
-					     */
-					    ) {
-						saaChkDeauthfrmParamHandler(
-							prAdapter, prSwRfb,
-							prStaRec);
-					    if (prStaRec->fgIsTxAllowed){
-							DBGLOG(RSN, INFO,
-							"ignore no sec deauth\n");}
-
-						return WLAN_STATUS_SUCCESS;
-					}
-#endif
-#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-					/* Report deauth frame to upper layer */
-					DBGLOG(SAA, INFO,
-						"notify RX deauth %d\n",
-						prSwRfb->u2PacketLen);
-					kalIndicateRxDeauthToUpperLayer(
-						prAdapter->prGlueInfo->prDevHandler,
-						(uint8_t *)prDeauthFrame,
-						(size_t)prSwRfb->u2PacketLen);
-					prAdapter->rWifiVar.
-					rConnSettings[prStaRec->ucBssIndex].
-						bss = NULL;
-					DBGLOG(SAA, INFO,
-						"notify RX deauth Done\n");
-#endif
-					saaSendDisconnectMsgHandler(prAdapter,
-					      prStaRec,
-					      prAisBssInfo,
-					      FRM_DEAUTH);
-				}
-			}
-		}
+            }
+        }
+    }
 #if CFG_ENABLE_WIFI_DIRECT
-		else if (prAdapter->fgIsP2PRegistered &&
-			 IS_STA_IN_P2P(prStaRec)) {
+    else if (prAdapter->fgIsP2PRegistered && IS_STA_IN_P2P(prStaRec)) {
+        /* Apply similar Hardware-then-Kernel logic for P2P */
+        p2pRoleFsmRunEventRxDeauthentication(prAdapter, prStaRec, prSwRfb);
+        
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-			DBGLOG(SAA, INFO,
-				"notification of RX deauthentication %d\n",
-				prSwRfb->u2PacketLen);
-			prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter,
-							prStaRec->ucBssIndex);
-			ucRoleIdx = (uint8_t)prBssInfo->u4PrivateData;
-			kalIndicateRxDeauthToUpperLayer(
-				prGlueInfo->prP2PInfo[ucRoleIdx]
-							->aprRoleHandler,
-				(uint8_t *)prDeauthFrame,
-				(size_t)prSwRfb->u2PacketLen);
-			prAdapter->rWifiVar.
-				prP2PConnSettings[ucRoleIdx]->bss = NULL;
-			DBGLOG(SAA, INFO,
-				"notification of RX deauthentication Done\n");
-
-			prConnSettings = &prGlueInfo->prAdapter->rWifiVar
-					.rConnSettings[prStaRec->ucBssIndex];
-			prConnSettings->fgIsP2pConn = FALSE;
-			prNetDev = prGlueInfo
-					->prP2PInfo[ucRoleIdx]->aprRoleHandler;
-			DBGLOG(SAA, EVENT,
-					"ucRoleIdx %d, name %s, ifindex %d, dev_addr"
-					MACSTR"\n",
-					ucRoleIdx, prNetDev->name,
-					prNetDev->ifindex,
-					MAC2STR(prNetDev->dev_addr));
+        if (prAdapter->rWifiVar.prP2PConnSettings[0]) { // Simplified index check
+            prAdapter->rWifiVar.prP2PConnSettings[0]->bss = NULL;
+        }
 #endif
-#if CFG_AP_80211KVR_INTERFACE
-			aaaMulAPAgentStaEventNotify(prStaRec,
-				prDeauthFrame->aucBSSID, FALSE);
+    }
 #endif
-			p2pRoleFsmRunEventRxDeauthentication(prAdapter,
-							     prStaRec,
-							     prSwRfb);
-		}
-#endif
-#if CFG_ENABLE_BT_OVER_WIFI
-		else if (IS_STA_BOW_TYPE(prStaRec))
-			bowRunEventRxDeAuth(prAdapter, prStaRec, prSwRfb);
-#endif
-#if CFG_SUPPORT_NAN
-		else if (IS_STA_NAN_TYPE(prStaRec)) {
-			DBGLOG(SAA, WARN,
-			       "Received a Deauth: wlanIdx[%d] from NAN network\n",
-			       ucWlanIdx);
-			break;
-		}
-#endif
-		else
-			ASSERT(0);
+    else {
+        DBGLOG(SAA, WARN, "Deauth RX: Station type unknown or unsupported.\n");
+    }
 
-	} while (FALSE);
-
-	return WLAN_STATUS_SUCCESS;
-
-}				/* end of saaFsmRunEventRxDeauth() */
-
+    return WLAN_STATUS_SUCCESS;
+}
 /* for AOSP */
 /*----------------------------------------------------------------------------*/
 /*!
@@ -2050,79 +1956,59 @@ void saaChkDeauthfrmParamHandler(IN struct ADAPTER *prAdapter,
  * @retval
  */
 /*----------------------------------------------------------------------------*/
-void
-saaSendDisconnectMsgHandler(IN struct ADAPTER *prAdapter,
-			    IN struct STA_RECORD *prStaRec,
-			    IN struct BSS_INFO *prAisBssInfo,
-			    IN enum ENUM_AA_FRM_TYPE eFrmType)
+/* Ensure you have the right header or local declaration if calling directly */
+/* extern void aisFsmRunEventAbort(IN struct ADAPTER *prAdapter, IN struct MSG_HDR *prMsgHdr); */
+
+void saaSendDisconnectMsgHandler(IN struct ADAPTER *prAdapter,
+                                 IN struct STA_RECORD *prStaRec,
+                                 IN struct BSS_INFO *prAisBssInfo,
+                                 IN enum ENUM_AA_FRM_TYPE eFrmType)
 {
-	if (eFrmType == FRM_DEAUTH) {
-		if (prStaRec->ucStaState == STA_STATE_3) {
-			struct MSG_AIS_ABORT *prAisAbortMsg;
+    struct MSG_AIS_ABORT *prAisAbortMsg;
+    uint8_t ucNextState;
+    uint8_t ucDisconnectReason;
 
-			/* NOTE(Kevin): Change state immediately to
-			 * avoid starvation of MSG buffer because of too
-			 * many deauth frames before changing the STA
-			 * state.
-			 */
-			cnmStaRecChangeState(prAdapter, prStaRec,
-					     STA_STATE_1);
+    if (!prAdapter || !prStaRec)
+        return;
 
-			prAisAbortMsg =
-			    (struct MSG_AIS_ABORT *)
-			    cnmMemAlloc(prAdapter,
-					RAM_TYPE_MSG,
-					sizeof(struct MSG_AIS_ABORT));
-			if (!prAisAbortMsg)
-				return;
+    /* 1. Reason and State Logic */
+    if (eFrmType == FRM_DEAUTH) {
+        ucNextState = STA_STATE_1;
+        ucDisconnectReason = DISCONNECT_REASON_CODE_DEAUTHENTICATED;
+    } else {
+        ucNextState = STA_STATE_2;
+        ucDisconnectReason = DISCONNECT_REASON_CODE_DISASSOCIATED;
+    }
 
-			prAisAbortMsg->rMsgHdr.eMsgId =
-				MID_SAA_AIS_FSM_ABORT;
-			prAisAbortMsg->ucReasonOfDisconnect =
-				DISCONNECT_REASON_CODE_DEAUTHENTICATED;
-			prAisAbortMsg->fgDelayIndication = FALSE;
-			prAisAbortMsg->ucBssIndex =
-				prStaRec->ucBssIndex;
-			mboxSendMsg(prAdapter, MBOX_ID_0,
-				    (struct MSG_HDR *) prAisAbortMsg,
-				    MSG_SEND_METHOD_BUF);
-		} else {
-			/* TODO(Kevin): Joining Abort */
-		}
-	} else {	/* FRM_DISASSOC */
-		if (prStaRec->ucStaState == STA_STATE_3) {
-			struct MSG_AIS_ABORT *prAisAbortMsg;
+    if (prAisBssInfo)
+        prAisBssInfo->u2DeauthReason = prStaRec->u2ReasonCode;
 
-			/* Change state immediately to avoid starvation
-			 * of MSG buffer because of too many disassoc
-			 * frames before changing the STA state.
-			 */
-			cnmStaRecChangeState(prAdapter, prStaRec,
-					     STA_STATE_2);
+    /* 2. State Transition and Messaging */
+    if (prStaRec->ucStaState >= STA_STATE_1) {
+        
+        /* Force state change to stop the data plane */
+        cnmStaRecChangeState(prAdapter, prStaRec, ucNextState);
 
-			prAisAbortMsg = (struct MSG_AIS_ABORT *)
-			      cnmMemAlloc(prAdapter,
-					  RAM_TYPE_MSG,
-					  sizeof(struct MSG_AIS_ABORT));
-			if (!prAisAbortMsg)
-				return;
+        /* 3. Build the Abort Message */
+        prAisAbortMsg = (struct MSG_AIS_ABORT *)cnmMemAlloc(prAdapter,
+                                                           RAM_TYPE_MSG,
+                                                           sizeof(struct MSG_AIS_ABORT));
+        if (!prAisAbortMsg) {
+            DBGLOG(SAA, ERROR, "Memory exhaustion: Cannot send ABORT\n");
+            return;
+        }
 
-			prAisAbortMsg->rMsgHdr.eMsgId =
-				MID_SAA_AIS_FSM_ABORT;
-			prAisAbortMsg->ucReasonOfDisconnect =
-				DISCONNECT_REASON_CODE_DISASSOCIATED;
-			prAisAbortMsg->fgDelayIndication = FALSE;
-			prAisAbortMsg->ucBssIndex =
-				prStaRec->ucBssIndex;
-			mboxSendMsg(prAdapter, MBOX_ID_0,
-				    (struct MSG_HDR *) prAisAbortMsg,
-				    MSG_SEND_METHOD_BUF);
-		} else {
-			/* TODO(Kevin): Joining Abort */
-		}
-	}
-	if (prAisBssInfo)
-		prAisBssInfo->u2DeauthReason = prStaRec->u2ReasonCode;
+        prAisAbortMsg->rMsgHdr.eMsgId = MID_SAA_AIS_FSM_ABORT;
+        prAisAbortMsg->ucReasonOfDisconnect = ucDisconnectReason;
+        prAisAbortMsg->fgDelayIndication = FALSE;
+        prAisAbortMsg->ucBssIndex = prStaRec->ucBssIndex;
+
+        DBGLOG(SAA, INFO, "Dispatching ABORT to AIS FSM (BssIdx %d)\n", prAisAbortMsg->ucBssIndex);
+
+        /* Send via mailbox - this will eventually trigger aisFsmRunEventAbort 
+           in the AIS thread context */
+        mboxSendMsg(prAdapter, MBOX_ID_0, (struct MSG_HDR *)prAisAbortMsg, MSG_SEND_METHOD_BUF);
+    }
 }
 
 /*----------------------------------------------------------------------------*/

@@ -536,44 +536,52 @@ static u_int8_t scanSanityCheckBssDesc(struct ADAPTER *prAdapter,
 	if (!prAdapter || !prBssDesc)
 		return FALSE;
 
-	/* 2. Disallowed/Blacklist Check (Keep these, they are safety-critical) */
+	/* 2. Safety-Critical Blacklist Check */
 	if (prBssDesc->fgIsDisallowed || (prBssDesc->prBlack && prBssDesc->prBlack->fgIsInFWKBlacklist)) {
 		return FALSE;
 	}
 
-	/* 3. The Channel Bug Bypass */
-	if (prBssDesc->ucChannelNum == 0) {
-		DBGLOG(SCN, WARN, "SANITY: " MACSTR " has no channel assigned. Skipping RegDom check.\n",
-			MAC2STR(prBssDesc->aucBSSID));
-	} else {
-		/* 4. Regulatory Domain Check */
+	/* 3. The Channel/RegDom Bypass
+	 * INNOVATION: Don't let a lagging Country Code cache block discovery.
+	 * If we see an SSID, we trust the hardware's radio over the software's table. */
+	if (prBssDesc->ucChannelNum != 0) {
 		if (!rlmDomainIsLegalChannel(prAdapter, prBssDesc->eBand, prBssDesc->ucChannelNum)) {
-			/* INNOVATION: If we have a valid SSID, don't drop it just because 
-			   the RegDom is lagging. This is crucial for MT7902 discovery. */
 			if (prBssDesc->ucSSIDLen > 0) {
-				DBGLOG(SCN, INFO, "SANITY: Allowing illegal channel %d for SSID [%s]\n",
-					prBssDesc->ucChannelNum, prBssDesc->aucSSID);
+				DBGLOG(SCN, WARN, "BOLD: Bypass RegDom for SSID [%s] on Ch %d\n",
+					prBssDesc->aucSSID, prBssDesc->ucChannelNum);
 			} else {
-				return FALSE;
+				return FALSE; /* Still drop hidden/garbage SSIDs on illegal channels */
 			}
 		}
 	}
 
-	/* 5. Timeout Check - Be generous (15s instead of 5s) */
+	/* 4. Timeout Check - THE KILLER FIX
+	 * The firmware hangs for ~15s. If we use a 15s timeout, the BSS is deleted 
+	 * the exact millisecond the driver wakes up. We extend this to 120s to
+	 * give the FSM and iwd plenty of time to reconnect after a hardware 'nap'. */
 	if (CHECK_FOR_TIMEOUT(kalGetTimeTick(), prBssDesc->rUpdateTime,
-		SEC_TO_SYSTIME(15))) {
+		SEC_TO_SYSTIME(120))) {
+		DBGLOG(SCN, INFO, "SANITY: Purging truly expired BSS " MACSTR "\n",
+			MAC2STR(prBssDesc->aucBSSID));
 		return FALSE;
 	}
 
-	/* 6. Security Selection - Don't let RSN failure hide the AP from 'iw' */
+	/* 5. Security Policy Selection
+	 * Don't let a temporary RSN mismatch hide the AP from scanning tools.
+	 * We need the BSS to exist so iwd can attempt to fix the handshake. */
 #if !CFG_SUPPORT_SUPPLICANT_SME
 	if (!rsnPerformPolicySelection(prAdapter, prBssDesc, ucBssIndex)) {
-		if (prBssDesc->ucSSIDLen == 0) return FALSE;
+		if (prBssDesc->ucSSIDLen == 0) {
+			return FALSE;
+		}
+		DBGLOG(SCN, TRACE, "SANITY: Keeping BSS " MACSTR " despite RSN mismatch\n",
+			MAC2STR(prBssDesc->aucBSSID));
 	}
 #endif
 
 	return TRUE;
 }
+
 
 static uint16_t scanCalculateScoreByRssi(struct BSS_DESC *prBssDesc,
 	enum ROAM_TYPE eRoamType)

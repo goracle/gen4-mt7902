@@ -1391,592 +1391,783 @@ int kalIndicateNetlink2User(IN struct GLUE_INFO *prGlueInfo, IN void *pvBuf,
  *
  */
 /*----------------------------------------------------------------------------*/
-void kalIndicateStatusAndComplete(IN struct GLUE_INFO
-			     *prGlueInfo, IN uint32_t eStatus, IN void *pvBuf,
-			     IN uint32_t u4BufLen, IN uint8_t ucBssIndex)
+/**
+ * Refactored WiFi Status Indication Handler
+ * 
+ * This refactored version improves the original MediaTek code by:
+ * - Breaking down the monolithic function into logical sub-handlers
+ * - Reducing nested conditionals and complexity
+ * - Improving variable naming and code organization
+ * - Making the control flow more explicit and maintainable
+ */
+
+
+/**
+ * Refactored WiFi Status Indication Handler
+ * 
+ * This refactored version improves the original MediaTek code by:
+ * - Breaking down the monolithic function into logical sub-handlers
+ * - Reducing nested conditionals and complexity
+ * - Improving variable naming and code organization
+ * - Making the control flow more explicit and maintainable
+ */
+
+#include "precomp.h"
+
+/* ============================================================================
+ * Forward Declarations
+ * ============================================================================ */
+
+static void handleMediaConnect(
+	struct GLUE_INFO *prGlueInfo,
+	uint32_t eStatus,
+	uint8_t ucBssIndex,
+	uint8_t *arBssid);
+
+static void handleMediaDisconnect(
+	struct GLUE_INFO *prGlueInfo,
+	uint32_t eStatus,
+	uint8_t ucBssIndex);
+
+static void handleScanComplete(
+	struct GLUE_INFO *prGlueInfo,
+	void *pvBuf,
+	uint32_t u4BufLen,
+	uint8_t ucBssIndex);
+
+static void handleMediaSpecificIndication(
+	struct GLUE_INFO *prGlueInfo,
+	void *pvBuf,
+	uint8_t ucBssIndex);
+
+static void handleAuthenticationEvent(
+	struct GLUE_INFO *prGlueInfo,
+	struct net_device *prDevHandler,
+	void *pvBuf,
+	uint8_t ucBssIndex);
+
+static void handleCandidateListEvent(
+	struct GLUE_INFO *prGlueInfo,
+	struct net_device *prDevHandler,
+	void *pvBuf,
+	uint8_t ucBssIndex);
+
+static void handleFtAuthEvent(
+	struct GLUE_INFO *prGlueInfo,
+	struct net_device *prDevHandler,
+	uint8_t ucBssIndex);
+
+static void handleJoinFailure(
+	struct GLUE_INFO *prGlueInfo,
+	uint8_t ucBssIndex);
+
+static uint16_t determineJoinFailureStatus(uint16_t u2JoinStatus);
+
+/* These functions are always needed, even with CFG_SUPPORT_SUPPLICANT_SME == 1 */
+static struct cfg80211_bss* ensureBssExists(
+	struct GLUE_INFO *prGlueInfo,
+	struct wiphy *wiphy,
+	uint8_t *arBssid,
+	uint8_t ucBssIndex,
+	struct PARAM_SSID *pSsid);
+
+static void removeDuplicateBssEntries(
+	struct wiphy *wiphy,
+	struct cfg80211_bss *targetBss,
+	uint8_t *arBssid,
+	struct PARAM_SSID *pSsid);
+
+static void reportConnectionStatus(
+	struct GLUE_INFO *prGlueInfo,
+	struct net_device *prDevHandler,
+	struct cfg80211_bss *bss,
+	uint8_t *arBssid,
+	uint32_t eStatus,
+	uint8_t ucBssIndex);
+
+static void logConnectionInfo(
+	struct GLUE_INFO *prGlueInfo,
+	uint8_t *arBssid,
+	uint8_t ucBssIndex,
+	struct PARAM_SSID *pSsid);
+
+static void reportDisconnection(
+	struct GLUE_INFO *prGlueInfo,
+	struct net_device *prDevHandler,
+	uint32_t eStatus,
+	uint8_t ucBssIndex);
+
+static struct ieee80211_channel* getChannelByBand(
+	struct wiphy *wiphy,
+	uint8_t ucChannelNum,
+	enum ENUM_BAND eBand);
+
+static struct cfg80211_bss* createBssEntry(
+	struct wiphy *wiphy,
+	struct ieee80211_channel *prChannel,
+	uint8_t *arBssid,
+	struct BSS_DESC *prBssDesc);
+
+static void reportRoamingEvent(
+	struct GLUE_INFO *prGlueInfo,
+	struct net_device *prDevHandler,
+	struct cfg80211_bss *bss,
+	struct ieee80211_channel *prChannel,
+	uint8_t *arBssid,
+	struct CONNECTION_SETTINGS *prConnSettings,
+	uint8_t ucBssIndex);
+
+static void resetLinkQualityCounters(struct ADAPTER *prAdapter);
+static void queryAndCopyBssid(struct GLUE_INFO *prGlueInfo, uint8_t *arBssid, uint8_t ucBssIndex);
+
+/* ============================================================================
+ * Main Entry Point
+ * ============================================================================ */
+
+void kalIndicateStatusAndComplete(
+	IN struct GLUE_INFO *prGlueInfo,
+	IN uint32_t eStatus,
+	IN void *pvBuf,
+	IN uint32_t u4BufLen,
+	IN uint8_t ucBssIndex)
 {
-
-	uint32_t bufLen = 0;
-	struct PARAM_STATUS_INDICATION *pStatus;
-	struct PARAM_AUTH_EVENT *pAuth;
-	struct PARAM_PMKID_CANDIDATE_LIST *pPmkid;
-	uint8_t arBssid[PARAM_MAC_ADDR_LEN];
-#if (CFG_SUPPORT_SUPPLICANT_SME == 0)
-	struct PARAM_SSID ssid = {0};
-	struct ieee80211_channel *prChannel = NULL;
-	struct cfg80211_bss *bss = NULL;
-	uint8_t ucChannelNum;
-	struct BSS_DESC *prBssDesc = NULL;
-	struct CONNECTION_SETTINGS *prConnSettings;
-	enum ENUM_BAND eBand;
-#endif
+	uint8_t arBssid[PARAM_MAC_ADDR_LEN] = {0};
 	struct ADAPTER *prAdapter = NULL;
-	uint8_t fgScanAborted = FALSE;
-	struct net_device *prDevHandler;
-
-	struct FT_IES *prFtIEs;
-
-#if (CFG_SUPPORT_SUPPLICANT_SME == 0)
-#if KERNEL_VERSION(4, 12, 0) <= CFG80211_VERSION_CODE
-	struct cfg80211_roam_info rRoamInfo = { 0 };
-#endif
-#if (CFG_ADVANCED_80211_MLO == 1)
-	uint8_t ucLinkIdx = 0;
-#endif
-#endif
-
-	struct wiphy *wiphy = NULL;
-
-
-	GLUE_SPIN_LOCK_DECLARATION();
-
-	kalMemZero(arBssid, MAC_ADDR_LEN);
-
+	
 	ASSERT(prGlueInfo);
 	prAdapter = prGlueInfo->prAdapter;
 	ASSERT(prAdapter);
 
-	wiphy = priv_to_wiphy(prGlueInfo);
-
-	pStatus = (struct PARAM_STATUS_INDICATION *)pvBuf;
-	pAuth = (struct PARAM_AUTH_EVENT *)pStatus;
-	pPmkid = (struct PARAM_PMKID_CANDIDATE_LIST *)(pStatus + 1);
-
-	prDevHandler = wlanGetNetDev(prGlueInfo, ucBssIndex);
-
 	switch (eStatus) {
 	case WLAN_STATUS_ROAM_OUT_FIND_BEST:
 	case WLAN_STATUS_MEDIA_CONNECT:
-#if CFG_SUPPORT_LINK_QUALITY_MONITOR
-		/* clear the count */
-		if (prAdapter) {
-			prAdapter->rLinkQualityInfo.u8TxTotalCount = 0;
-			prAdapter->rLinkQualityInfo.u8RxTotalCount = 0;
-			prAdapter->rLinkQualityInfo.u8RxErrCount = 0;
-		}
-#endif /* CFG_SUPPORT_LINK_QUALITY_MONITOR */
-		kalSetMediaStateIndicated(prGlueInfo,
-			MEDIA_STATE_CONNECTED,
-			ucBssIndex);
+		handleMediaConnect(prGlueInfo, eStatus, ucBssIndex, arBssid);
+		break;
 
-		/* indicate assoc event */
-		SET_IOCTL_BSSIDX(prGlueInfo->prAdapter, ucBssIndex);
-		wlanQueryInformation(prGlueInfo->prAdapter, wlanoidQueryBssid,
-					&arBssid[0], sizeof(arBssid), &bufLen);
-		wext_indicate_wext_event(prGlueInfo, SIOCGIWAP, arBssid,
-					 bufLen, ucBssIndex);
+	case WLAN_STATUS_MEDIA_DISCONNECT:
+	case WLAN_STATUS_MEDIA_DISCONNECT_LOCALLY:
+		handleMediaDisconnect(prGlueInfo, eStatus, ucBssIndex);
+		break;
 
-		/* switch netif on */
-		netif_carrier_on(prDevHandler);
+	case WLAN_STATUS_SCAN_COMPLETE:
+		handleScanComplete(prGlueInfo, pvBuf, u4BufLen, ucBssIndex);
+		break;
 
+	case WLAN_STATUS_MEDIA_SPECIFIC_INDICATION:
+		handleMediaSpecificIndication(prGlueInfo, pvBuf, ucBssIndex);
+		break;
+
+#if CFG_SUPPORT_BCM && CFG_SUPPORT_BCM_BWCS
+	case WLAN_STATUS_BWCS_UPDATE:
+		wext_indicate_wext_event(prGlueInfo, IWEVCUSTOM, pvBuf,
+					 sizeof(struct PTA_IPC), ucBssIndex);
+		break;
+#endif
+
+	case WLAN_STATUS_JOIN_FAILURE:
+		handleJoinFailure(prGlueInfo, ucBssIndex);
+		break;
+
+	default:
+		DBGLOG(INIT, WARN, "Unhandled status indication: %u\n", eStatus);
+		break;
+	}
+}
+
+/* ============================================================================
+ * Media Connection Handler
+ * ============================================================================ */
+
+static void handleMediaConnect(
+	struct GLUE_INFO *prGlueInfo,
+	uint32_t eStatus,
+	uint8_t ucBssIndex,
+	uint8_t *arBssid)
+{
+	struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
+	struct net_device *prDevHandler = wlanGetNetDev(prGlueInfo, ucBssIndex);
+
+	/* Reset link quality monitoring counters */
+	resetLinkQualityCounters(prAdapter);
+
+	/* Update media state */
+	kalSetMediaStateIndicated(prGlueInfo, MEDIA_STATE_CONNECTED, ucBssIndex);
+
+	/* Query and report BSSID */
+	queryAndCopyBssid(prGlueInfo, arBssid, ucBssIndex);
+	wext_indicate_wext_event(prGlueInfo, SIOCGIWAP, arBssid, 
+				 PARAM_MAC_ADDR_LEN, ucBssIndex);
+
+	/* Enable network interface */
+	netif_carrier_on(prDevHandler);
+
+/* --- PATCH START --- */
+/* We are forcing the 'Legacy' report even with Supplicant SME 1 
+ * to fix the carrier/iwd sync issue on Arch.
+ * This ensures cfg80211_connect_result() is always called.
+ */
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-		/* replace by reporting RX association response frame
-		 * by cfg80211_rx_mlme_mgmt
-		 */
-		DBGLOG(INIT, INFO,
-			"Skip report CONNECTED when using supplicant SME\n");
-#else
-		do {
+	DBGLOG(INIT, INFO, "Supplicant SME detected, but FORCING report for Arch/iwd stability\n");
+#endif
 
-			uint8_t aucSsid[PARAM_MAX_LEN_SSID + 1] = {0};
-
-			/* print message on console */
-			SET_IOCTL_BSSIDX(prGlueInfo->prAdapter, ucBssIndex);
-			wlanQueryInformation(prGlueInfo->prAdapter,
-			     wlanoidQuerySsid, &ssid, sizeof(ssid), &bufLen);
-
-			kalStrnCpy(aucSsid, ssid.aucSsid, sizeof(aucSsid));
-			aucSsid[sizeof(aucSsid) - 1] = '\0';
-
-			DBGLOG(INIT, INFO,
-				"[wifi] %s netif_carrier_on [ssid:%s " MACSTR
-				"], Mac:" MACSTR "\n",
-				prGlueInfo->prDevHandler->name, aucSsid,
-				MAC2STR(arBssid),
-				MAC2STR(
-				prGlueInfo->prAdapter->rWifiVar.aucMacAddress));
-
-		} while (0);
+	{
+		struct PARAM_SSID ssid = {0};
+		logConnectionInfo(prGlueInfo, arBssid, ucBssIndex, &ssid);
 
 		if (prGlueInfo->fgIsRegistered == TRUE) {
-			struct cfg80211_bss *bss_others = NULL;
-			uint8_t ucLoopCnt =
-				15; /* only loop 15 times to avoid dead loop */
-
-			/* retrieve channel */
-			ucChannelNum =
-				wlanGetChannelNumberByNetwork(
-					prGlueInfo->prAdapter,
-					ucBssIndex);
-			eBand =
-				wlanGetBandIndexByNetwork(
-					prGlueInfo->prAdapter,
-					ucBssIndex);
-#if (CFG_SUPPORT_WIFI_6G == 1)
-			if (eBand) {
-				prChannel =
-					ieee80211_get_channel(
-						wiphy,
-						ieee80211_channel_to_frequency
-						(ucChannelNum, KAL_BAND_6GHZ));
-			} else if (ucChannelNum <= 14) {
-				prChannel =
-					ieee80211_get_channel(
-						wiphy,
-						ieee80211_channel_to_frequency
-						(ucChannelNum, KAL_BAND_2GHZ));
-			} else {
-				prChannel =
-					ieee80211_get_channel(
-						wiphy,
-						ieee80211_channel_to_frequency
-						(ucChannelNum, KAL_BAND_5GHZ));
-			}
-#else
-			if (ucChannelNum <= 14) {
-				prChannel =
-					ieee80211_get_channel(
-						wiphy,
-						ieee80211_channel_to_frequency
-						(ucChannelNum, KAL_BAND_2GHZ));
-			} else {
-				prChannel =
-					ieee80211_get_channel(
-						wiphy,
-						ieee80211_channel_to_frequency
-						(ucChannelNum, KAL_BAND_5GHZ));
-			}
-#endif
-			if (!prChannel)
-				DBGLOG(SCN, ERROR,
-				       "prChannel is NULL and ucChannelNum is %d\n",
-				       ucChannelNum);
-
-			/* ensure BSS exists */
-#if KERNEL_VERSION(4, 1, 0) <= CFG80211_VERSION_CODE
-			bss = cfg80211_get_bss(
-				wiphy, prChannel, arBssid,
-				ssid.aucSsid, ssid.u4SsidLen,
-				IEEE80211_BSS_TYPE_ESS,
-				IEEE80211_PRIVACY_ANY);
-#else
-			bss = cfg80211_get_bss(
-				wiphy, prChannel, arBssid,
-				ssid.aucSsid, ssid.u4SsidLen,
-				WLAN_CAPABILITY_ESS,
-				WLAN_CAPABILITY_ESS);
-#endif
-			if (bss == NULL) {
-				/* create BSS on-the-fly */
-				prBssDesc =
-					aisGetTargetBssDesc(prAdapter,
-					ucBssIndex);
-
-				if (prBssDesc != NULL && prChannel != NULL) {
-#if KERNEL_VERSION(3, 18, 0) <= CFG80211_VERSION_CODE
-					bss = cfg80211_inform_bss(
-			wiphy,
-			prChannel,
-			CFG80211_BSS_FTYPE_PRESP,
-			arBssid,
-			0, /* TSF */
-			prBssDesc->u2CapInfo,
-			prBssDesc->u2BeaconInterval, /* beacon interval */
-			prBssDesc->aucIEBuf, /* IE */
-			prBssDesc->u2IELength, /* IE Length */
-			RCPI_TO_dBm(prBssDesc->ucRCPI) * 100, /* MBM */
-			GFP_KERNEL);
-#else
-					bss = cfg80211_inform_bss(
-			wiphy,
-			prChannel,
-			arBssid,
-			0, /* TSF */
-			prBssDesc->u2CapInfo,
-			prBssDesc->u2BeaconInterval, /* beacon interval */
-			prBssDesc->aucIEBuf, /* IE */
-			prBssDesc->u2IELength, /* IE Length */
-			RCPI_TO_dBm(prBssDesc->ucRCPI) * 100, /* MBM */
-			GFP_KERNEL);
-#endif
-				}
-			}
-
+			struct wiphy *wiphy = priv_to_wiphy(prGlueInfo);
+			struct cfg80211_bss *bss = ensureBssExists(prGlueInfo, wiphy, 
+								   arBssid, ucBssIndex, &ssid);
+			
+			removeDuplicateBssEntries(wiphy, bss, arBssid, &ssid);
 			StatsResetTxRx();
+			
+			reportConnectionStatus(prGlueInfo, prDevHandler, bss, 
+					       arBssid, eStatus, ucBssIndex);
+			
+			p2pFuncSwitchSapChannel(prAdapter);
+		}
+	}
+/* --- PATCH END --- */
 
-			/* remove all bsses that before and only channel
-			 * different with the current connected one
-			 * if without this patch, UI will show channel A is
-			 * connected even if AP has change channel from A to B
-			 */
-			while (ucLoopCnt--) {
-#if KERNEL_VERSION(4, 1, 0) <= CFG80211_VERSION_CODE
-				bss_others = cfg80211_get_bss(
-						wiphy,
-						NULL, arBssid, ssid.aucSsid,
-						ssid.u4SsidLen,
-						IEEE80211_BSS_TYPE_ESS,
-						IEEE80211_PRIVACY_ANY);
-#else
-				bss_others = cfg80211_get_bss(
-						wiphy,
-						NULL, arBssid, ssid.aucSsid,
-						ssid.u4SsidLen,
-						WLAN_CAPABILITY_ESS,
-						WLAN_CAPABILITY_ESS);
+#if (CFG_SUPPORT_802_11AX == 1)
+	/* Enable Spatial Reuse if configured */
+	if (IS_FEATURE_ENABLED(prAdapter->rWifiVar.fgEnableSR))
+		rlmSetSrControl(prAdapter, TRUE);
 #endif
-				if (bss && bss_others && bss_others != bss) {
-					DBGLOG(SCN, INFO,
-					       "remove BSSes that only channel different\n");
-					cfg80211_unlink_bss(
-						wiphy,
-						bss_others);
-					cfg80211_put_bss(wiphy, bss_others);
-				} else {
-					if (bss_others) {
-						cfg80211_put_bss(wiphy,
-								 bss_others);
-					}
-					break;
-				}
-			}
+}
 
-			/* CFG80211 Indication */
-			prConnSettings =
-				aisGetConnSettings(prAdapter, ucBssIndex);
-			if (eStatus == WLAN_STATUS_ROAM_OUT_FIND_BEST) {
-#if KERNEL_VERSION(4, 12, 0) <= CFG80211_VERSION_CODE
-#if (CFG_ADVANCED_80211_MLO == 1)
-				struct BSS_INFO *prBssInfo =
-					aisGetAisBssInfo(prAdapter, ucBssIndex);
+/* ============================================================================
+ * Media Disconnection Handler
+ * ============================================================================ */
 
-				rRoamInfo.ap_mld_addr = arBssid;
-				if (prBssInfo)
-					rRoamInfo.links[ucLinkIdx].addr =
-						prBssInfo->aucOwnMacAddr;
-				rRoamInfo.links[ucLinkIdx].bssid = arBssid;
-				rRoamInfo.links[ucLinkIdx].bss = bss;
-				rRoamInfo.links[ucLinkIdx].channel = prChannel;
-#else
-				rRoamInfo.bss = bss;
+static void handleMediaDisconnect(
+	struct GLUE_INFO *prGlueInfo,
+	uint32_t eStatus,
+	uint8_t ucBssIndex)
+{
+	struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
+	struct net_device *prDevHandler = wlanGetNetDev(prGlueInfo, ucBssIndex);
+	struct FT_IES *prFtIEs = NULL;
+
+	/* Reset link quality monitoring counters */
+	resetLinkQualityCounters(prAdapter);
+
+	/* Report disconnection via WEXT */
+	wext_indicate_wext_event(prGlueInfo, SIOCGIWAP, NULL, 0, ucBssIndex);
+
+	/* Disable network interface */
+	DBGLOG(INIT, INFO, "[wifi] %s netif_carrier_off\n", prDevHandler->name);
+	netif_carrier_off(prDevHandler);
+
+	/* Reset Full2Partial scan state */
+	if (prAdapter) {
+		struct SCAN_INFO *prScanInfo = &prAdapter->rWifiVar.rScanInfo;
+		prScanInfo->fgIsScanForFull2Partial = FALSE;
+		prScanInfo->u4LastFullScanTime = 0;
+	}
+
+/* Always report disconnection to cfg80211, even with supplicant SME */
+#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
+	DBGLOG(INIT, INFO, "Supplicant SME detected, but FORCING disconnect report for stability\n");
 #endif
-				rRoamInfo.req_ie = prConnSettings->aucReqIe;
-				rRoamInfo.req_ie_len =
-					prConnSettings->u4ReqIeLength;
-				rRoamInfo.resp_ie = prConnSettings->aucRspIe;
-				rRoamInfo.resp_ie_len =
-					prConnSettings->u4RspIeLength;
 
-				cfg80211_roamed(prDevHandler,
-					&rRoamInfo, GFP_KERNEL);
-#else
-				cfg80211_roamed_bss(
-					prDevHandler,
-					bss,
-					prConnSettings->aucReqIe,
-					prConnSettings->u4ReqIeLength,
-					prConnSettings->aucRspIe,
-					prConnSettings->u4RspIeLength,
+	if (prGlueInfo->fgIsRegistered == TRUE) {
+		reportDisconnection(prGlueInfo, prDevHandler, eStatus, ucBssIndex);
+	}
+
+	/* Clean up FT IEs */
+	prFtIEs = aisGetFtIe(prAdapter, ucBssIndex);
+	if (prFtIEs) {
+		kalMemFree(prFtIEs->pucIEBuf, VIR_MEM_TYPE, prFtIEs->u4IeLength);
+		kalMemZero(prFtIEs, sizeof(*prFtIEs));
+	}
+
+	/* Update media state */
+	kalSetMediaStateIndicated(prGlueInfo, MEDIA_STATE_DISCONNECTED, ucBssIndex);
+
+	/* Check and potentially switch SAP channel */
+	p2pFuncSwitchSapChannel(prAdapter);
+}
+
+/* ============================================================================
+ * Scan Completion Handler
+ * ============================================================================ */
+
+static void handleScanComplete(
+	struct GLUE_INFO *prGlueInfo,
+	void *pvBuf,
+	uint32_t u4BufLen,
+	uint8_t ucBssIndex)
+{
+	uint8_t fgScanAborted = FALSE;
+	GLUE_SPIN_LOCK_DECLARATION();
+
+	if (pvBuf && u4BufLen == sizeof(uint8_t))
+		fgScanAborted = *(uint8_t *)pvBuf;
+
+	/* Report scan completion via WEXT */
+	wext_indicate_wext_event(prGlueInfo, SIOCGIWSCAN, NULL, 0, ucBssIndex);
+
+	/* Log scan completion */
+	if (!fgScanAborted) {
+		kalScanLogCacheFlushBSS(prGlueInfo->prAdapter, SCAN_LOG_MSG_MAX_LEN);
+		scanlog_dbg(LOG_SCAN_DONE_D2K, INFO, 
+			    "Call cfg80211_scan_done (aborted=%u)\n", fgScanAborted);
+	} else {
+		scanlog_dbg(LOG_SCAN_ABORT_DONE_D2K, INFO, 
+			    "Call cfg80211_scan_done (aborted=%u)\n", fgScanAborted);
+	}
+
+	/* Complete the scan request */
+	GLUE_ACQUIRE_SPIN_LOCK(prGlueInfo, SPIN_LOCK_NET_DEV);
+	if (prGlueInfo->prScanRequest != NULL) {
+		kalCfg80211ScanDone(prGlueInfo->prScanRequest, fgScanAborted);
+		prGlueInfo->prScanRequest = NULL;
+	}
+	GLUE_RELEASE_SPIN_LOCK(prGlueInfo, SPIN_LOCK_NET_DEV);
+}
+
+/* ============================================================================
+ * Media Specific Indication Handler
+ * ============================================================================ */
+
+static void handleMediaSpecificIndication(
+	struct GLUE_INFO *prGlueInfo,
+	void *pvBuf,
+	uint8_t ucBssIndex)
+{
+	struct PARAM_STATUS_INDICATION *pStatus = 
+		(struct PARAM_STATUS_INDICATION *)pvBuf;
+	struct net_device *prDevHandler = wlanGetNetDev(prGlueInfo, ucBssIndex);
+
+	if (!pStatus)
+		return;
+
+	switch (pStatus->eStatusType) {
+	case ENUM_STATUS_TYPE_AUTHENTICATION:
+		handleAuthenticationEvent(prGlueInfo, prDevHandler, pvBuf, ucBssIndex);
+		break;
+
+	case ENUM_STATUS_TYPE_CANDIDATE_LIST:
+		handleCandidateListEvent(prGlueInfo, prDevHandler, pvBuf, ucBssIndex);
+		break;
+
+	case ENUM_STATUS_TYPE_FT_AUTH_STATUS:
+		handleFtAuthEvent(prGlueInfo, prDevHandler, ucBssIndex);
+		break;
+
+	default:
+		DBGLOG(INIT, TRACE, "Unhandled media specific indication type: %u\n",
+		       pStatus->eStatusType);
+		break;
+	}
+}
+
+static void handleAuthenticationEvent(
+	struct GLUE_INFO *prGlueInfo,
+	struct net_device *prDevHandler,
+	void *pvBuf,
+	uint8_t ucBssIndex)
+{
+	struct PARAM_INDICATION_EVENT *prEvent = 
+		(struct PARAM_INDICATION_EVENT *)pvBuf;
+
+	/* Only handle MIC error events (pairwise or group) */
+	if (prEvent->rAuthReq.u4Flags == PARAM_AUTH_REQUEST_PAIRWISE_ERROR ||
+	    prEvent->rAuthReq.u4Flags == PARAM_AUTH_REQUEST_GROUP_ERROR) {
+		
+		enum nl80211_key_type keyType = 
+			(prEvent->rAuthReq.u4Flags == PARAM_AUTH_REQUEST_PAIRWISE_ERROR)
+			? NL80211_KEYTYPE_PAIRWISE 
+			: NL80211_KEYTYPE_GROUP;
+
+		cfg80211_michael_mic_failure(prDevHandler, NULL, keyType, 
+					     0, NULL, GFP_KERNEL);
+		
+		wext_indicate_wext_event(prGlueInfo, IWEVMICHAELMICFAILURE,
+					 (unsigned char *)&prEvent->rAuthReq,
+					 prEvent->rAuthReq.u4Length, ucBssIndex);
+	}
+}
+
+static void handleCandidateListEvent(
+	struct GLUE_INFO *prGlueInfo,
+	struct net_device *prDevHandler,
+	void *pvBuf,
+	uint8_t ucBssIndex)
+{
+	struct PARAM_INDICATION_EVENT *prEvent = 
+		(struct PARAM_INDICATION_EVENT *)pvBuf;
+
+	cfg80211_pmksa_candidate_notify(prDevHandler, 1000,
+					prEvent->rCandi.arBSSID,
+					prEvent->rCandi.u4Flags,
 					GFP_KERNEL);
+
+	wext_indicate_wext_event(prGlueInfo, IWEVPMKIDCAND,
+				 (unsigned char *)&prEvent->rCandi,
+				 sizeof(struct PARAM_PMKID_CANDIDATE),
+				 ucBssIndex);
+}
+
+static void handleFtAuthEvent(
+	struct GLUE_INFO *prGlueInfo,
+	struct net_device *prDevHandler,
+	uint8_t ucBssIndex)
+{
+	struct cfg80211_ft_event_params *prFtEvent = 
+		aisGetFtEventParam(prGlueInfo->prAdapter, ucBssIndex);
+
+	cfg80211_ft_event(prDevHandler, prFtEvent);
+}
+
+/* ============================================================================
+ * Join Failure Handler
+ * ============================================================================ */
+
+static void handleJoinFailure(
+	struct GLUE_INFO *prGlueInfo,
+	uint8_t ucBssIndex)
+{
+	struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
+	struct net_device *prDevHandler = wlanGetNetDev(prGlueInfo, ucBssIndex);
+	struct BSS_DESC *prBssDesc = aisGetTargetBssDesc(prAdapter, ucBssIndex);
+	struct CONNECTION_SETTINGS *prConnSettings = 
+		aisGetConnSettings(prAdapter, ucBssIndex);
+	uint8_t arBssid[PARAM_MAC_ADDR_LEN];
+	uint16_t statusCode;
+
+	/* Determine BSSID and status code */
+	if (prBssDesc) {
+		DBGLOG(INIT, INFO, "JOIN Failure: u2JoinStatus=%d", 
+		       prBssDesc->u2JoinStatus);
+		COPY_MAC_ADDR(arBssid, prBssDesc->aucBSSID);
+		statusCode = determineJoinFailureStatus(prBssDesc->u2JoinStatus);
+	} else {
+		DBGLOG(INIT, INFO, "JOIN Failure: No TargetBssDesc");
+		COPY_MAC_ADDR(arBssid, prConnSettings->aucBSSID);
+		statusCode = WLAN_STATUS_AUTH_TIMEOUT;
+	}
+
+	/* Report connection failure */
+	cfg80211_connect_result(prDevHandler, arBssid,
+				prConnSettings->aucReqIe,
+				prConnSettings->u4ReqIeLength,
+				prConnSettings->aucRspIe,
+				prConnSettings->u4RspIeLength,
+				statusCode,
+				GFP_KERNEL);
+
+	/* Update media state */
+	kalSetMediaStateIndicated(prGlueInfo, MEDIA_STATE_DISCONNECTED, ucBssIndex);
+
+	/* Check and potentially switch SAP channel */
+	p2pFuncSwitchSapChannel(prAdapter);
+}
+
+static uint16_t determineJoinFailureStatus(uint16_t u2JoinStatus)
+{
+	/* If we have a specific non-timeout error, use it; otherwise use timeout */
+	if (u2JoinStatus && 
+	    u2JoinStatus != STATUS_CODE_AUTH_TIMEOUT &&
+	    u2JoinStatus != STATUS_CODE_ASSOC_TIMEOUT) {
+		return u2JoinStatus;
+	}
+	return WLAN_STATUS_AUTH_TIMEOUT;
+}
+
+/* ============================================================================
+ * Helper Functions - Always compiled regardless of CFG_SUPPORT_SUPPLICANT_SME
+ * ============================================================================ */
+
+static void resetLinkQualityCounters(struct ADAPTER *prAdapter)
+{
+#if CFG_SUPPORT_LINK_QUALITY_MONITOR
+	if (prAdapter) {
+		prAdapter->rLinkQualityInfo.u8TxTotalCount = 0;
+		prAdapter->rLinkQualityInfo.u8RxTotalCount = 0;
+		prAdapter->rLinkQualityInfo.u8RxErrCount = 0;
+	}
 #endif
-			} else {
-				cfg80211_connect_result(
-					prDevHandler,
-					arBssid,
+}
+
+static void queryAndCopyBssid(
+	struct GLUE_INFO *prGlueInfo,
+	uint8_t *arBssid,
+	uint8_t ucBssIndex)
+{
+	uint32_t bufLen = 0;
+	
+	SET_IOCTL_BSSIDX(prGlueInfo->prAdapter, ucBssIndex);
+	wlanQueryInformation(prGlueInfo->prAdapter, wlanoidQueryBssid,
+			     arBssid, PARAM_MAC_ADDR_LEN, &bufLen);
+}
+
+static void logConnectionInfo(
+	struct GLUE_INFO *prGlueInfo,
+	uint8_t *arBssid,
+	uint8_t ucBssIndex,
+	struct PARAM_SSID *pSsid)
+{
+	uint8_t aucSsid[PARAM_MAX_LEN_SSID + 1] = {0};
+	uint32_t bufLen = 0;
+
+	SET_IOCTL_BSSIDX(prGlueInfo->prAdapter, ucBssIndex);
+	wlanQueryInformation(prGlueInfo->prAdapter, wlanoidQuerySsid, 
+			     pSsid, sizeof(*pSsid), &bufLen);
+
+	kalStrnCpy(aucSsid, pSsid->aucSsid, sizeof(aucSsid));
+	aucSsid[sizeof(aucSsid) - 1] = '\0';
+
+	DBGLOG(INIT, INFO,
+	       "[wifi] %s netif_carrier_on [ssid:%s " MACSTR "], Mac:" MACSTR "\n",
+	       prGlueInfo->prDevHandler->name, aucSsid, MAC2STR(arBssid),
+	       MAC2STR(prGlueInfo->prAdapter->rWifiVar.aucMacAddress));
+}
+
+static struct cfg80211_bss* ensureBssExists(
+	struct GLUE_INFO *prGlueInfo,
+	struct wiphy *wiphy,
+	uint8_t *arBssid,
+	uint8_t ucBssIndex,
+	struct PARAM_SSID *pSsid)
+{
+	struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
+	struct ieee80211_channel *prChannel = NULL;
+	struct cfg80211_bss *bss = NULL;
+	uint8_t ucChannelNum;
+	enum ENUM_BAND eBand;
+
+	/* Get channel information */
+	ucChannelNum = wlanGetChannelNumberByNetwork(prAdapter, ucBssIndex);
+	eBand = wlanGetBandIndexByNetwork(prAdapter, ucBssIndex);
+	prChannel = getChannelByBand(wiphy, ucChannelNum, eBand);
+
+	if (!prChannel) {
+		DBGLOG(SCN, ERROR, "prChannel is NULL, ucChannelNum=%d\n", ucChannelNum);
+		return NULL;
+	}
+
+	/* Try to find existing BSS entry */
+#if KERNEL_VERSION(4, 1, 0) <= CFG80211_VERSION_CODE
+	bss = cfg80211_get_bss(wiphy, prChannel, arBssid,
+			       pSsid->aucSsid, pSsid->u4SsidLen,
+			       IEEE80211_BSS_TYPE_ESS, IEEE80211_PRIVACY_ANY);
+#else
+	bss = cfg80211_get_bss(wiphy, prChannel, arBssid,
+			       pSsid->aucSsid, pSsid->u4SsidLen,
+			       WLAN_CAPABILITY_ESS, WLAN_CAPABILITY_ESS);
+#endif
+
+	/* Create BSS entry if it doesn't exist */
+	if (!bss) {
+		struct BSS_DESC *prBssDesc = aisGetTargetBssDesc(prAdapter, ucBssIndex);
+		
+		if (prBssDesc && prChannel) {
+			bss = createBssEntry(wiphy, prChannel, arBssid, prBssDesc);
+		}
+	}
+
+	return bss;
+}
+
+static struct ieee80211_channel* getChannelByBand(
+	struct wiphy *wiphy,
+	uint8_t ucChannelNum,
+	enum ENUM_BAND eBand)
+{
+#if (CFG_SUPPORT_WIFI_6G == 1)
+	if (eBand == BAND_6G) {
+		return ieee80211_get_channel(wiphy,
+			ieee80211_channel_to_frequency(ucChannelNum, KAL_BAND_6GHZ));
+	} else if (ucChannelNum <= 14) {
+		return ieee80211_get_channel(wiphy,
+			ieee80211_channel_to_frequency(ucChannelNum, KAL_BAND_2GHZ));
+	} else {
+		return ieee80211_get_channel(wiphy,
+			ieee80211_channel_to_frequency(ucChannelNum, KAL_BAND_5GHZ));
+	}
+#else
+	if (ucChannelNum <= 14) {
+		return ieee80211_get_channel(wiphy,
+			ieee80211_channel_to_frequency(ucChannelNum, KAL_BAND_2GHZ));
+	} else {
+		return ieee80211_get_channel(wiphy,
+			ieee80211_channel_to_frequency(ucChannelNum, KAL_BAND_5GHZ));
+	}
+#endif
+}
+
+static struct cfg80211_bss* createBssEntry(
+	struct wiphy *wiphy,
+	struct ieee80211_channel *prChannel,
+	uint8_t *arBssid,
+	struct BSS_DESC *prBssDesc)
+{
+#if KERNEL_VERSION(3, 18, 0) <= CFG80211_VERSION_CODE
+	return cfg80211_inform_bss(wiphy, prChannel,
+				   CFG80211_BSS_FTYPE_PRESP,
+				   arBssid, 0,
+				   prBssDesc->u2CapInfo,
+				   prBssDesc->u2BeaconInterval,
+				   prBssDesc->aucIEBuf,
+				   prBssDesc->u2IELength,
+				   RCPI_TO_dBm(prBssDesc->ucRCPI) * 100,
+				   GFP_KERNEL);
+#else
+	return cfg80211_inform_bss(wiphy, prChannel, arBssid, 0,
+				   prBssDesc->u2CapInfo,
+				   prBssDesc->u2BeaconInterval,
+				   prBssDesc->aucIEBuf,
+				   prBssDesc->u2IELength,
+				   RCPI_TO_dBm(prBssDesc->ucRCPI) * 100,
+				   GFP_KERNEL);
+#endif
+}
+
+static void removeDuplicateBssEntries(
+	struct wiphy *wiphy,
+	struct cfg80211_bss *targetBss,
+	uint8_t *arBssid,
+	struct PARAM_SSID *pSsid)
+{
+	struct cfg80211_bss *bss_others = NULL;
+	uint8_t ucLoopCnt = 15; /* Limit iterations to prevent infinite loops */
+
+	/* Remove BSS entries with same BSSID/SSID but different channel */
+	while (ucLoopCnt--) {
+#if KERNEL_VERSION(4, 1, 0) <= CFG80211_VERSION_CODE
+		bss_others = cfg80211_get_bss(wiphy, NULL, arBssid,
+					      pSsid->aucSsid, pSsid->u4SsidLen,
+					      IEEE80211_BSS_TYPE_ESS,
+					      IEEE80211_PRIVACY_ANY);
+#else
+		bss_others = cfg80211_get_bss(wiphy, NULL, arBssid,
+					      pSsid->aucSsid, pSsid->u4SsidLen,
+					      WLAN_CAPABILITY_ESS,
+					      WLAN_CAPABILITY_ESS);
+#endif
+
+		if (targetBss && bss_others && bss_others != targetBss) {
+			DBGLOG(SCN, INFO, "Removing duplicate BSS entry\n");
+			cfg80211_unlink_bss(wiphy, bss_others);
+			cfg80211_put_bss(wiphy, bss_others);
+		} else {
+			if (bss_others)
+				cfg80211_put_bss(wiphy, bss_others);
+			break;
+		}
+	}
+}
+
+static void reportConnectionStatus(
+	struct GLUE_INFO *prGlueInfo,
+	struct net_device *prDevHandler,
+	struct cfg80211_bss *bss,
+	uint8_t *arBssid,
+	uint32_t eStatus,
+	uint8_t ucBssIndex)
+{
+	struct CONNECTION_SETTINGS *prConnSettings = 
+		aisGetConnSettings(prGlueInfo->prAdapter, ucBssIndex);
+	struct ieee80211_channel *prChannel = bss ? bss->channel : NULL;
+
+	if (eStatus == WLAN_STATUS_ROAM_OUT_FIND_BEST) {
+		reportRoamingEvent(prGlueInfo, prDevHandler, bss, prChannel,
+				   arBssid, prConnSettings, ucBssIndex);
+	} else {
+		cfg80211_connect_result(prDevHandler, arBssid,
 					prConnSettings->aucReqIe,
 					prConnSettings->u4ReqIeLength,
 					prConnSettings->aucRspIe,
 					prConnSettings->u4RspIeLength,
 					WLAN_STATUS_SUCCESS,
 					GFP_KERNEL);
-				if (bss)
-					cfg80211_put_bss(wiphy, bss);
-			}
+		if (bss)
+			cfg80211_put_bss(priv_to_wiphy(prGlueInfo), bss);
+	}
+}
 
-			/* Check SAP channel */
-			p2pFuncSwitchSapChannel(prGlueInfo->prAdapter);
+static void reportRoamingEvent(
+	struct GLUE_INFO *prGlueInfo,
+	struct net_device *prDevHandler,
+	struct cfg80211_bss *bss,
+	struct ieee80211_channel *prChannel,
+	uint8_t *arBssid,
+	struct CONNECTION_SETTINGS *prConnSettings,
+	uint8_t ucBssIndex)
+{
+#if KERNEL_VERSION(4, 12, 0) <= CFG80211_VERSION_CODE
+	struct cfg80211_roam_info rRoamInfo = {0};
 
-		}
-#if (CFG_SUPPORT_802_11AX == 1)
-		if (IS_FEATURE_ENABLED(prAdapter->rWifiVar.fgEnableSR))
-			rlmSetSrControl(prAdapter, TRUE);
-#endif
-#endif
+#if (CFG_ADVANCED_80211_MLO == 1)
+	struct BSS_INFO *prBssInfo = 
+		aisGetAisBssInfo(prGlueInfo->prAdapter, ucBssIndex);
+	uint8_t ucLinkIdx = 0;
 
-		break;
-
-	case WLAN_STATUS_MEDIA_DISCONNECT:
-	case WLAN_STATUS_MEDIA_DISCONNECT_LOCALLY:
-#if CFG_SUPPORT_LINK_QUALITY_MONITOR
-		/* clear the count */
-		if (prAdapter) {
-			prAdapter->rLinkQualityInfo.u8TxTotalCount = 0;
-			prAdapter->rLinkQualityInfo.u8RxTotalCount = 0;
-			prAdapter->rLinkQualityInfo.u8RxErrCount = 0;
-		}
-#endif
-		/* indicate disassoc event */
-		wext_indicate_wext_event(prGlueInfo, SIOCGIWAP, NULL, 0
-			, ucBssIndex);
-		/* For CR 90 and CR99, While supplicant do reassociate, driver
-		 * will do netif_carrier_off first,
-		 * after associated success, at joinComplete(),
-		 * do netif_carier_on,
-		 * but for unknown reason, the supplicant 1x pkt will not
-		 * called the driver hardStartXmit, for template workaround
-		 * these bugs, add this compiling flag
-		 */
-		/* switch netif off */
-
-#if 1				/* CONSOLE_MESSAGE */
-		DBGLOG(INIT, INFO, "[wifi] %s netif_carrier_off\n",
-		       prDevHandler->name);
-#endif
-
-		netif_carrier_off(prDevHandler);
-
-		/* Full2Partial: reset */
-		if (prAdapter) {
-			struct SCAN_INFO *prScanInfo =
-				&(prGlueInfo->prAdapter->rWifiVar.rScanInfo);
-			prScanInfo->fgIsScanForFull2Partial = FALSE;
-			prScanInfo->u4LastFullScanTime = 0;
-		}
-
-#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-		/* replace by reporting T/RX deauth/disassociation frame */
-		DBGLOG(INIT, INFO,
-			"Skip report DISCONNECTED when using supplicant SME\n");
+	rRoamInfo.ap_mld_addr = arBssid;
+	if (prBssInfo)
+		rRoamInfo.links[ucLinkIdx].addr = prBssInfo->aucOwnMacAddr;
+	rRoamInfo.links[ucLinkIdx].bssid = arBssid;
+	rRoamInfo.links[ucLinkIdx].bss = bss;
+	rRoamInfo.links[ucLinkIdx].channel = prChannel;
 #else
-		if (prGlueInfo->fgIsRegistered == TRUE) {
-			struct BSS_INFO *prBssInfo =
-				aisGetAisBssInfo(prAdapter, ucBssIndex);
-			uint16_t u2DeauthReason = 0;
-#if CFG_WPS_DISCONNECT || (KERNEL_VERSION(4, 4, 0) <= CFG80211_VERSION_CODE)
+	rRoamInfo.bss = bss;
+#endif
 
-			if (prBssInfo)
-				u2DeauthReason = prBssInfo->u2DeauthReason;
-			/* CFG80211 Indication */
-			DBGLOG(INIT, INFO,
-			    "[wifi]Indicate disconnection: Reason=%d Locally[%d]\n",
-			    u2DeauthReason,
-			    (eStatus ==
-				WLAN_STATUS_MEDIA_DISCONNECT_LOCALLY));
-			cfg80211_disconnected(prDevHandler,
-			    u2DeauthReason, NULL, 0,
-			    eStatus == WLAN_STATUS_MEDIA_DISCONNECT_LOCALLY,
+	rRoamInfo.req_ie = prConnSettings->aucReqIe;
+	rRoamInfo.req_ie_len = prConnSettings->u4ReqIeLength;
+	rRoamInfo.resp_ie = prConnSettings->aucRspIe;
+	rRoamInfo.resp_ie_len = prConnSettings->u4RspIeLength;
+
+	cfg80211_roamed(prDevHandler, &rRoamInfo, GFP_KERNEL);
+#else
+	cfg80211_roamed_bss(prDevHandler, bss,
+			    prConnSettings->aucReqIe,
+			    prConnSettings->u4ReqIeLength,
+			    prConnSettings->aucRspIe,
+			    prConnSettings->u4RspIeLength,
 			    GFP_KERNEL);
+#endif
+}
 
+static void reportDisconnection(
+	struct GLUE_INFO *prGlueInfo,
+	struct net_device *prDevHandler,
+	uint32_t eStatus,
+	uint8_t ucBssIndex)
+{
+	struct BSS_INFO *prBssInfo = 
+		aisGetAisBssInfo(prGlueInfo->prAdapter, ucBssIndex);
+	uint16_t u2DeauthReason = 0;
+	u_int8_t fgLocallyGenerated = 
+		(eStatus == WLAN_STATUS_MEDIA_DISCONNECT_LOCALLY);
+
+	if (prBssInfo)
+		u2DeauthReason = prBssInfo->u2DeauthReason;
+
+	DBGLOG(INIT, INFO,
+	       "[wifi] Indicate disconnection: Reason=%d Locally=%d\n",
+	       u2DeauthReason, fgLocallyGenerated);
+
+#if CFG_WPS_DISCONNECT || (KERNEL_VERSION(4, 4, 0) <= CFG80211_VERSION_CODE)
+	cfg80211_disconnected(prDevHandler, u2DeauthReason, NULL, 0,
+			      fgLocallyGenerated, GFP_KERNEL);
 #else
-
 #ifdef CONFIG_ANDROID
 #if KERNEL_VERSION(3, 10, 0) == LINUX_VERSION_CODE
-			/* Don't indicate disconnection to upper layer for
-			 * ANDROID kernel 3.10
-			 */
-			/* since cfg80211 will indicate disconnection to
-			 * wpa_supplicant for this kernel
-			 */
-			if (eStatus == WLAN_STATUS_MEDIA_DISCONNECT)
+	/* Skip disconnection indication for Android kernel 3.10 on remote disconnect */
+	if (eStatus == WLAN_STATUS_MEDIA_DISCONNECT)
+		return;
 #endif
 #endif
-			{
-
-
-				if (prBssInfo)
-					u2DeauthReason =
-						prBssInfo->u2DeauthReason;
-				/* CFG80211 Indication */
-				cfg80211_disconnected(prDevHandler,
-						      u2DeauthReason, NULL, 0,
-						      GFP_KERNEL);
-			}
-
-
+	cfg80211_disconnected(prDevHandler, u2DeauthReason, NULL, 0, GFP_KERNEL);
 #endif
-		}
-#endif /* #if (CFG_SUPPORT_SUPPLICANT_SME == 1) */
+}
 
-		prFtIEs = aisGetFtIe(prAdapter, ucBssIndex);
-		if (prFtIEs) {
-			kalMemFree(prFtIEs->pucIEBuf,
-				VIR_MEM_TYPE,
-				prFtIEs->u4IeLength);
-			kalMemZero(prFtIEs,
-				sizeof(*prFtIEs));
-		}
+// end refactor
 
-		kalSetMediaStateIndicated(prGlueInfo,
-			MEDIA_STATE_DISCONNECTED,
-			ucBssIndex);
-
-		/* Check SAP channel */
-		p2pFuncSwitchSapChannel(prGlueInfo->prAdapter);
-
-		break;
-
-	case WLAN_STATUS_SCAN_COMPLETE:
-		if (pvBuf && u4BufLen == sizeof(uint8_t))
-			fgScanAborted = *(uint8_t *)pvBuf;
-
-		/* indicate scan complete event */
-		wext_indicate_wext_event(prGlueInfo, SIOCGIWSCAN, NULL, 0,
-			ucBssIndex);
-
-		if (fgScanAborted == FALSE) {
-			kalScanLogCacheFlushBSS(prGlueInfo->prAdapter,
-				SCAN_LOG_MSG_MAX_LEN);
-			scanlog_dbg(LOG_SCAN_DONE_D2K, INFO, "Call cfg80211_scan_done (aborted=%u)\n",
-				fgScanAborted);
-		} else {
-			scanlog_dbg(LOG_SCAN_ABORT_DONE_D2K, INFO, "Call cfg80211_scan_done (aborted=%u)\n",
-				fgScanAborted);
-		}
-
-		/* 1. reset first for newly incoming request */
-		GLUE_ACQUIRE_SPIN_LOCK(prGlueInfo, SPIN_LOCK_NET_DEV);
-		if (prGlueInfo->prScanRequest != NULL) {
-			kalCfg80211ScanDone(prGlueInfo->prScanRequest,
-				fgScanAborted);
-			prGlueInfo->prScanRequest = NULL;
-		}
-		GLUE_RELEASE_SPIN_LOCK(prGlueInfo, SPIN_LOCK_NET_DEV);
-
-		break;
-
-#if 0
-	case WLAN_STATUS_MSDU_OK:
-		if (netif_running(prDevHandler))
-			netif_wake_queue(prDevHandler);
-		break;
-#endif
-
-	case WLAN_STATUS_MEDIA_SPECIFIC_INDICATION:
-		if (pStatus) {
-			switch (pStatus->eStatusType) {
-			case ENUM_STATUS_TYPE_AUTHENTICATION:
-			{
-				struct PARAM_INDICATION_EVENT *prEvent =
-				(struct PARAM_INDICATION_EVENT *) pvBuf;
-
-				/* indicate (UC/GC) MIC ERROR event only */
-				if ((prEvent->rAuthReq.u4Flags ==
-				     PARAM_AUTH_REQUEST_PAIRWISE_ERROR) ||
-				    (prEvent->rAuthReq.u4Flags ==
-				     PARAM_AUTH_REQUEST_GROUP_ERROR)) {
-					cfg80211_michael_mic_failure(
-					    prDevHandler, NULL,
-					    (prEvent->rAuthReq.u4Flags ==
-					    PARAM_AUTH_REQUEST_PAIRWISE_ERROR)
-						? NL80211_KEYTYPE_PAIRWISE :
-						NL80211_KEYTYPE_GROUP,
-					    0, NULL, GFP_KERNEL);
-					wext_indicate_wext_event(prGlueInfo,
-					    IWEVMICHAELMICFAILURE,
-					    (unsigned char *)
-						&prEvent->rAuthReq,
-					    prEvent->rAuthReq.u4Length,
-					    ucBssIndex);
-				}
-				break;
-			}
-			case ENUM_STATUS_TYPE_CANDIDATE_LIST:
-			{
-				struct PARAM_INDICATION_EVENT *prEvent =
-				(struct PARAM_INDICATION_EVENT *) pvBuf;
-
-				cfg80211_pmksa_candidate_notify(
-					prDevHandler,
-					1000,
-					prEvent->rCandi.arBSSID,
-					prEvent->rCandi.u4Flags,
-					GFP_KERNEL);
-
-				wext_indicate_wext_event(
-					prGlueInfo,
-					IWEVPMKIDCAND,
-					(unsigned char *) &prEvent->rCandi,
-					sizeof(struct PARAM_PMKID_CANDIDATE),
-					ucBssIndex);
-
-				break;
-			}
-			case ENUM_STATUS_TYPE_FT_AUTH_STATUS: {
-				struct cfg80211_ft_event_params *prFtEvent =
-					aisGetFtEventParam(prAdapter,
-					ucBssIndex);
-
-				cfg80211_ft_event(prDevHandler,
-						  prFtEvent);
-			}
-				break;
-
-			default:
-				/* case ENUM_STATUS_TYPE_MEDIA_STREAM_MODE */
-				break;
-			}
-		} else {
-
-		}
-		break;
-
-#if CFG_SUPPORT_BCM && CFG_SUPPORT_BCM_BWCS
-	case WLAN_STATUS_BWCS_UPDATE: {
-		wext_indicate_wext_event(prGlueInfo, IWEVCUSTOM, pvBuf,
-					 sizeof(struct PTA_IPC), ucBssIndex);
-	}
-
-	break;
-
-#endif
-	case WLAN_STATUS_JOIN_FAILURE: {
-		struct BSS_DESC *prBssDesc =
-			aisGetTargetBssDesc(prAdapter, ucBssIndex);
-		struct CONNECTION_SETTINGS *prConnSettings =
-			aisGetConnSettings(prAdapter, ucBssIndex);
-
-		if (prBssDesc) {
-			DBGLOG(INIT, INFO, "JOIN Failure: u2JoinStatus=%d",
-				prBssDesc->u2JoinStatus);
-			COPY_MAC_ADDR(arBssid, prBssDesc->aucBSSID);
-		} else {
-			DBGLOG(INIT, INFO, "JOIN Failure: No TargetBssDesc");
-			COPY_MAC_ADDR(arBssid,
-				prConnSettings->aucBSSID);
-		}
-		if (prBssDesc && prBssDesc->u2JoinStatus
-		    && prBssDesc->u2JoinStatus != STATUS_CODE_AUTH_TIMEOUT
-		    && prBssDesc->u2JoinStatus != STATUS_CODE_ASSOC_TIMEOUT)
-			cfg80211_connect_result(prDevHandler,
-				arBssid,
-				prConnSettings->aucReqIe,
-				prConnSettings->u4ReqIeLength,
-				prConnSettings->aucRspIe,
-				prConnSettings->u4RspIeLength,
-				prBssDesc->u2JoinStatus,
-				GFP_KERNEL);
-		else
-			cfg80211_connect_result(prDevHandler,
-				arBssid,
-				prConnSettings->aucReqIe,
-				prConnSettings->u4ReqIeLength,
-				prConnSettings->aucRspIe,
-				prConnSettings->u4RspIeLength,
-				WLAN_STATUS_AUTH_TIMEOUT,
-				GFP_KERNEL);
-		kalSetMediaStateIndicated(prGlueInfo,
-			MEDIA_STATE_DISCONNECTED,
-			ucBssIndex);
-
-		/* Check SAP channel */
-		p2pFuncSwitchSapChannel(prGlueInfo->prAdapter);
-
-		break;
-	}
-	default:
-		break;
-	}
-}				/* kalIndicateStatusAndComplete */
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -3390,66 +3581,34 @@ kalIoctl(IN struct GLUE_INFO *prGlueInfo,
 }
 
 uint32_t kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
-                 IN PFN_OID_HANDLER_FUNC pfnOidHandler,
-                 IN void *pvInfoBuf,
-                 IN uint32_t u4InfoBufLen, 
-                 IN uint8_t fgRead,
-                 IN uint8_t fgWaitResp, 
-                 IN uint8_t fgCmd,
-                 OUT uint32_t *pu4QryInfoLen,
-                 IN uint8_t ucBssIndex)
+                  IN PFN_OID_HANDLER_FUNC pfnOidHandler,
+                  IN void *pvInfoBuf,
+                  IN uint32_t u4InfoBufLen, 
+                  IN uint8_t fgRead,
+                  IN uint8_t fgWaitResp, 
+                  IN uint8_t fgCmd,
+                  OUT uint32_t *pu4QryInfoLen,
+                  IN uint8_t ucBssIndex)
 {
     struct GL_IO_REQ *prIoReq = NULL;
-    struct KAL_THREAD_SCHEDSTATS schedstats;
     uint32_t ret = WLAN_STATUS_SUCCESS;
-    long waitRet = 0;
+    int timeout = 3000; /* 3 seconds max */
 
-    /* 1. Basic Sanity Checks */
-    if (!prGlueInfo || !prGlueInfo->prAdapter || kalIsResetting())
+    if (!prGlueInfo || !prGlueInfo->prAdapter || g_u4HaltFlag)
         return WLAN_STATUS_ADAPTER_NOT_READY;
 
-    if (wlanIsChipAssert(prGlueInfo->prAdapter))
-        return WLAN_STATUS_FAILURE;
-
-    /* 2. Optimized Path: If already in main thread */
-#if (CFG_SUPPORT_MULTITHREAD && CFG_SUPPORT_SUPPLICANT_SME)
+    /* 1. Context Check: No locking if we are the main thread */
     if (prGlueInfo->u4TxThreadPid == KAL_GET_CURRENT_THREAD_ID()) {
-        if (pfnOidHandler) {
-#if CFG_REDIRECT_OID_SUPPORT
-            /* FIX: kalRedirectsMainTreadOid is void, so call handler directly */
-            ret = pfnOidHandler(prGlueInfo->prAdapter, pvInfoBuf, 
-                                u4InfoBufLen, pu4QryInfoLen);
-            return ret;
-#else
-            return pfnOidHandler(prGlueInfo->prAdapter, pvInfoBuf, 
-                                 u4InfoBufLen, pu4QryInfoLen);
-#endif
-        }
-    }
-#endif
-
-    /* 3. Locking Sequence */
-    if (down_interruptible(&g_halt_sem))
+        if (pfnOidHandler)
+            return pfnOidHandler(prGlueInfo->prAdapter, pvInfoBuf, u4InfoBufLen, pu4QryInfoLen);
         return WLAN_STATUS_FAILURE;
+    }
 
-    if (g_u4HaltFlag) {
-        up(&g_halt_sem);
+    /* 2. Non-blocking lock attempt */
+    if (down_trylock(&prGlueInfo->ioctl_sem) != 0)
         return WLAN_STATUS_ADAPTER_NOT_READY;
-    }
 
-    if (down_interruptible(&prGlueInfo->ioctl_sem)) {
-        up(&g_halt_sem);
-        return WLAN_STATUS_FAILURE;
-    }
-
-    /* Verify thread health */
-    if (unlikely(!prGlueInfo->main_thread)) {
-        DBGLOG(OID, ERROR, "IOCTL failed: Main thread is NULL\n");
-        ret = WLAN_STATUS_FAILURE;
-        goto exit_unlock;
-    }
-
-    /* 4. Prepare Request */
+    /* 3. Prepare Request */
     prIoReq = &(prGlueInfo->OidEntry);
     prIoReq->prAdapter      = prGlueInfo->prAdapter;
     prIoReq->pfnOidHandler  = pfnOidHandler;
@@ -3459,59 +3618,33 @@ uint32_t kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
     prIoReq->fgRead         = fgRead;
     prIoReq->fgWaitResp     = fgWaitResp;
     prIoReq->rStatus        = WLAN_STATUS_PENDING;
-    
+
     SET_IOCTL_BSSIDX(prGlueInfo->prAdapter, ucBssIndex);
-
-    prGlueInfo->rPendStatus = WLAN_STATUS_FAILURE;
-    prGlueInfo->u4OidCompleteFlag = 0;
-    prIoReq->u4Flag = fgCmd;
-
-    /* 5. Trigger Main Thread */
-    reinit_completion(&prGlueInfo->rPendComp);
-    smp_wmb(); 
     set_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag);
 
-    /* 6. Power Management */
-    KAL_WAKE_LOCK_TIMEOUT(prGlueInfo->prAdapter, prGlueInfo->prTimeoutWakeLock, 
-        MSEC_TO_JIFFIES(prGlueInfo->prAdapter->rWifiVar.u4WakeLockThreadWakeup));
+    if (prGlueInfo->main_thread) {
+        wake_up_interruptible(&prGlueInfo->waitq);
 
-    wake_up_interruptible(&prGlueInfo->waitq);
-
-    /* 7. Wait for Completion */
-    kalThreadSchedMark(prGlueInfo->main_thread, &schedstats);
-    waitRet = wait_for_completion_timeout(&prGlueInfo->rPendComp, MSEC_TO_JIFFIES(30000));
-    kalThreadSchedUnmark(prGlueInfo->main_thread, &schedstats);
-
-    if (likely(waitRet > 0)) {
-        ret = (prIoReq->rStatus == WLAN_STATUS_PENDING)
-              ? prGlueInfo->rPendStatus
-              : prIoReq->rStatus;
-        if (ret != WLAN_STATUS_SUCCESS) {
-            DBGLOG(OID, WARN,
-                   "kalIoctlByBssIdx: OID(%pF) bss=%u read=%u cmd=%u "
-                   "waitResp=%u bufLen=%u status=0x%x caller: %pS\n",
-                   pfnOidHandler,
-                   ucBssIndex,
-                   fgRead, fgCmd, fgWaitResp,
-                   u4InfoBufLen,
-                   ret,
-                   __builtin_return_address(0));
+        /* 4. SAFE BUSY-WAIT (No more completion_timeout)
+         * This loop uses mdelay(1) which is safe in atomic contexts. */
+        while (timeout > 0 && (test_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag))) {
+            mdelay(1); 
+            timeout--;
+            cpu_relax(); /* Friendly to your Vivobook's CPU spec */
         }
-    } else {
-        DBGLOG(OID, ERROR, "IOCTL TIMEOUT (30s). Stats: exec=%llu run=%llu\n",
-               schedstats.exec, schedstats.runnable);
-        if (fgCmd)
-            wlanReleasePendingOid(prGlueInfo->prAdapter, 0);
-        ret = WLAN_STATUS_FAILURE;
     }
 
-exit_unlock:
-    clear_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag);
+    /* 5. Evaluate result */
+    if (test_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag)) {
+        clear_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag);
+        ret = WLAN_STATUS_ADAPTER_NOT_READY;
+    } else {
+        ret = prIoReq->rStatus;
+    }
+
     up(&prGlueInfo->ioctl_sem);
-    up(&g_halt_sem);
     return ret;
 }
-
 
 
 
@@ -4153,7 +4286,7 @@ int rx_thread(void *data)
 	struct QUE_ENTRY *prQueueEntry = NULL;
 
 	int ret = 0;
-#if defined(CONFIG_ANDROID) && (CFG_ENABLE_WAKE_LOCK)
+#if CFG_ENABLE_WAKE_LOCK
 	KAL_WAKE_LOCK_T *prRxThreadWakeLock;
 #endif
 	uint32_t u4LoopCount;
@@ -5053,48 +5186,57 @@ u_int8_t kalCancelTimer(IN struct GLUE_INFO *prGlueInfo)
  */
 /*----------------------------------------------------------------------------*/
 void kalScanDone(IN struct GLUE_INFO *prGlueInfo,
-		 IN uint8_t ucBssIndex,
-		 IN uint32_t status)
+                 IN uint8_t ucBssIndex,
+                 IN uint32_t status)
 {
-	uint8_t fgAborted = (status != WLAN_STATUS_SUCCESS) ? TRUE : FALSE;
-	struct ADAPTER *prAdapter;
-	struct AIS_FSM_INFO *prAisFsmInfo;
+    uint8_t fgAborted = (status != WLAN_STATUS_SUCCESS) ? TRUE : FALSE;
+    struct ADAPTER *prAdapter;
+    struct AIS_FSM_INFO *prAisFsmInfo;
 
-	ASSERT(prGlueInfo);
-	prAdapter = prGlueInfo->prAdapter;
-	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+    ASSERT(prGlueInfo);
+    prAdapter = prGlueInfo->prAdapter;
+    prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
 
-	/* 1. LOCK: Signal the AIS FSM that we are handing data to the OS.
-	 * This flag acts as a 'Stay Alive' signal for the hardware context.
-	 */
-	if (prAisFsmInfo)
-		prAisFsmInfo->fgIsScanReporting = TRUE;
+    /* fgIsScanReporting is already TRUE and u4ScanReportStartTime is
+     * already stamped by aisFsmRunEventScanDone. Do not re-arm here —
+     * doing so would reset the clock and break the timeout logic.
+     * We are already inside the guarded window.
+     */
 
-	if (IS_BSS_INDEX_AIS(prAdapter, ucBssIndex))
-		scanLogEssResult(prAdapter);
+    if (IS_BSS_INDEX_AIS(prAdapter, ucBssIndex))
+        scanLogEssResult(prAdapter);
 
-	/* This is where SSID "H" and friends are copied to the kernel.
-	 * Because we set the flag above, nicDeactivateNetwork cannot
-	 * preemptively nuke these buffers.
-	 */
-	scanReportBss2Cfg80211(prAdapter, BSS_TYPE_INFRASTRUCTURE, NULL);
+    /* Hand BSS entries to cfg80211. The reporting guard keeps
+     * nicDeactivateNetwork from nuking the BSS context under us.
+     */
+    scanReportBss2Cfg80211(prAdapter, BSS_TYPE_INFRASTRUCTURE, NULL);
 
-	wlanCheckSystemConfiguration(prAdapter);
+    wlanCheckSystemConfiguration(prAdapter);
 
-	/* 2. NOTIFY: Tell cfg80211 the scan is officially finished. */
-	kalIndicateStatusAndComplete(prGlueInfo, WLAN_STATUS_SCAN_COMPLETE,
-		&fgAborted, sizeof(fgAborted), ucBssIndex);
+    /* Tell cfg80211 the scan is officially finished.
+     * After this returns, the kernel may immediately call back into
+     * mtk_cfg80211_auth. The flag must stay TRUE until after this
+     * line so aisHandleState_IDLE cannot deactivate the network in
+     * any concurrent FSM entry between now and our unlock below.
+     */
+    kalIndicateStatusAndComplete(prGlueInfo, WLAN_STATUS_SCAN_COMPLETE,
+        &fgAborted, sizeof(fgAborted), ucBssIndex);
 
-	/* 3. UNLOCK: Release the reporting lock. */
-	if (prAisFsmInfo) {
-		prAisFsmInfo->fgIsScanReporting = FALSE;
+    /* UNLOCK: OS handoff is complete. Release the guard now.
+     * Do this before re-running the FSM so that aisHandleState_IDLE
+     * sees the flag cleared and can make the correct power state
+     * decision (IDLE vs SEARCH) without hitting the timeout path.
+     */
+    if (prAisFsmInfo)
+        prAisFsmInfo->fgIsScanReporting = FALSE;
 
-		/* 4. SYNC: Now that the OS is happy, we re-run the FSM steps.
-		 * If the FSM wanted to go to IDLE and deactivate the radio,
-		 * it will successfully do so NOW, safely after the hand-off.
-		 */
-		aisFsmSteps(prAdapter, prAisFsmInfo->eCurrentState, ucBssIndex);
-	}
+    /* Re-run the FSM now that the guard is released. If a connection
+     * request landed during the reporting window, fgIsConnReqIssued
+     * will be TRUE and this drives the IDLE->SEARCH transition.
+     * If nothing is pending, this drives the clean IDLE power-down.
+     */
+    if (prAisFsmInfo)
+        aisFsmSteps(prAdapter, prAisFsmInfo->eCurrentState, ucBssIndex);
 }
 
 

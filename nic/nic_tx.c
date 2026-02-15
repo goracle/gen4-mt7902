@@ -1282,11 +1282,21 @@ uint32_t nicTxMsduInfoList(IN struct ADAPTER *prAdapter,
 
 			break;
 
-		case TC4_INDEX:	/* Management packets */
+		case TC4_INDEX:	/* Management packets - Union City "Loud Mode" */
 			QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *) prMsduInfo) =
 				NULL;
 			QUEUE_INSERT_TAIL(prDataPort1,
 					  (struct QUE_ENTRY *) prMsduInfo);
+
+			/* 🚀 Persistence Overrides for Arch/Union City environment */
+			prMsduInfo->ucRetryLimit = 64;
+			prMsduInfo->ucUserPriority = 7; 
+
+			/* Fixed the member name from u4ControlFlag to ucControlFlag */
+			/* Also, ensuring we only OR it if the flag is defined for 8-bit */
+#ifdef MSDU_CONTROL_FLAG_FORCE_TX
+			prMsduInfo->ucControlFlag |= (uint8_t)MSDU_CONTROL_FLAG_FORCE_TX;
+#endif
 
 			status = nicTxAcquireResource(
 				prAdapter, prMsduInfo->ucTC,
@@ -1313,6 +1323,9 @@ uint32_t nicTxMsduInfoList(IN struct ADAPTER *prAdapter,
 
 	return WLAN_STATUS_SUCCESS;
 }
+
+
+
 
 #if CFG_SUPPORT_MULTITHREAD
 /*----------------------------------------------------------------------------*/

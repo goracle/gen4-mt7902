@@ -928,6 +928,11 @@ wlanoidSetBssid(IN struct ADAPTER *prAdapter,
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
 
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
+
 	prCurrBssid = aisGetCurrBssId(prAdapter,
 		ucBssIndex);
 
@@ -1087,6 +1092,11 @@ wlanoidSetSsid(IN struct ADAPTER *prAdapter,
 
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
+
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
 	prCurrBssid = aisGetCurrBssId(prAdapter,
 		ucBssIndex);
 
@@ -1270,6 +1280,17 @@ wlanoidSetConnect(IN struct ADAPTER *prAdapter,
 	ucBssIndex = pParamConn->ucBssIdx;
 
 	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
+
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
+
+	/* 🛡️ Guard against mailbox hang during disconnect sequence */ 
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		DBGLOG(REQ, WARN, "MT7902: Chip No-Ack or Removing. Bypassing Disassociate Mailbox. 🛡️\n");
+		return WLAN_STATUS_SUCCESS;
+	}
 	prCurrBssid = aisGetCurrBssId(prAdapter,
 		ucBssIndex);
 
@@ -1607,6 +1628,11 @@ wlanoidQueryInfrastructureMode(IN struct ADAPTER *prAdapter,
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
 
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
+
 	*pu4QueryInfoLen = sizeof(enum ENUM_PARAM_OP_MODE);
 
 	if (u4QueryBufferLen < sizeof(enum ENUM_PARAM_OP_MODE))
@@ -1699,6 +1725,11 @@ wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
 		aisGetAisSpecBssInfo(prAdapter, ucBssIndex);
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
+
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
 	prAisBssInfo =
 		aisGetAisBssInfo(prAdapter, ucBssIndex);
 
@@ -1903,6 +1934,11 @@ wlanoidSetAuthMode(IN struct ADAPTER *prAdapter,
 
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
+
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
 
 	*pu4SetInfoLen = sizeof(enum ENUM_PARAM_AUTH_MODE);
 
@@ -2244,6 +2280,11 @@ wlanoidSetReloadDefaults(IN struct ADAPTER *prAdapter,
 
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
+
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
 
 	*pu4SetInfoLen = sizeof(enum ENUM_RELOAD_DEFAULTS);
 
@@ -3203,6 +3244,28 @@ wlanoidSetRemoveKey(IN struct ADAPTER *prAdapter,
 
 	prRemovedKey = (struct PARAM_REMOVE_KEY *) pvSetBuffer;
 
+	/* 🛡️ Guard against the Zero-BSSID Wedge 🛡️ */
+	if (is_zero_ether_addr(prRemovedKey->arBSSID)) {
+		DBGLOG(RSN, WARN, "MT7902: Zero BSSID in RemoveKey. Skipping.\n");
+		return WLAN_STATUS_SUCCESS;
+	}
+
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		DBGLOG(RSN, INFO, "MT7902: Chip No-Ack or Removing. Skipping.\n");
+		return WLAN_STATUS_SUCCESS;
+	}
+
+	/* 🛡️ Guard against the Zero-BSSID Wedge to prevent firmware stall */
+	if (is_zero_ether_addr(prRemovedKey->arBSSID)) {
+		DBGLOG(RSN, WARN, "MT7902: Zero BSSID in RemoveKey. Skipping. 🛡️\n");
+		return WLAN_STATUS_SUCCESS;
+	}
+
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		DBGLOG(RSN, INFO, "MT7902: Chip No-Ack or Removing. Skipping.\n");
+		return WLAN_STATUS_SUCCESS;
+	}
+
 	/* Dump PARAM_REMOVE_KEY content. */
 	DBGLOG(RSN, INFO, "Set: Dump PARAM_REMOVE_KEY content (%p)\n",
 		prRemovedKey);
@@ -3588,6 +3651,11 @@ wlanoidQueryEncryptionStatus(IN struct ADAPTER *prAdapter,
 
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
+
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
 	prAisBssInfo =
 		aisGetAisBssInfo(prAdapter, ucBssIndex);
 
@@ -3686,6 +3754,11 @@ wlanoidSetEncryptionStatus(IN struct ADAPTER *prAdapter,
 
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
+
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
 
 	*pu4SetInfoLen = sizeof(enum ENUM_WEP_STATUS);
 
@@ -9042,6 +9115,11 @@ wlanoidSetDisassociate(IN struct ADAPTER *prAdapter,
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
 
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
+
 	/* prepare message to AIS */
 	prConnSettings->fgIsConnReqIssued = FALSE;
 	prConnSettings->eReConnectLevel =
@@ -9355,6 +9433,11 @@ wlanoidQueryFrequency(IN struct ADAPTER *prAdapter,
 
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
+
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
 	prAisBssInfo =
 		aisGetAisBssInfo(prAdapter, ucBssIndex);
 
@@ -9413,6 +9496,11 @@ wlanoidSetFrequency(IN struct ADAPTER *prAdapter,
 
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
+
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
 
 	*pu4SetInfoLen = sizeof(uint32_t);
 
@@ -9492,6 +9580,11 @@ wlanoidQueryBeaconInterval(IN struct ADAPTER *prAdapter,
 
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
+
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
 
 	prCurrBssid = aisGetCurrBssId(prAdapter,
 		ucBssIndex);
@@ -9608,6 +9701,11 @@ wlanoidQueryAtimWindow(IN struct ADAPTER *prAdapter,
 
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
+
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
 
 	*pu4QueryInfoLen = sizeof(uint32_t);
 
@@ -11040,6 +11138,11 @@ wlanoidSetWapiAssocInfo(IN struct ADAPTER *prAdapter,
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
 
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
+
 	prConnSettings->fgWapiMode = FALSE;
 
 	if (u4SetBufferLen < 20 /* From EID to Group cipher */)
@@ -11432,6 +11535,11 @@ wlanoidSetWSCAssocInfo(IN struct ADAPTER *prAdapter,
 
 	prConnSettings =
 		aisGetConnSettings(prAdapter, ucBssIndex);
+
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
 
 	*pu4SetInfoLen = u4SetBufferLen;
 
@@ -16489,6 +16597,11 @@ wlanoidSetDrvRoamingPolicy(IN struct ADAPTER *prAdapter,
 
 	prConnSettings = (struct CONNECTION_SETTINGS *)
 		aisGetConnSettings(prAdapter, ucBssIndex);
+
+	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
+	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+		return WLAN_STATUS_SUCCESS;
+	}
 	u4CurConPolicy = prConnSettings->eConnectionPolicy;
 
 	if (u4RoamingPoily == 1) {

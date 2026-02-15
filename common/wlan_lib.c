@@ -1394,6 +1394,8 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 			break;
 		}
 #endif
+
+
 		if (!bAtResetFlow) {
 			u4Status = nicInitializeAdapter(prAdapter);
 			if (u4Status != WLAN_STATUS_SUCCESS) {
@@ -1459,6 +1461,12 @@ if (prAdapter->rWifiVar.fgDeferredUsOverride) {
     rlmDomainCountryCodeUpdate(prAdapter, wlanGetWiphy(), u4CachedCC);
     prAdapter->rWifiVar.fgDeferredUsOverride = FALSE;
 }
+
+			// 🔧 ADD THESE 3 LINES HERE:
+			DBGLOG(INIT, INFO, "Setting adapter to ACPI D0 state\n");
+			prAdapter->rAcpiState = ACPI_STATE_D0;
+			prAdapter->fgIsRadioOff = FALSE;
+
 
 #if defined(_HIF_SDIO)
 			uint32_t *pu4WHISR = NULL;
@@ -8591,65 +8599,77 @@ void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 {
 	int8_t aucValue[WLAN_CFG_VALUE_LEN_MAX];
 	uint16_t u2NewCode = 0;
+	static uint16_t u2LastPushedCode = 0;
 
 	if (!prAdapter)
 		return;
 
-	/* 1. Resolve the Country Code */
+	/* 1. Resolve the Country Code (The "No NVRAM" Fallback) */
 	if (prAdapter->rWifiVar.u2CountryCode != 0x0000) {
 		u2NewCode = prAdapter->rWifiVar.u2CountryCode;
-		DBGLOG(INIT, WARN, "BOLD: Using existing CC cache: 0x%04x\n", u2NewCode);
 	} 
 	else {
-		/* Try config, but fallback to US (0x5553) */
+		/* Attempt config lookup; default to 'US' (0x5553) if config is empty/broken */
 		if (wlanCfgGet(prAdapter, "CountryCode", aucValue, "", 0) != WLAN_STATUS_SUCCESS &&
 		    wlanCfgGet(prAdapter, "Country", aucValue, "", 0) != WLAN_STATUS_SUCCESS) {
 			
 			u2NewCode = 0x5553; /* 'US' */
 			prAdapter->rWifiVar.u2CountryCode = u2NewCode;
-			DBGLOG(INIT, WARN, "BOLD: No source found. FORCING CC to 0x5553 [US]\n");
+			DBGLOG(INIT, WARN, "BOLD: NVRAM/Config missing. Defaulting CC to US (0x5553)\n");
 		} else {
 			u2NewCode = (((uint16_t)aucValue[0]) << 8) | ((uint16_t)aucValue[1]);
 			prAdapter->rWifiVar.u2CountryCode = u2NewCode;
-			DBGLOG(INIT, WARN, "BOLD: Loaded CC from Config: 0x%04x\n", u2NewCode);
+			DBGLOG(INIT, INFO, "BOLD: Loaded CC from Config: 0x%04x\n", u2NewCode);
 		}
 	}
 
-	/* Map the code back to bytes for the FW commands */
+	/* Prepare bytes for RLM/FW */
 	aucValue[0] = (int8_t)((u2NewCode >> 8) & 0xFF);
 	aucValue[1] = (int8_t)(u2NewCode & 0xFF);
 
-	/* 2. Critical Safety Check - Glue Layer must exist */
+	/* 2. Update Internal State (Always Safe) */
+	/* We update the RLM domain so internal logic knows the "intended" state */
+	rlmDomainSetCountryCode((int8_t *)aucValue, 2);
+
+	/* 3. The "Ghost" Check (Safety First) */
+	/* If Glue is NULL, we are likely in a deauth/crash or early init.
+	   We stop here to avoid the NULL pointer dereference in wlanUpdateChannelTable. */
 	if (!prAdapter->prGlueInfo) {
-		DBGLOG(INIT, ERROR, "BOLD: Exit - prGlueInfo is NULL. Deferring CC push.\n");
+		DBGLOG(INIT, WARN, "BOLD: Glue is NULL (No NVRAM path). Internal state updated, skipping HW push.\n");
 		return; 
 	}
 
-	/* 3. Innovative Force: Ignore fgIsFwDownloaded race condition */
-	if (!prAdapter->fgIsFwDownloaded) {
-		DBGLOG(INIT, WARN, "BOLD: FW not marked ready, but FORCING hardware push for iwd stability.\n");
+	/* 4. Filter Redundant Pushes */
+	if (u2NewCode == u2LastPushedCode) {
+		return; /* Prevent iwd from spamming the hardware with the same code */
 	}
 
-	/* 4. The Push to Hardware/RLM */
-	DBGLOG(INIT, WARN, "BOLD: Committing CC 0x%04x [%c%c] to hardware state.\n", 
-		u2NewCode, aucValue[0], aucValue[1]);
+	/* 5. Hardware/Firmware Commitment */
+	if (!prAdapter->fgIsFwDownloaded) {
+		DBGLOG(INIT, ERROR, "BOLD: HW Push requested but FW not ready. Deferring.\n");
+		return;
+	}
 
-	/* Update the internal RLM domain state first */
-	rlmDomainSetCountryCode((int8_t *)aucValue, 2);
+	DBGLOG(INIT, INFO, "BOLD: Committing CC 0x%04x [%c%c] to hardware.\n", 
+		u2NewCode, aucValue[0], aucValue[1]);
 
 	if (regd_is_single_sku_en()) {
 		rlmDomainOidSetCountry(prAdapter, (uint8_t *)aucValue, 2);
 	} else {
-		/* Clear domain info to force a re-evaluation of the channel list */
+		/* Force re-evaluation of channel list */
 		prAdapter->prDomainInfo = NULL;
 		rlmDomainSendCmd(prAdapter);
 		
-		/* 5. Update the Channel Table: This is what iwd needs to see carrier */
+		/* 6. OS Integration: Notify iwd/cfg80211 that channels changed */
+		/* This requires a valid Glue pointer. */
 		wlanUpdateChannelTable(prAdapter->prGlueInfo);
 	}
 
-	DBGLOG(INIT, WARN, "BOLD: CC push complete. Channel table refreshed.\n");
+	u2LastPushedCode = u2NewCode;
+	DBGLOG(INIT, INFO, "BOLD: CC push complete. Channel table refreshed.\n");
 }
+
+
 
 struct WLAN_CFG_ENTRY *wlanCfgGetEntry(IN struct ADAPTER *prAdapter,
 				       const int8_t *pucKey,

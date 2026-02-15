@@ -607,94 +607,73 @@ void cnmStaRecInit(struct ADAPTER *prAdapter)
 struct STA_RECORD *cnmStaRecAlloc(struct ADAPTER *prAdapter,
 	enum ENUM_STA_TYPE eStaType, uint8_t ucBssIndex, uint8_t *pucMacAddr)
 {
-	struct STA_RECORD *prStaRec;
+	struct STA_RECORD *prStaRec = NULL;
 	uint16_t i, k;
 
 	ASSERT(prAdapter);
+	if (!pucMacAddr)
+		return NULL;
 
+	/* 1. Find an available slot */
 	for (i = 0; i < CFG_STA_REC_NUM; i++) {
-		prStaRec = &prAdapter->arStaRec[i];
-
-		if (!prStaRec->fgIsInUse) {
-			kalMemZero(prStaRec, sizeof(struct STA_RECORD));
-			prStaRec->ucIndex = (uint8_t) i;
-			prStaRec->ucBssIndex = ucBssIndex;
-			prStaRec->fgIsInUse = TRUE;
-
-			prStaRec->eStaType = eStaType;
-			prStaRec->ucBssIndex = ucBssIndex;
-
-			/* Initialize the SN caches for duplicate detection */
-			for (k = 0; k < TID_NUM + 1; k++) {
-				prStaRec->au2CachedSeqCtrl[k] = 0xFFFF;
-				prStaRec->afgIsIgnoreAmsduDuplicate[k] = FALSE;
-			}
-
-#if CFG_SUPPORT_AMSDU_ATTACK_DETECTION
-			for (k = 0; k < TID_NUM + 1; k++) {
-				prStaRec->au2AmsduInvalidSN[k] = 0xFFFF;
-				prStaRec->afgIsAmsduInvalid[k] = FALSE;
-			}
-#endif
-
-			/* Initialize SW TX queues in STA_REC */
-			for (k = 0; k < STA_WAIT_QUEUE_NUM; k++)
-				LINK_INITIALIZE(&prStaRec->arStaWaitQueue[k]);
-
-#if CFG_ENABLE_PER_STA_STATISTICS && CFG_ENABLE_PKT_LIFETIME_PROFILE
-			prStaRec->u4TotalTxPktsNumber = 0;
-			prStaRec->u4TotalTxPktsTime = 0;
-			prStaRec->u4TotalRxPktsNumber = 0;
-			prStaRec->u4MaxTxPktsTime = 0;
-#endif
-#if CFG_AP_80211KVR_INTERFACE
-			prStaRec->u8TotalTxBytes = 0;
-			prStaRec->u8TotalRxBytes = 0;
-			prStaRec->u8TotalRxPkts = 0;
-			prStaRec->u8GetDataRateTime = 0;
-#endif
-
-			for (k = 0; k < NUM_OF_PER_STA_TX_QUEUES; k++) {
-				QUEUE_INITIALIZE(
-					&prStaRec->arTxQueue[k]);
-				QUEUE_INITIALIZE(
-					&prStaRec->arPendingTxQueue[k]);
-				/* Default should be no-TX.
-				 * Switch when allow to TX.
-				 */
-				prStaRec->aprTargetQueue[k]
-					= &prStaRec->arPendingTxQueue[k];
-			}
-
-			prStaRec->ucAmsduEnBitmap = 0;
-			prStaRec->ucMaxMpduCount = 0;
-			prStaRec->u4MaxMpduLen = 0;
-			prStaRec->u4MinMpduLen = 0;
-
+		if (!prAdapter->arStaRec[i].fgIsInUse) {
+			prStaRec = &prAdapter->arStaRec[i];
 			break;
 		}
 	}
 
-	/* Sync to chip to allocate WTBL resource */
-	if (i < CFG_STA_REC_NUM) {
-		COPY_MAC_ADDR(prStaRec->aucMacAddr, pucMacAddr);
-		if (secPrivacySeekForEntry(prAdapter, prStaRec))
-			cnmStaSendUpdateCmd(prAdapter, prStaRec, FALSE);
-#if DBG
-		else {
-			prStaRec->fgIsInUse = FALSE;
-			prStaRec = NULL;
-			ASSERT(FALSE);
-		}
-#endif
-	} else {
-		prStaRec = NULL;
+	if (!prStaRec) {
+		DBGLOG(CNM, ERROR, "SAA: No free STA_RECORD slots available!\n");
+		return NULL;
 	}
 
-	/* remove pending msdu when sta_rec alloc */
-	if (prStaRec)
-		nicFreePendingTxMsduInfo(prAdapter,
-			prStaRec->ucWlanIndex, MSDU_REMOVE_BY_WLAN_INDEX);
+	/* 2. Immediate Data Hydration (Fix for the Zero-MAC bug) */
+	kalMemZero(prStaRec, sizeof(struct STA_RECORD));
+	COPY_MAC_ADDR(prStaRec->aucMacAddr, pucMacAddr); // Move this UP
+	
+	prStaRec->ucIndex = (uint8_t) i;
+	prStaRec->ucBssIndex = ucBssIndex;
+	prStaRec->eStaType = eStaType;
+	prStaRec->fgIsInUse = TRUE;
+
+	DBGLOG(CNM, INFO, "SAA: Allocating StaRec[%u] for " MACSTR "\n", 
+		i, MAC2STR(prStaRec->aucMacAddr));
+
+	/* 3. Initialize SN caches and TID structures */
+	for (k = 0; k < TID_NUM + 1; k++) {
+		prStaRec->au2CachedSeqCtrl[k] = 0xFFFF;
+		prStaRec->afgIsIgnoreAmsduDuplicate[k] = FALSE;
+#if CFG_SUPPORT_AMSDU_ATTACK_DETECTION
+		prStaRec->au2AmsduInvalidSN[k] = 0xFFFF;
+		prStaRec->afgIsAmsduInvalid[k] = FALSE;
+#endif
+	}
+
+	/* 4. Initialize Queues */
+	for (k = 0; k < STA_WAIT_QUEUE_NUM; k++)
+		LINK_INITIALIZE(&prStaRec->arStaWaitQueue[k]);
+
+	for (k = 0; k < NUM_OF_PER_STA_TX_QUEUES; k++) {
+		QUEUE_INITIALIZE(&prStaRec->arTxQueue[k]);
+		QUEUE_INITIALIZE(&prStaRec->arPendingTxQueue[k]);
+		/* Default to pending queue until TX is allowed */
+		prStaRec->aprTargetQueue[k] = &prStaRec->arPendingTxQueue[k];
+	}
+
+	/* 5. Sync to Hardware / WTBL Resource Allocation */
+	if (secPrivacySeekForEntry(prAdapter, prStaRec)) {
+		/* This sends the CMD_ID_ADD_STA_REC to firmware */
+		cnmStaSendUpdateCmd(prAdapter, prStaRec, FALSE);
+	} else {
+		DBGLOG(CNM, ERROR, "SAA: Failed to seek privacy entry for " MACSTR "\n", 
+			MAC2STR(prStaRec->aucMacAddr));
+		prStaRec->fgIsInUse = FALSE;
+		return NULL;
+	}
+
+	/* 6. Cleanup stale packets from this slot's previous life */
+	nicFreePendingTxMsduInfo(prAdapter, 
+		prStaRec->ucWlanIndex, MSDU_REMOVE_BY_WLAN_INDEX);
 
 	return prStaRec;
 }

@@ -248,63 +248,67 @@ void scnSendScanReq(IN struct ADAPTER *prAdapter)
  */
 /*----------------------------------------------------------------------------*/
 
-#define SCAN_COOLDOWN_MS 5000
-#define SCAN_COOLDOWN_MS 5000
+#define SCAN_COOLDOWN_MS 0
 void scnSendScanReqV2(IN struct ADAPTER *prAdapter)
 {
 	struct SCAN_INFO *prScanInfo;
 	struct SCAN_PARAM *prScanParam;
 	struct CMD_SCAN_REQ_V2 *prCmdScanReq;
 	uint32_t i;
+	OS_SYSTIME now;
+	u_int8_t fgBypassCooldown = FALSE;
 
 	ASSERT(prAdapter);
 
 	prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
 	prScanParam = &(prScanInfo->rScanParam);
+	now = kalGetTimeTick();
 
-	OS_SYSTIME now = kalGetTimeTick();
-
-	// Check if any AIS interface is in a connection state
-	u_int8_t fgBypassCooldown = FALSE;
-	for (i = 0; i < KAL_AIS_NUM; i++) {
-		struct AIS_FSM_INFO *prAisFsmInfo = aisGetAisFsmInfo(prAdapter, i);
-		enum ENUM_AIS_STATE eState = prAisFsmInfo->eCurrentState;
-		
-		if (eState == AIS_STATE_SEARCH ||
-		    eState == AIS_STATE_LOOKING_FOR ||
-		    eState == AIS_STATE_REQ_CHANNEL_JOIN ||
-		    eState == AIS_STATE_JOIN) {
-			fgBypassCooldown = TRUE;
-			break;
+	/* 1. Determine if we should ignore the cooldown entirely */
+	/* If cooldown is 0, or we are explicitly forcing a channel list (H-FIX), bypass. */
+	if (SCAN_COOLDOWN_MS == 0 || prScanParam->eScanChannel == SCAN_CHANNEL_SPECIFIED) {
+		fgBypassCooldown = TRUE;
+	} else {
+		/* Check AIS states for active connection/search attempts */
+		for (i = 0; i < KAL_AIS_NUM; i++) {
+			struct AIS_FSM_INFO *prAisFsmInfo = aisGetAisFsmInfo(prAdapter, i);
+			enum ENUM_AIS_STATE eState = prAisFsmInfo->eCurrentState;
+			
+			if (eState == AIS_STATE_SEARCH ||
+			    eState == AIS_STATE_LOOKING_FOR ||
+			    eState == AIS_STATE_REQ_CHANNEL_JOIN ||
+			    eState == AIS_STATE_JOIN) {
+				fgBypassCooldown = TRUE;
+				break;
+			}
 		}
 	}
 	
-	log_dbg(SCN, INFO, "Scan check: now=%u last=%u timeout=%u bypass=%d\n", 
-		now, prScanInfo->rLastScanCompletedTime, SCAN_COOLDOWN_MS, fgBypassCooldown);
+	log_dbg(SCN, INFO, "Scan check: now=%u last=%u bypass=%d\n", 
+		now, prScanInfo->rLastScanCompletedTime, fgBypassCooldown);
 	
-	if (!fgBypassCooldown &&
-	    prScanInfo->rLastScanCompletedTime != 0 &&
-	    !CHECK_FOR_TIMEOUT(now, prScanInfo->rLastScanCompletedTime,
-			       MSEC_TO_SYSTIME(SCAN_COOLDOWN_MS))) {
-		log_dbg(SCN, INFO, "Scan suppressed (cooldown active)\n");
-		return;
+	/* 2. Enforce suppression only if not bypassing and interval hasn't elapsed */
+	if (!fgBypassCooldown && prScanInfo->rLastScanCompletedTime != 0) {
+		if (!CHECK_FOR_TIMEOUT(now, prScanInfo->rLastScanCompletedTime,
+				       MSEC_TO_SYSTIME(SCAN_COOLDOWN_MS))) {
+			log_dbg(SCN, INFO, "Scan suppressed (cooldown active)\n");
+			return;
+		}
 	}
 
+	/* 3. Prepare Command Buffer */
 	prCmdScanReq = kalMemAlloc(sizeof(struct CMD_SCAN_REQ_V2), VIR_MEM_TYPE);
 	if (!prCmdScanReq) {
 		log_dbg(SCN, ERROR, "alloc CmdScanReq V2 fail\n");
 		return;
 	}
-	
 	kalMemZero(prCmdScanReq, sizeof(struct CMD_SCAN_REQ_V2));
 	
+	/* 4. Handle BSSID/MAC Logic */
 	if (prScanParam->ucScnFuncMask & ENUM_SCN_USE_PADDING_AS_BSSID) {
-		kalMemCopy(prCmdScanReq->aucExtBSSID,
-			   prScanParam->aucBSSID,
+		kalMemCopy(prCmdScanReq->aucExtBSSID, prScanParam->aucBSSID,
 			   CFG_SCAN_OOB_MAX_NUM * MAC_ADDR_LEN);
 		prCmdScanReq->ucScnFuncMask |= ENUM_SCN_USE_PADDING_AS_BSSID;
-		DBGLOG(SCN, INFO, "[56_2] Bssid! "MACSTR"\n",
-		       MAC2STR(prCmdScanReq->aucExtBSSID[0]));
 	} else {
 		COPY_MAC_ADDR(prCmdScanReq->aucBSSID, &prScanParam->aucBSSID[0][0]);
 	}
@@ -313,125 +317,78 @@ void scnSendScanReqV2(IN struct ADAPTER *prAdapter)
 		DBGLOG(SCN, INFO, "Include BSSID " MACSTR " in probe request\n",
 		       MAC2STR(prCmdScanReq->aucBSSID));
 
+	/* 5. Set Basic Scan Parameters */
 	prCmdScanReq->ucSeqNum = prScanParam->ucSeqNum;
 	prCmdScanReq->ucBssIndex = prScanParam->ucBssIndex;
 	prCmdScanReq->ucScanType = (uint8_t) prScanParam->eScanType;
 	prCmdScanReq->ucSSIDType = prScanParam->ucSSIDType;
 	prCmdScanReq->auVersion[0] = 1;
 	
-	kalMemCopy(prCmdScanReq->ucBssidMatchCh, prScanParam->ucBssidMatchCh,
-		   CFG_SCAN_OOB_MAX_NUM);
-	kalMemCopy(prCmdScanReq->ucBssidMatchSsidInd,
-		   prScanParam->ucBssidMatchSsidInd, CFG_SCAN_OOB_MAX_NUM);
+	kalMemCopy(prCmdScanReq->ucBssidMatchCh, prScanParam->ucBssidMatchCh, CFG_SCAN_OOB_MAX_NUM);
+	kalMemCopy(prCmdScanReq->ucBssidMatchSsidInd, prScanParam->ucBssidMatchSsidInd, CFG_SCAN_OOB_MAX_NUM);
 
+	/* 6. Random MAC/DBDC Support */
 	if (kalIsValidMacAddr(prScanParam->aucRandomMac)) {
-		prCmdScanReq->ucScnFuncMask |= (ENUM_SCN_RANDOM_MAC_EN |
-						ENUM_SCN_RANDOM_SN_EN);
-		kalMemCopy(prCmdScanReq->aucRandomMac,
-			   prScanParam->aucRandomMac, MAC_ADDR_LEN);
+		prCmdScanReq->ucScnFuncMask |= (ENUM_SCN_RANDOM_MAC_EN | ENUM_SCN_RANDOM_SN_EN);
+		kalMemCopy(prCmdScanReq->aucRandomMac, prScanParam->aucRandomMac, MAC_ADDR_LEN);
 	}
 	
 	if (prAdapter->rWifiVar.eDbdcMode == ENUM_DBDC_MODE_DISABLED)
 		prCmdScanReq->ucScnFuncMask |= ENUM_SCN_DBDC_SCAN_DIS;
 
-	if (prScanParam->ucSSIDNum <= SCAN_CMD_SSID_NUM) {
-		prCmdScanReq->ucSSIDNum = prScanParam->ucSSIDNum;
-		prCmdScanReq->ucSSIDExtNum = 0;
-	} else if (prScanParam->ucSSIDNum <= CFG_SCAN_SSID_MAX_NUM) {
-		prCmdScanReq->ucSSIDNum = SCAN_CMD_SSID_NUM;
-		prCmdScanReq->ucSSIDExtNum = prScanParam->ucSSIDNum - SCAN_CMD_SSID_NUM;
-	} else {
-		log_dbg(SCN, WARN, "Too many SSID %u\n", prScanParam->ucSSIDNum);
-		prCmdScanReq->ucSSIDNum = SCAN_CMD_SSID_NUM;
-		prCmdScanReq->ucSSIDExtNum = SCAN_CMD_EXT_SSID_NUM;
-	}
+	/* 7. SSID Handling (Truncation check) */
+	prCmdScanReq->ucSSIDNum = (prScanParam->ucSSIDNum <= SCAN_CMD_SSID_NUM) ? 
+				   prScanParam->ucSSIDNum : SCAN_CMD_SSID_NUM;
+	prCmdScanReq->ucSSIDExtNum = (prScanParam->ucSSIDNum > SCAN_CMD_SSID_NUM) ?
+				     (prScanParam->ucSSIDNum - SCAN_CMD_SSID_NUM) : 0;
 
 	for (i = 0; i < prCmdScanReq->ucSSIDNum; i++) {
-		COPY_SSID(prCmdScanReq->arSSID[i].aucSsid,
-			  prCmdScanReq->arSSID[i].u4SsidLen,
-			  prScanParam->aucSpecifiedSSID[i],
-			  prScanParam->ucSpecifiedSSIDLen[i]);
-		log_dbg(SCN, TRACE, "Ssid=%s, SsidLen=%d\n",
-			prCmdScanReq->arSSID[i].aucSsid,
-			prCmdScanReq->arSSID[i].u4SsidLen);
-	}
-	
-	for (i = 0; i < prCmdScanReq->ucSSIDExtNum; i++) {
-		COPY_SSID(prCmdScanReq->arSSIDExtend[i].aucSsid,
-			  prCmdScanReq->arSSIDExtend[i].u4SsidLen,
-			  prScanParam->aucSpecifiedSSID[prCmdScanReq->ucSSIDNum+i],
-			  prScanParam->ucSpecifiedSSIDLen[prCmdScanReq->ucSSIDNum+i]);
-		log_dbg(SCN, TRACE, "Ssid=%s, SsidLen=%d\n",
-			prCmdScanReq->arSSIDExtend[i].aucSsid,
-			prCmdScanReq->arSSIDExtend[i].u4SsidLen);
+		COPY_SSID(prCmdScanReq->arSSID[i].aucSsid, prCmdScanReq->arSSID[i].u4SsidLen,
+			  prScanParam->aucSpecifiedSSID[i], prScanParam->ucSpecifiedSSIDLen[i]);
 	}
 
-	prCmdScanReq->u2ProbeDelayTime = (uint8_t) prScanParam->u2ProbeDelayTime;
+	/* 8. The Channel List (The "H-FIX" Core) */
 	prCmdScanReq->ucChannelType = (uint8_t) prScanParam->eScanChannel;
 
 	if (prScanParam->eScanChannel == SCAN_CHANNEL_SPECIFIED) {
-		if (prScanParam->ucChannelListNum <= SCAN_CMD_CHNL_NUM) {
-			prCmdScanReq->ucChannelListNum = prScanParam->ucChannelListNum;
-			prCmdScanReq->ucChannelListExtNum = 0;
-		} else if (prScanParam->ucChannelListNum <= MAXIMUM_OPERATION_CHANNEL_LIST) {
-			prCmdScanReq->ucChannelListNum = SCAN_CMD_CHNL_NUM;
-			prCmdScanReq->ucChannelListExtNum = 
-				prScanParam->ucChannelListNum - SCAN_CMD_CHNL_NUM;
-		} else {
-			log_dbg(SCN, WARN, "Too many Channel %u\n",
-				prScanParam->ucChannelListNum);
-			prCmdScanReq->ucChannelListNum = 0;
-			prCmdScanReq->ucChannelListExtNum = 0;
-			prCmdScanReq->ucChannelType = SCAN_CHANNEL_FULL;
-		}
-
-		for (i = 0; i < prCmdScanReq->ucChannelListNum; i++) {
-			prCmdScanReq->arChannelList[i].ucBand =
-				(uint8_t) prScanParam->arChnlInfoList[i].eBand;
-			prCmdScanReq->arChannelList[i].ucChannelNum =
-				(uint8_t) prScanParam->arChnlInfoList[i].ucChannelNum;
-		}
+		uint32_t u4ChNum = (prScanParam->ucChannelListNum <= MAXIMUM_OPERATION_CHANNEL_LIST) ?
+				    prScanParam->ucChannelListNum : 0;
 		
-		for (i = 0; i < prCmdScanReq->ucChannelListExtNum; i++) {
-			prCmdScanReq->arChannelListExtend[i].ucBand =
-				(uint8_t) prScanParam->arChnlInfoList[prCmdScanReq->ucChannelListNum+i].eBand;
-			prCmdScanReq->arChannelListExtend[i].ucChannelNum =
-				(uint8_t) prScanParam->arChnlInfoList[prCmdScanReq->ucChannelListNum+i].ucChannelNum;
+		if (u4ChNum > 0) {
+			prCmdScanReq->ucChannelListNum = (u4ChNum <= SCAN_CMD_CHNL_NUM) ? u4ChNum : SCAN_CMD_CHNL_NUM;
+			prCmdScanReq->ucChannelListExtNum = (u4ChNum > SCAN_CMD_CHNL_NUM) ? (u4ChNum - SCAN_CMD_CHNL_NUM) : 0;
+
+			for (i = 0; i < prCmdScanReq->ucChannelListNum; i++) {
+				prCmdScanReq->arChannelList[i].ucBand = (uint8_t)prScanParam->arChnlInfoList[i].eBand;
+				prCmdScanReq->arChannelList[i].ucChannelNum = (uint8_t)prScanParam->arChnlInfoList[i].ucChannelNum;
+			}
+			for (i = 0; i < prCmdScanReq->ucChannelListExtNum; i++) {
+				prCmdScanReq->arChannelListExtend[i].ucBand = (uint8_t)prScanParam->arChnlInfoList[prCmdScanReq->ucChannelListNum+i].eBand;
+				prCmdScanReq->arChannelListExtend[i].ucChannelNum = (uint8_t)prScanParam->arChnlInfoList[prCmdScanReq->ucChannelListNum+i].ucChannelNum;
+			}
+		} else {
+			prCmdScanReq->ucChannelType = SCAN_CHANNEL_FULL;
 		}
 	}
 
+	/* 9. Timing & IE Finalization */
 	prCmdScanReq->u2ChannelDwellTime = prScanParam->u2ChannelDwellTime;
 	prCmdScanReq->u2ChannelMinDwellTime = prScanParam->u2ChannelMinDwellTime;
 	prCmdScanReq->u2TimeoutValue = prScanParam->u2TimeoutValue;
+	prCmdScanReq->u2IELen = (prScanParam->u2IELen <= MAX_IE_LENGTH) ? prScanParam->u2IELen : MAX_IE_LENGTH;
 
-	if (prScanParam->u2IELen <= MAX_IE_LENGTH)
-		prCmdScanReq->u2IELen = prScanParam->u2IELen;
-	else
-		prCmdScanReq->u2IELen = MAX_IE_LENGTH;
+	if (prCmdScanReq->u2IELen)
+		kalMemCopy(prCmdScanReq->aucIE, prScanParam->aucIE, prCmdScanReq->u2IELen);
 
-	if (prScanParam->u2IELen)
-		kalMemCopy(prCmdScanReq->aucIE, prScanParam->aucIE,
-			   sizeof(uint8_t) * prCmdScanReq->u2IELen);
-
-	scanLogCacheFlushAll(&(prScanInfo->rScanLogCache),
-			     LOG_SCAN_REQ_D2F, SCAN_LOG_MSG_MAX_LEN);
+	/* 10. Transmit to Firmware */
+	scanLogCacheFlushAll(&(prScanInfo->rScanLogCache), LOG_SCAN_REQ_D2F, SCAN_LOG_MSG_MAX_LEN);
 	scanReqLog(prCmdScanReq);
 
-	wlanSendSetQueryCmd(prAdapter,
-			    CMD_ID_SCAN_REQ_V2,
-			    TRUE,
-			    FALSE,
-			    FALSE,
-			    NULL,
-			    NULL,
-			    sizeof(struct CMD_SCAN_REQ_V2),
-			    (uint8_t *)prCmdScanReq, NULL, 0);
-	
-	log_dbg(SCN, TRACE, "Send %zu bytes\n", sizeof(struct CMD_SCAN_REQ_V2));
+	wlanSendSetQueryCmd(prAdapter, CMD_ID_SCAN_REQ_V2, TRUE, FALSE, FALSE, NULL, NULL,
+			    sizeof(struct CMD_SCAN_REQ_V2), (uint8_t *)prCmdScanReq, NULL, 0);
 
 	kalMemFree(prCmdScanReq, VIR_MEM_TYPE, sizeof(struct CMD_SCAN_REQ_V2));
 }
-
 
 
 
@@ -880,6 +837,8 @@ void scnEventScanDone(IN struct ADAPTER *prAdapter,
   DBGLOG(SCN, INFO, "[DEBUG] ScanDone Event Rcvd. TargetUpdateIdx=%u, CurrentListCount=%u\n", 
 	 prScanInfo->u4ScanUpdateIdx, prScanInfo->u4NumOfBssDesc);
 
+
+
   /* * PHASE 3: The Reporting Loop 
    * We iterate the driver's internal BSS database and report matches to the kernel.
    */
@@ -896,6 +855,8 @@ void scnEventScanDone(IN struct ADAPTER *prAdapter,
 	     prBssDesc->ucChannelNum, 
 	     prBssDesc->eBand,
 	     prBssDesc->aucSSID);
+
+
 
       if (prBssDesc->ucChannelNum == 0) {
 	DBGLOG(SCN, WARN, "  -> Skip: BSS has invalid Channel 0\n");
@@ -936,7 +897,10 @@ void scnEventScanDone(IN struct ADAPTER *prAdapter,
   /* * PHASE 7: Final Transition
    */
   scnFsmSteps(prAdapter, SCAN_STATE_IDLE);
-}/*----------------------------------------------------------------------------*/
+}
+
+
+/*----------------------------------------------------------------------------*/
 
 /*!
  * \brief

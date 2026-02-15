@@ -2,6 +2,7 @@
 
 # 🏎️ MT7902 WiFi Driver Loading Script - Stabilization Overdrive Edition 🏎️
 set -e
+sudo dmesg -C
 
 MODULE_NAME="mt7902"
 # Use absolute path to ensure sudo doesn't lose the location
@@ -43,6 +44,7 @@ MAX_RETRIES=15
 INTERFACE=""
 
 for i in $(seq 1 $MAX_RETRIES); do
+    break;
     # Find the interface name (usually wlan0 or similar)
     INTERFACE=$(ip -o link show | awk -F': ' '/mt7902/ || /wlan/ {print $2}' | head -n 1)
     
@@ -70,6 +72,8 @@ for i in $(seq 1 $MAX_RETRIES); do
     fi
     sleep 1
 done
+
+sudo dmesg > mt7902_dmesg.log
 
 # 6. Final Regdom check
 log "🇺🇲 Setting final regulatory domain..."

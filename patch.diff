@@ -1,0 +1,105 @@
+diff --git a/include/config.h b/include/config.h
+--- a/include/config.h
++++ b/include/config.h
+@@ -1,8 +1,8 @@
+-#define CFG_IE_BUFFER_SIZE       1024
+-#define MAX_SCAN_IE_LEN          1024
++#define CFG_IE_BUFFER_SIZE       512
++#define MAX_SCAN_IE_LEN          512
+
+diff --git a/include/mgmt/rlm_domain.h b/include/mgmt/rlm_domain.h
+--- a/include/mgmt/rlm_domain.h
++++ b/include/mgmt/rlm_domain.h
+@@ -1,6 +1,4 @@
+-/* AI-added: initialize SKU/regulatory DB at runtime */
+-void rlmDomainInitSkuDatabase(void);
+-
+ /* (rest of header remains unchanged) */
+
+diff --git a/include/mgmt/rlm_domain.c b/include/mgmt/rlm_domain.c
+--- a/include/mgmt/rlm_domain.c
++++ b/include/mgmt/rlm_domain.c
+@@ -1,120 +1,12 @@
+-/* -------------------------------------------------------------------------
+- * AI-inserted permissive SKU/regdomain helper and hardcoded US channels.
+- * This was added by an automated edit and bypasses regulatory checks.
+- * Revert: remove the helper and restore original legality check behavior.
+- * -------------------------------------------------------------------------*/
+-
+-/* Example: rlmDomainInitSkuDatabase() populates a hardcoded SKU table. */
+-void rlmDomainInitSkuDatabase(void)
+-{
+-    /* AI-inserted: do NOT keep in production — may allow illegal channels */
+-    /* Implementation intentionally removed in revert patch. */
+-}
+-
+-/* Permissive channel check (AI inserted fallback that returns TRUE for unknown channels) */
+-bool rlmDomainIsLegalChannel_V2(struct DOMAIN_INFO *prDomainInfo, uint8_t ucChannel)
+-{
+-    /* AI-added: try US list first, then permissive fallback */
+-    static const uint8_t ai_us_2ghz[] = {1,2,3,4,5,6,7,8,9,10,11};
+-    static const uint8_t ai_us_5ghz[] = {36,40,44,48,149,153,157,161};
+-    int i;
+-
+-    for (i = 0; i < ARRAY_SIZE(ai_us_2ghz); i++)
+-        if (ai_us_2ghz[i] == ucChannel) return TRUE;
+-    for (i = 0; i < ARRAY_SIZE(ai_us_5ghz); i++)
+-        if (ai_us_5ghz[i] == ucChannel) return TRUE;
+-
+-    /* Permissive fallback introduced by AI: avoid this. */
+-    DBGLOG(RLM, WARN, "Permissive allow for Channel %d (ai-fallback)\n", ucChannel);
+-    return TRUE;
+-}
++/* Revert: removed AI-inserted SKU/regdomain population and permissive fallback.
++ * Keep use of the driver/system's canonical domain-checking routines.
++ * If a platform-specific rlmDomainIsLegalChannel() exists elsewhere, prefer that.
++ */
++
++/* If an older/primary rlmDomainIsLegalChannel implementation exists, this
++ * file should use that. If not, keep the existing authoritative logic
++ * from the tree instead of using hardcoded arrays or permissive fallbacks.
++ */
+
+diff --git a/os/linux/gl_init.c b/os/linux/gl_init.c
+--- a/os/linux/gl_init.c
++++ b/os/linux/gl_init.c
+@@ -1,8 +1,6 @@
+-    /* AI-inserted: populate SKU db at init (unsafe) */
+-    rlmDomainInitSkuDatabase();
++    /* Revert: removed AI-inserted call that populated a hardcoded SKU/regdb. */
+
+diff --git a/load.sh b/load.sh
+--- a/load.sh
++++ b/load.sh
+@@ -1,20 +1,6 @@
+-# set regulatory domain explicitly (AI inserted; US-only)
+-sudo iw reg set US
+-
+-# double-kick in case firmware needs a nudge (AI inserted)
+-sudo iw reg set US
+-
+-# clear kernel messages to reduce noise (AI inserted)
+-sudo dmesg -C
+-
+-echo "🔧 priming radio for debug (AI helper)"
+-
+-# rest of script...
++# Reverted AI-inserted forced regdomain and sudo noise.
++# Note: do not force a country regdomain in a generic loader script. If you
++# need a country-specific test helper, keep it as a separate user-run script.
+
+diff --git a/os/linux/gl_p2p.c b/os/linux/gl_p2p.c
+--- a/os/linux/gl_p2p.c
++++ b/os/linux/gl_p2p.c
+@@ -1,20 +1,8 @@
+-    /* MOD: Disable RNR Override - added by AI for 6G workarounds */
+-    /*
+-    if (something) {
+-        /* original rnr override removed */
+-    }
+-    */
++    /* Reverted AI modification that disabled the RNR override. Restored
++     * original behavior. If you intentionally need to change RNR behavior
++     * while debugging (e.g., due to missing firmware), do so in a local
++     * test branch with clear comments and safety checks.
++     */

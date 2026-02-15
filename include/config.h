@@ -338,7 +338,7 @@
 #define CFG_ENABLE_WAKE_LOCK	1
 #endif
 #else
-#define CFG_ENABLE_WAKE_LOCK	0
+#define CFG_ENABLE_WAKE_LOCK    1
 #endif
 
 #define CFG_SUPPORT_OSHARE	1
@@ -714,7 +714,7 @@
 #define CFG_RAW_BUFFER_SIZE                      1024
 
 /*! Maximum size of IE buffer of each SCAN record */
-#define CFG_IE_BUFFER_SIZE                       1024
+#define CFG_IE_BUFFER_SIZE                       512
 
 /*------------------------------------------------------------------------------
  * Flags and Parameters for Power management
@@ -938,7 +938,7 @@
 #define CFG_HOTSPOT_OPTIMIZATION_DTIM           1
 #define CFG_AUTO_CHANNEL_SEL_SUPPORT            1
 
-#define CFG_SUPPORT_SOFTAP_WPA3	1
+#define CFG_SUPPORT_SOFTAP_WPA3	0
 
 #ifndef CFG_ENABLE_UNIFY_WIPHY
 #define CFG_ENABLE_UNIFY_WIPHY 1
@@ -1083,9 +1083,9 @@
 #define CFG_SHOW_FULL_IPADDR      1
 #define CFG_SHOW_SSID             1
 #else
-#define CFG_SHOW_FULL_MACADDR     0
-#define CFG_SHOW_FULL_IPADDR      0
-#define CFG_SHOW_SSID             0
+#define CFG_SHOW_FULL_MACADDR     1
+#define CFG_SHOW_FULL_IPADDR      1
+#define CFG_SHOW_SSID             1
 #endif
 
 #ifndef CFG_SUPPORT_VO_ENTERPRISE
@@ -1565,7 +1565,7 @@
 #define CFG_SUPPORT_OWE			0
 #endif
 
-#define CFG_SUPPORT_WPA3_H2E		1
+#define CFG_SUPPORT_WPA3_H2E		0
 
 /*------------------------------------------------------------------------------
  * Flags of Key Word Exception Mechanism

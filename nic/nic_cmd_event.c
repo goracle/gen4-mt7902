@@ -1381,15 +1381,40 @@ void nicCmdEventSetStopSchedScan(IN struct ADAPTER
  *         FALSE
  */
 /*----------------------------------------------------------------------------*/
+
 void nicOidCmdTimeoutCommon(IN struct ADAPTER *prAdapter,
 			    IN struct CMD_INFO *prCmdInfo)
 {
 	ASSERT(prAdapter);
 
-	if (prCmdInfo->fgIsOid)
-		kalOidComplete(prAdapter->prGlueInfo, prCmdInfo->fgSetQuery,
-			       0, WLAN_STATUS_FAILURE);
+	DBGLOG(REQ, ERROR, "IOCTL TIMEOUT (30s). CID[0x%02x] Seq[%d] OID[%d]\n",
+		prCmdInfo->ucCID, prCmdInfo->ucCmdSeqNum, prCmdInfo->fgIsOid);
+
+	/* * If we timeout on a key removal or a link control command, 
+	 * the firmware is likely in a deadlocked state.
+	 */
+	if (prCmdInfo->ucCID == CMD_ID_ADD_REMOVE_KEY) {
+		DBGLOG(REQ, WARN, "Critical Timeout: Key Removal failed. Setting ChipNoAck.\n");
+		prAdapter->fgIsChipNoAck = TRUE;
+	}
+
+	if (prCmdInfo->fgIsOid) {
+		kalOidComplete(prAdapter->prGlueInfo, 
+			       prCmdInfo->fgSetQuery,
+			       0, 
+			       WLAN_STATUS_FAILURE);
+	}
+
+	/* * If the chip has stopped responding, we attempt to clear the 
+	 * pending command queue to prevent a permanent kernel stall.
+	 */
+	if (prAdapter->fgIsChipNoAck) {
+		kalEnqueueCommand(prAdapter->prGlueInfo, NULL); /* Trigger queue flush */
+		GLUE_SET_EVENT(prAdapter->prGlueInfo);
+	}
 }
+
+
 
 /*----------------------------------------------------------------------------*/
 /*!
