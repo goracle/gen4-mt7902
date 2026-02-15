@@ -15,6 +15,15 @@ log() {
 
 # 1. Clean up existing state
 log "🧹 Cleaning up old module instances..."
+
+# CRITICAL: Bring interface down FIRST to stop IRQ flood
+INTERFACE=$(ip -o link show | awk -F': ' '/wlan/ {print $2}' | head -n 1)
+if [ -n "$INTERFACE" ]; then
+    log "  🛑 Taking $INTERFACE down to flush pending IRQs..."
+    sudo ip link set "$INTERFACE" down 2>/dev/null || true
+    sleep 1  # Let IRQs drain
+fi
+
 sudo rmmod $MODULE_NAME 2>/dev/null || true
 
 # 2. Check dependencies

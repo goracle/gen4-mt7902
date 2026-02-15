@@ -813,90 +813,99 @@ void scnFsmRemovePendingMsg(IN struct ADAPTER *prAdapter, IN uint8_t ucSeqNum,
  */
 
 void scnEventScanDone(IN struct ADAPTER *prAdapter,
-		      IN struct EVENT_SCAN_DONE *prScanDone, u_int8_t fgIsNewVersion)
+                      IN struct EVENT_SCAN_DONE *prScanDone, 
+                      u_int8_t fgIsNewVersion)
 {
-  struct SCAN_INFO *prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
-  struct SCAN_PARAM *prScanParam = &prScanInfo->rScanParam;
-  struct BSS_DESC *prBssDesc, *prNextBssDesc;
-  uint32_t u4BssIndicateCnt = 0;
-  uint32_t u4TotalInList = 0;
-
-  if (fgIsNewVersion) {
-    scanlog_dbg(LOG_SCAN_DONE_F2D, INFO, "scnEventScanDone V%u! Seq[%u]\n",
-		prScanDone->ucScanDoneVersion, prScanDone->ucSeqNum);
-  }
-
-  /* * PHASE 1: The OS Settle Delay 
-   * Applied to prevent race conditions with cfg80211 scan buffers.
-   */
-  kalMsleep(10); 
-
-  /* * PHASE 2: List Integrity Diagnostic
-   * Log the state of the BSS list BEFORE we start iterating.
-   */
-  DBGLOG(SCN, INFO, "[DEBUG] ScanDone Event Rcvd. TargetUpdateIdx=%u, CurrentListCount=%u\n", 
-	 prScanInfo->u4ScanUpdateIdx, prScanInfo->u4NumOfBssDesc);
-
-
-
-  /* * PHASE 3: The Reporting Loop 
-   * We iterate the driver's internal BSS database and report matches to the kernel.
-   */
-  LINK_FOR_EACH_ENTRY_SAFE(prBssDesc, prNextBssDesc, &prScanInfo->rBSSDescList, rLinkEntry, struct BSS_DESC) {
-    u4TotalInList++;
-
-    /* Only report BSS descriptors that were updated during THIS specific scan session */
-    if (prBssDesc->u4UpdateIdx == prScanInfo->u4ScanUpdateIdx) {
-			
-      /* Diagnostic: Log every single BSSID found with raw hex to avoid obfuscation */
-      DBGLOG(SCN, INFO, "[SCN-REPORT] Reporting: BSSID[%02x:%02x:%02x:%02x:%02x:%02x] Ch:%u Band:%u SSID:%s\n",
-	     prBssDesc->aucBSSID[0], prBssDesc->aucBSSID[1], prBssDesc->aucBSSID[2],
-	     prBssDesc->aucBSSID[3], prBssDesc->aucBSSID[4], prBssDesc->aucBSSID[5],
-	     prBssDesc->ucChannelNum, 
-	     prBssDesc->eBand,
-	     prBssDesc->aucSSID);
-
-
-
-      if (prBssDesc->ucChannelNum == 0) {
-	DBGLOG(SCN, WARN, "  -> Skip: BSS has invalid Channel 0\n");
-	continue;
-      }
-
-      /* Send to cfg80211 layer */
-      scanReportBss2Cfg80211(prAdapter, prBssDesc->eBSSType, prBssDesc);
-      u4BssIndicateCnt++;
+    struct SCAN_INFO *prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
+    struct SCAN_PARAM *prScanParam = &prScanInfo->rScanParam;
+    struct BSS_DESC *prBssDesc, *prNextBssDesc;
+    uint32_t u4BssIndicateCnt = 0;
+    uint32_t u4TotalInList = 0;
+    uint32_t u4CurrentUpdateIdx;
+    unsigned long flags;
+    
+    if (fgIsNewVersion) {
+        scanlog_dbg(LOG_SCAN_DONE_F2D, INFO, "scnEventScanDone V%u! Seq[%u]\n",
+                    prScanDone->ucScanDoneVersion, prScanDone->ucSeqNum);
     }
-  }
-
-  /* * PHASE 4: Post-Reporting Validation
-   */
-  if (u4BssIndicateCnt == 0 && u4TotalInList > 0) {
-    DBGLOG(SCN, ERROR, "[CRITICAL] List has %u entries but none match UpdateIdx %u! Data is stale.\n", 
-	   u4TotalInList, prScanInfo->u4ScanUpdateIdx);
-  } else {
-    DBGLOG(SCN, INFO, "[SUCCESS] Indicated %u fresh BSS entries (Total evaluated: %u)\n", 
-	   u4BssIndicateCnt, u4TotalInList);
-  }
-
-  /* * PHASE 5: Internal Cleanup & State Reset
-   */
-  scanRemoveBssDescsByPolicy(prAdapter, SCN_RM_POLICY_TIMEOUT);
-	
-  /* Notify the Scan FSM that we are officially wrapping up this sequence */
-  scnFsmGenerateScanDoneMsg(prAdapter, prScanParam->ucSeqNum, prScanParam->ucBssIndex, SCAN_STATUS_DONE);
-
-  /* * PHASE 6: The Cooldown Implementation
-   * This is the magic line that makes scnSendScanReqV2's logic work.
-   * We capture the exact tick of completion.
-   */
-  prScanInfo->rLastScanCompletedTime = kalGetTimeTick();
-  DBGLOG(SCN, INFO, "[COOLDOWN] Timestamp set to %u. Cooldown is active for %u ms.\n", 
-	 prScanInfo->rLastScanCompletedTime, SCAN_COOLDOWN_MS);
-
-  /* * PHASE 7: Final Transition
-   */
-  scnFsmSteps(prAdapter, SCAN_STATE_IDLE);
+    
+    /* 🔒 CRITICAL SECTION 1: Read current UpdateIdx atomically */
+    spin_lock_irqsave(&prAdapter->rScanListLock, flags);
+    u4CurrentUpdateIdx = prScanInfo->u4ScanUpdateIdx;
+    spin_unlock_irqrestore(&prAdapter->rScanListLock, flags);
+    
+    DBGLOG(SCN, INFO, "[DEBUG] ScanDone Event Rcvd. TargetUpdateIdx=%u\n", 
+           u4CurrentUpdateIdx);
+    
+    /* 🔒 CRITICAL SECTION 2: Iterate BSS list with lock held */
+    spin_lock_irqsave(&prAdapter->rScanListLock, flags);
+    
+    LINK_FOR_EACH_ENTRY_SAFE(prBssDesc, prNextBssDesc, 
+                             &prScanInfo->rBSSDescList, rLinkEntry, 
+                             struct BSS_DESC) {
+        u4TotalInList++;
+        
+        /* Only report BSS descriptors from THIS scan */
+        if (prBssDesc->u4UpdateIdx == u4CurrentUpdateIdx) {
+            DBGLOG(SCN, INFO, 
+                   "[SCN-REPORT] Reporting: BSSID[%02x:%02x:%02x:%02x:%02x:%02x] "
+                   "Ch:%u Band:%u SSID:%s\n",
+                   prBssDesc->aucBSSID[0], prBssDesc->aucBSSID[1], 
+                   prBssDesc->aucBSSID[2], prBssDesc->aucBSSID[3], 
+                   prBssDesc->aucBSSID[4], prBssDesc->aucBSSID[5],
+                   prBssDesc->ucChannelNum, prBssDesc->eBand,
+                   prBssDesc->aucSSID);
+            
+            if (prBssDesc->ucChannelNum == 0) {
+                DBGLOG(SCN, WARN, "  -> Skip: BSS has invalid Channel 0\n");
+                continue;
+            }
+            
+            /* 🔓 Temporarily release lock before cfg80211 call (may sleep) */
+            spin_unlock_irqrestore(&prAdapter->rScanListLock, flags);
+            
+            scanReportBss2Cfg80211(prAdapter, prBssDesc->eBSSType, prBssDesc);
+            u4BssIndicateCnt++;
+            
+            /* 🔒 Re-acquire lock for next iteration */
+            spin_lock_irqsave(&prAdapter->rScanListLock, flags);
+        }
+    }
+    
+    /* Validation while we still hold the lock */
+    if (u4BssIndicateCnt == 0 && u4TotalInList > 0) {
+        DBGLOG(SCN, ERROR, 
+               "[CRITICAL] List has %u entries but none match UpdateIdx %u! "
+               "Data is stale.\n", 
+               u4TotalInList, u4CurrentUpdateIdx);
+    } else {
+        DBGLOG(SCN, INFO, 
+               "[SUCCESS] Indicated %u fresh BSS entries (Total evaluated: %u)\n", 
+               u4BssIndicateCnt, u4TotalInList);
+    }
+    
+    /* Cleanup old entries (requires lock) */
+    /* Note: scanRemoveBssDescsByPolicy must be able to handle being called 
+     * with lock held, or we need to restructure this */
+    scanRemoveBssDescsByPolicy(prAdapter, SCN_RM_POLICY_TIMEOUT);
+    
+    /* Update completion timestamp */
+    prScanInfo->rLastScanCompletedTime = kalGetTimeTick();
+    DBGLOG(SCN, INFO, "[COOLDOWN] Timestamp set to %u. Cooldown active.\n", 
+           prScanInfo->rLastScanCompletedTime);
+    
+    spin_unlock_irqrestore(&prAdapter->rScanListLock, flags);
+    /* 🔓 END CRITICAL SECTION 2 */
+    
+    /* Signal scan completion (outside any locks) */
+    complete(&prAdapter->rScanDoneCompletion);
+    
+    /* Notify Scan FSM (outside locks to prevent deadlock) */
+    scnFsmGenerateScanDoneMsg(prAdapter, prScanParam->ucSeqNum, 
+                             prScanParam->ucBssIndex, SCAN_STATUS_DONE);
+    
+    /* Final transition (outside locks) */
+    scnFsmSteps(prAdapter, SCAN_STATE_IDLE);
 }
 
 

@@ -1564,6 +1564,16 @@ struct ADAPTER {
 	uint8_t ucRevID;
 	u_int8_t fgIsReadRevID;
 
+    /* Protects AIS FSM state variables ONLY - not held during handlers */
+    struct mutex rAisFsmMutex;
+    
+    /* Protects scan BSS list - use spinlock because may be called from softirq */
+    spinlock_t rScanListLock;
+    
+    /* Completion for scan done synchronization (replaces the kalMsleep hack) */
+    struct completion rScanDoneCompletion;
+
+
 	uint16_t u2NicOpChnlNum;
 
 	u_int8_t fgIsEnableWMM;

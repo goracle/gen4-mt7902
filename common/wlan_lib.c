@@ -1067,6 +1067,11 @@ void wlanOnPostFirmwareReady(IN struct ADAPTER *prAdapter,
 	prAdapter->fgWiFiInSleepyState = FALSE;
 	prAdapter->rAcpiState = ACPI_STATE_D0;
 
+// ADD THESE:
+prAdapter->fgIsEfuseValid = TRUE;  // Fake it - we don't need NVRAM
+prAdapter->fgIsEmbbededMacAddrValid = TRUE;  // MAC from wifi.cfg is fine
+
+
 #if 0
 	/* Online scan option */
 	if (prRegInfo->fgDisOnlineScan == 0)
@@ -1354,6 +1359,22 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 
 	wlanOnPreAllocAdapterMem(prAdapter, bAtResetFlow);
 
+
+            // ⭐⭐⭐ MOVE THE MUTEX INIT HERE - RIGHT AFTER MEMORY ALLOCATION! ⭐⭐⭐
+            DBGLOG(INIT, ERROR, "========================================\n");
+            DBGLOG(INIT, ERROR, "LOCK INIT: Initializing synchronization primitives\n");
+            DBGLOG(INIT, ERROR, "========================================\n");
+            
+            mutex_init(&prAdapter->rAisFsmMutex);
+            spin_lock_init(&prAdapter->rScanListLock);
+            init_completion(&prAdapter->rScanDoneCompletion);
+            
+            DBGLOG(INIT, ERROR, "LOCK INIT: Locks initialized successfully\n");
+            // ⭐⭐⭐ END OF NEW CODE ⭐⭐⭐
+
+
+
+
 	do {
 		if (!bAtResetFlow) {
 			u4Status = nicAllocateAdapterMemory(prAdapter);
@@ -1368,6 +1389,11 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 #endif
 				break;
 			}
+
+
+
+
+
 
 			prAdapter->u4OsPacketFilter
 				= PARAM_PACKET_FILTER_SUPPORTED;

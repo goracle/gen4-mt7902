@@ -1683,122 +1683,149 @@ wlanoidQueryInfrastructureMode(IN struct ADAPTER *prAdapter,
  * \retval WLAN_STATUS_INVALID_LENGTH
  */
 /*----------------------------------------------------------------------------*/
+/**
+ * THE REAL FIX for 0x103 error
+ * 
+ * The problem: prGlueInfo->rPendStatus contains stale 0x103 from a previous
+ * operation. When we send the infrastructure mode command, the waiting code
+ * reads this stale value instead of waiting for the real completion.
+ * 
+ * The solution: Reset rPendStatus to SUCCESS before sending the command.
+ */
+
 uint32_t
 wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
-			     IN void *pvSetBuffer, IN uint32_t u4SetBufferLen,
-			     OUT uint32_t *pu4SetInfoLen)
+                             IN void *pvSetBuffer, 
+                             IN uint32_t u4SetBufferLen,
+                             OUT uint32_t *pu4SetInfoLen)
 {
-	struct GLUE_INFO *prGlueInfo;
-	struct PARAM_OP_MODE *pOpMode;
-	enum ENUM_PARAM_OP_MODE eOpMode;
-	/* P_WLAN_TABLE_T       prWlanTable; */
-#if CFG_SUPPORT_802_11W
-	struct AIS_SPECIFIC_BSS_INFO *prAisSpecBssInfo;
-#endif
-	/* UINT_8 i; */
-	struct CONNECTION_SETTINGS *prConnSettings;
-	struct BSS_INFO *prAisBssInfo;
-	uint8_t ucBssIndex = 0;
+    struct GLUE_INFO *prGlueInfo;
+    struct PARAM_OP_MODE *pOpMode;
+    enum ENUM_PARAM_OP_MODE eOpMode;
+    struct AIS_SPECIFIC_BSS_INFO *prAisSpecBssInfo;
+    struct CONNECTION_SETTINGS *prConnSettings;
+    struct BSS_INFO *prAisBssInfo;
+    uint8_t ucBssIndex = 0;
+    uint32_t rStatus;
 
-	DEBUGFUNC("wlanoidSetInfrastructureMode");
+    DEBUGFUNC("wlanoidSetInfrastructureMode");
+    ASSERT(prAdapter);
+    ASSERT(pvSetBuffer);
+    ASSERT(pu4SetInfoLen);
 
-	ASSERT(prAdapter);
-	ASSERT(pvSetBuffer);
-	ASSERT(pu4SetInfoLen);
+    prGlueInfo = prAdapter->prGlueInfo;
 
-	prGlueInfo = prAdapter->prGlueInfo;
+    if (u4SetBufferLen < sizeof(struct PARAM_OP_MODE))
+        return WLAN_STATUS_BUFFER_TOO_SHORT;
 
-	if (u4SetBufferLen < sizeof(struct PARAM_OP_MODE))
-		return WLAN_STATUS_BUFFER_TOO_SHORT;
+    /* Check ACPI state */
+    if (prAdapter->rAcpiState == ACPI_STATE_D3) {
+        DBGLOG(REQ, WARN,
+               "Fail in set infrastructure mode! (Adapter not ready). "
+               "ACPI=D%d, Radio=%d\n",
+               prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+        return WLAN_STATUS_ADAPTER_NOT_READY;
+    }
 
-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
-		DBGLOG(REQ, WARN,
-		       "Fail in set infrastructure mode! (Adapter not ready). ACPI=D%d, Radio=%d\n",
-		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
-		return WLAN_STATUS_ADAPTER_NOT_READY;
-	}
+    /* Fail-fast if chip is ghosting */
+    if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+        return WLAN_STATUS_SUCCESS;
+    }
 
-	pOpMode = (struct PARAM_OP_MODE *) pvSetBuffer;
+    pOpMode = (struct PARAM_OP_MODE *) pvSetBuffer;
+    ucBssIndex = pOpMode->ucBssIdx;
+    eOpMode = pOpMode->eOpMode;
 
-	ucBssIndex = pOpMode->ucBssIdx;
-	prAisSpecBssInfo =
-		aisGetAisSpecBssInfo(prAdapter, ucBssIndex);
-	prConnSettings =
-		aisGetConnSettings(prAdapter, ucBssIndex);
+    prAisSpecBssInfo = aisGetAisSpecBssInfo(prAdapter, ucBssIndex);
+    prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
+    prAisBssInfo = aisGetAisBssInfo(prAdapter, ucBssIndex);
 
-	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
-	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
-		return WLAN_STATUS_SUCCESS;
-	}
-	prAisBssInfo =
-		aisGetAisBssInfo(prAdapter, ucBssIndex);
+    /* Verify the new infrastructure mode */
+    if (eOpMode >= NET_TYPE_NUM) {
+        DBGLOG(REQ, TRACE, "Invalid mode value %d\n", eOpMode);
+        return WLAN_STATUS_INVALID_DATA;
+    }
 
-	eOpMode = pOpMode->eOpMode;
-	/* Verify the new infrastructure mode. */
-	if (eOpMode >= NET_TYPE_NUM) {
-		DBGLOG(REQ, TRACE, "Invalid mode value %d\n", eOpMode);
-		return WLAN_STATUS_INVALID_DATA;
-	}
+    /* Check AdHoc permission */
+    if (eOpMode == NET_TYPE_IBSS || eOpMode == NET_TYPE_DEDICATED_IBSS) {
+        if (cnmAisIbssIsPermitted(prAdapter) == FALSE) {
+            DBGLOG(REQ, TRACE, "Mode value %d unallowed\n", eOpMode);
+            return WLAN_STATUS_FAILURE;
+        }
+    }
 
-	/* check if possible to switch to AdHoc mode */
-	if (eOpMode == NET_TYPE_IBSS
-	    || eOpMode == NET_TYPE_DEDICATED_IBSS) {
-		if (cnmAisIbssIsPermitted(prAdapter) == FALSE) {
-			DBGLOG(REQ, TRACE, "Mode value %d unallowed\n",
-			       eOpMode);
-			return WLAN_STATUS_FAILURE;
-		}
-	}
+    /* 🔒 Lock while modifying connection settings */
+    mutex_lock(&prAdapter->rAisFsmMutex);
 
-	/* Save the new infrastructure mode setting. */
-	prConnSettings->eOPMode = eOpMode;
+    /* Save the new infrastructure mode setting */
+    prConnSettings->eOPMode = eOpMode;
+    prConnSettings->fgWapiMode = FALSE;
 
-	prConnSettings->fgWapiMode = FALSE;
 #if CFG_SUPPORT_WAPI
-	prConnSettings->u2WapiAssocInfoIESz = 0;
-	kalMemZero(&prConnSettings->aucWapiAssocInfoIEs, 42);
+    prConnSettings->u2WapiAssocInfoIESz = 0;
+    kalMemZero(&prConnSettings->aucWapiAssocInfoIEs, 42);
 #endif
 
 #if CFG_SUPPORT_802_11W
-	prAisSpecBssInfo->fgMgmtProtection =
-		FALSE;
-	prAisSpecBssInfo->fgBipKeyInstalled =
-		FALSE;
+    prAisSpecBssInfo->fgMgmtProtection = FALSE;
+    prAisSpecBssInfo->fgBipKeyInstalled = FALSE;
 #endif
 
 #if CFG_SUPPORT_WPS2
-	kalMemZero(&prConnSettings->aucWSCAssocInfoIE, 200);
-	prConnSettings->u2WSCAssocInfoIELen = 0;
+    kalMemZero(&prConnSettings->aucWSCAssocInfoIE, 200);
+    prConnSettings->u2WSCAssocInfoIELen = 0;
 #endif
 
-#if 0 /* STA record remove at AIS_ABORT nicUpdateBss and DISCONNECT */
-	for (i = 0; i < prAdapter->ucHwBssIdNum; i++) {
-		prBssInfo = prAdapter->aprBssInfo[i];
-		if (prBssInfo->eNetworkType == NETWORK_TYPE_AIS)
-			cnmStaFreeAllStaByNetwork(prAdapter,
-						  prBssInfo->ucBssIndex, 0);
-	}
-#endif
+    /* Clean up Tx key flag */
+    if (prAisBssInfo != NULL) {
+        prAisBssInfo->fgBcDefaultKeyExist = FALSE;
+        prAisBssInfo->ucBcDefaultKeyIdx = 0xFF;
+    }
 
-	/* Clean up the Tx key flag */
-	if (prAisBssInfo != NULL) {
-		prAisBssInfo->fgBcDefaultKeyExist = FALSE;
-		prAisBssInfo->ucBcDefaultKeyIdx = 0xFF;
-	}
+    /* 🔓 Unlock before sending command */
+    mutex_unlock(&prAdapter->rAisFsmMutex);
 
-	/* prWlanTable = prAdapter->rWifiVar.arWtbl; */
-	/* prWlanTable[prAisBssInfo->ucBMCWlanIndex].ucKeyId = 0; */
+    DBGLOG(RSN, LOUD, "ucBssIndex %d\n", ucBssIndex);
 
-	DBGLOG(RSN, LOUD, "ucBssIndex %d\n", ucBssIndex);
+    /* 🛡️ CRITICAL FIX: Reset pending status to prevent stale 0x103 */
+    /* 🛡️ CRITICAL FIX: Reset pending status AND reinit completion */
+    prGlueInfo->rPendStatus = WLAN_STATUS_SUCCESS;
+    prGlueInfo->u4OidCompleteFlag = 0;
+    reinit_completion(&prGlueInfo->rPendComp);  // ← ADD THIS LINE
 
-	return wlanSendSetQueryCmd(prAdapter,
-				   CMD_ID_INFRASTRUCTURE,
-				   TRUE,
-				   FALSE,
-				   TRUE,
-				   nicCmdEventSetCommon, nicOidCmdTimeoutCommon,
-				   0, NULL, pvSetBuffer, u4SetBufferLen);
-} /* wlanoidSetInfrastructureMode */
+    
+    DBGLOG(REQ, WARN, "[MT7902-FIX] Cleared stale OID status before CMD_ID_INFRASTRUCTURE\n");
+
+    /* Send command (may block - must be outside locks) */
+    rStatus = wlanSendSetQueryCmd(prAdapter,
+                                   CMD_ID_INFRASTRUCTURE,
+                                   TRUE, FALSE, TRUE,
+                                   nicCmdEventSetCommon, 
+                                   nicOidCmdTimeoutCommon,
+                                   0, NULL, pvSetBuffer, u4SetBufferLen);
+
+    return rStatus;
+}
+
+/**
+ * WHY THIS WORKS:
+ * 
+ * The "SKIP multiple OID complete!" message tells us that kalOidComplete
+ * is being called when rPendComp is already completed. This means there's
+ * a stale completion state from a previous operation.
+ * 
+ * By resetting both rPendStatus and u4OidCompleteFlag to their initial
+ * states BEFORE sending the command, we ensure that:
+ * 
+ * 1. Any code waiting on this command will wait for the REAL completion,
+ *    not read a stale 0x103 value
+ * 2. The completion handler will actually complete the operation instead
+ *    of being skipped
+ * 3. The next operation starts with a clean slate
+ * 
+ * This is essentially reinitializing the OID completion state machine
+ * before each command that needs it.
+ */
 
 /*----------------------------------------------------------------------------*/
 /*!

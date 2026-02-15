@@ -1,12 +1,33 @@
-# gen4-mt7902
+# gen4-mt7902 🔧
 
-> ⚠️ **Experimental Driver** — Custom fork optimized for the Mediatek **MT7902** PCIe card. Developed and tested on Asus Vivobook (2023) hardware.
+> ⚠️ **Experimental Driver** — Custom fork optimized for the Mediatek **MT7902** PCIe card. Based on hmtheboy154's port of Mediatek's gen4-mt79xx driver (originally from Xiaomi's rodin BSP). It's messy, it's ugly, but hey—it works! 🎉
 
-This repository provides an out-of-tree driver derived from Mediatek's `gen4-mt79xx` BSP. It includes a "Magic Delay" systemd service to bypass PCIe power management hangs and a reset service to prevent kernel panics during shutdown.
+This repository is a heavily modified fork focusing on stability improvements and connection reliability. Includes hacky systemd services to work around PCIe power management hangs and prevent kernel panics during shutdown.
 
 ---
 
-## Quick Start
+## 📊 Current Status
+
+### ✅ What Works
+- **Ubuntu (6.8.0 kernel)**: Fully functional with wpa_supplicant
+  - Frozen at commit `2d980de7082e65ad7b4d68f85a4895d56b55f7d4` on `main` branch
+  - 2.4 GHz and 5 GHz working perfectly
+  - Use this if you want something stable!
+
+### 🚧 What's Being Worked On
+- **Arch Linux (6.18+ kernel)**: Experimental iwd branch
+  - Connection works but still ironing out bugs
+  - Massive rewrites to AIS FSM and connection logic
+  - **This is where active development happens** 🔨
+
+### ❌ What Doesn't Work (Yet)
+- 6 GHz band (missing firmware blobs)
+- S3 Sleep/Resume
+- Auto-loading at boot (timing issues—see below)
+
+---
+
+## 🚀 Quick Start
 
 ### 1) Build the Module
 ```bash
@@ -14,14 +35,14 @@ make -j$(nproc)
 ```
 
 ### 2) Install Firmware (Required)
-The driver will fail to initialize without the binary blobs in the system path.
+The driver will crash without these binary blobs:
 ```bash
 sudo make install_fw
 ```
-*Note: This usually installs to `/usr/lib/firmware/mediatek/mt7902/`.*
+*Note: Installs to `/usr/lib/firmware/mediatek/mt7902/`*
 
 ### 3) Blacklist Stock Drivers
-The kernel's built-in MT792x drivers will conflict with this custom module. Create a blacklist file:
+The kernel's built-in MT792x drivers will conflict. Create a blacklist file:
 
 ```bash
 sudo tee /etc/modprobe.d/blacklist-mt7921.conf > /dev/null << 'EOF'
@@ -43,18 +64,21 @@ sudo update-initramfs -u
 
 # Arch/Manjaro
 sudo mkinitcpio -P
+
+# Alma Linux / RHEL / Fedora
+sudo dracut --force
 ```
 
 ### 4) Configure Systemd Services
-To handle the sensitive timing of the MT7902, use the provided "Late Load" service.
+The MT7902 is *extremely* sensitive to timing. Manual loading after boot is required.
 
-1. **Update Username:**
+1. **Update Username in Service File:**
    ```bash
-   # Sets the working directory to your home folder
-   sed -i 's/<YOUR_USERNAME>/dan/' mt7902-late.service
+   # Replace <YOUR_USERNAME> with your actual username
+   sed -i 's/<YOUR_USERNAME>/yourname/' mt7902-late.service
    ```
 
-2. **Enable Services:**
+2. **Install and Enable Services:**
    ```bash
    sudo cp mt7902-late.service mt7902-reset.service /etc/systemd/system/
    sudo systemctl daemon-reload
@@ -62,8 +86,10 @@ To handle the sensitive timing of the MT7902, use the provided "Late Load" servi
    sudo systemctl enable mt7902-reset.service
    ```
 
-### 5) DKMS Installation (Auto-rebuild on Update)
-Since Arch updates the kernel frequently, DKMS is recommended. The directory name must match the version in `dkms.conf`.
+   > ⚠️ **Arch Users**: The late-load service is unreliable. You'll probably need to run `sudo ./load.sh` manually after boot. This is a known issue with no current fix.
+
+### 5) DKMS Installation (Auto-rebuild on Kernel Updates)
+Recommended for rolling-release distros:
 
 ```bash
 # 1. Create the versioned symlink in /usr/src
@@ -74,39 +100,43 @@ sudo dkms add -m gen4-mt7902 -v 0.1
 sudo dkms install -m gen4-mt7902 -v 0.1
 ```
 
-### 6) Manual Load
-To start the interface immediately without rebooting:
+> ⚠️ **Don't run `depmod -a` yet!** Boot issues are still being debugged.
+
+### 6) Manual Load (Recommended)
+To start the interface without rebooting:
 ```bash
+sudo ./load.sh
+```
+
+To reset the driver after making changes:
+```bash
+sudo rmmod mt7902
 sudo ./load.sh
 ```
 
 ---
 
-## Status & Hardware Recovery
+## 🌐 Network Management
 
-- **Kernels Tested:** `6.8.0` (Ubuntu) and `6.18+` (Arch).
-- **Working:** 2.4 GHz and 5 GHz STA mode.
-- **Not Working:** 6 GHz (missing firmware), S3 Sleep/Resume.
+### Use iwd (Recommended for Testing)
+For testing and development, **use iwd directly** and mask other network managers:
 
-### ⚠️ Critical Recovery (BAR0 / Dead MMIO)
-If the driver crashes, the hardware often latches into an unresponsive state where `insmod` or `modprobe` will fail. You **must** perform a full power drain before the device will function again:
-1. Shut down the laptop and unplug the AC adapter.
-2. Hold the **Power Button** for 40 seconds.
-3. Plug back in and boot.
+```bash
+# Mask NetworkManager and wpa_supplicant
+sudo systemctl mask NetworkManager
+sudo systemctl mask wpa_supplicant
 
----
+# Enable and start iwd
+sudo systemctl enable --now iwd
 
-## Known Issues
+# Connect to a network
+iwctl station wlan0 connect "YourSSID"
+```
 
-### Early Boot Race Conditions
-The driver has unresolved timing bugs during early system initialization. **The late-load systemd service is required** to avoid crashes. Loading via DKMS auto-load or early boot will likely fail.
+**Why iwd?** It's simpler, has less moving parts, and makes debugging connection issues way easier. NetworkManager adds too many layers of complexity.
 
-- **Symptom:** Module loads but interface doesn't come up, or kernel panic during boot
-- **Workaround:** Use `mt7902-late.service` to defer module loading until after system stabilization
-- **Status:** ⚠️ Arch users report the late-load service is unreliable; manual `./load.sh` after boot may be necessary
-
-### NetworkManager vs. wpa_supplicant
-For best stability, use **wpa_supplicant** directly instead of NetworkManager-based tools:
+### Alternative: wpa_supplicant (Ubuntu Stable Branch)
+If you're on the Ubuntu stable branch, stick with wpa_supplicant:
 
 ```bash
 # Disable NetworkManager for wlan0
@@ -116,10 +146,106 @@ sudo nmcli device set wlan0 managed no
 sudo wpa_supplicant -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf
 ```
 
-**iwd** (iNet Wireless Daemon) is **not recommended** — it triggers regulatory power limit bugs and disables everything. Stick with wpa_supplicant for now.
+---
+
+## 💀 Critical Recovery (Hardware Latchup)
+
+### ⚠️ BAR0 / Dead MMIO State
+If the driver crashes or hangs, the MT7902 hardware often locks up in an unresponsive state. **You MUST perform a full power drain before the device will work again:**
+
+1. Shut down the laptop completely
+2. Unplug the AC adapter
+3. Hold the **Power Button** for **40 seconds**
+4. Plug back in and boot
+
+**Symptoms of hardware latchup:**
+- `insmod` or `modprobe` fails immediately
+- `dmesg` shows BAR0 read errors
+- Driver loads but interface never appears
+
+This is a hardware issue with the MT7902's PCIe controller, not a driver bug (as far as we know 🤷).
 
 ---
 
-## Troubleshooting
-* **Shutdown Hang:** Ensure `mt7902-reset.service` is enabled; it unloads the module to prevent the PCIe bus from hanging the kernel.
-* **Logs:** Check `dmesg | grep mt7902` for firmware loading status.
+## 🐛 Known Issues
+
+### Boot-Time Loading Doesn't Work
+The driver has unresolved race conditions during early system initialization. **The late-load systemd service is REQUIRED**, but even that's flaky on Arch.
+
+- **Symptom**: Module loads but interface doesn't come up, OR kernel panic during boot
+- **Workaround**: Use `mt7902-late.service` (unreliable on Arch), or just run `./load.sh` manually after boot
+- **Root Cause**: Still investigating timing bugs in the init sequence
+
+### Shutdown Hangs
+Enable the reset service to cleanly unload the module before shutdown:
+```bash
+sudo systemctl enable mt7902-reset.service
+```
+
+This prevents the PCIe bus from hanging the entire kernel during poweroff.
+
+### Log Spam 📢
+Yeah, this driver logs *a lot*. We're working on it. Use `dmesg -w | grep mt7902` to see what's happening.
+
+---
+
+## 🔍 Troubleshooting
+
+### Check Firmware Loading
+```bash
+sudo dmesg | grep mt7902
+```
+
+Look for:
+- `kalRequestFirmware(): mediatek/mt7902/wifi.cfg OK`
+- `Patch download start`
+- `FW Version: ...`
+
+### Check Network Interface
+```bash
+ip link show wlan0
+iwctl station wlan0 scan
+iwctl station wlan0 get-networks
+```
+
+### Known Quirks
+- **No NVRAM**: The driver complains about "Glue is NULL" because there's no NVRAM calibration data. Country code is set via `wifi.cfg`—**you're responsible for setting your own country code correctly!**
+- **Excessive Scanning**: The driver scans way too aggressively. We're working on it.
+- **Slow Association**: Sometimes it takes 10-20 seconds to connect. Be patient.
+
+---
+
+## 🛠️ Development Notes
+
+- This is a fork of hmtheboy154's gen4-mt7902 driver (which came from Xiaomi's rodin BSP)
+- We're ripping and tearing through Android-isms in the code to make it more Linux-native
+- Recent commits have been 4000+ lines of changes (yikes)
+- Ubuntu branch is frozen until Arch branch stabilizes—too much code divergence to maintain both
+- Use `git diff` before committing to verify changes
+
+**Upstream**: https://github.com/hmtheboy154/gen4-mt7902
+
+---
+
+## 📜 License
+
+GPL v2 (inherited from Mediatek/Xiaomi sources)
+
+---
+
+## 🙏 Contributing
+
+If you want to help, great! But be warned: this code is a mess. We're heavily modifying hmtheboy154's driver port to improve stability and connection handling. If that doesn't scare you off, pull requests welcome! 😅
+
+**Upstream Project**: Check out hmtheboy154's original work at https://github.com/hmtheboy154/gen4-mt7902
+
+**Testing Checklist:**
+- Does it load at boot? (probably not)
+- Does `./load.sh` work after boot? (hopefully)
+- Can you connect to 2.4 GHz networks?
+- Can you connect to 5 GHz networks?
+- Does it survive a reboot without kernel panic?
+
+---
+
+**Disclaimer**: This driver is experimental. It might brick your network card (temporarily—see recovery steps above). It might flood your logs. It might make you question your life choices. Use at your own risk! 🎲

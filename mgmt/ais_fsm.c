@@ -2710,155 +2710,135 @@ aisHandleState_OFF_CHNL_TX(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 #define AIS_FSM_MAX_TRANSITIONS  16
 
 void aisFsmSteps(IN struct ADAPTER *prAdapter,
-		 enum ENUM_AIS_STATE eNextState, uint8_t ucBssIndex)
+                 enum ENUM_AIS_STATE eNextState, uint8_t ucBssIndex)
 {
-	struct AIS_FSM_INFO *prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
-	struct BSS_INFO     *prAisBssInfo = aisGetAisBssInfo(prAdapter, ucBssIndex);
-	enum ENUM_AIS_STATE  eResultState;
-	u_int8_t             fgIsTransition;
-	uint8_t              ucTransitionCount = 0;
+    struct AIS_FSM_INFO *prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+    struct BSS_INFO     *prAisBssInfo = aisGetAisBssInfo(prAdapter, ucBssIndex);
+    enum ENUM_AIS_STATE  eResultState;
+    enum ENUM_AIS_STATE  eCurrentState;
+    u_int8_t             fgIsTransition;
+    uint8_t              ucTransitionCount = 0;
 
-	DEBUGFUNC("aisFsmSteps()");
+    DEBUGFUNC("aisFsmSteps()");
 
-	/* Re-fetch info pointers so the helpers don't need them as parameters */
-	aisGetAisSpecBssInfo(prAdapter, ucBssIndex);   /* warms any lazy-init */
-	aisGetConnSettings(prAdapter, ucBssIndex);
-	aisGetRoamingInfo(prAdapter, ucBssIndex);
+    /* Re-fetch info pointers */
+    aisGetAisSpecBssInfo(prAdapter, ucBssIndex);
+    aisGetConnSettings(prAdapter, ucBssIndex);
+    aisGetRoamingInfo(prAdapter, ucBssIndex);
 
-	DBGLOG(AIS, LOUD,
-	       "[AIS%d] FSM ENTRY: RequestedState=%s(%d) CurrentState=%s(%d) "
-	       "netActive=%d fgIsScanning=%d fgTryScan=%d\n",
-	       ucBssIndex,
-	       AIS_STATE_NAME(eNextState), eNextState,
-	       AIS_STATE_NAME(prAisFsmInfo->eCurrentState),
-	       prAisFsmInfo->eCurrentState,
-	       IS_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex),
-	       prAisFsmInfo->fgIsScanning,
-	       prAisFsmInfo->fgTryScan);
-
-	do {
-		/* Cycle-detection guard. --------------------------------
-		 * Every legitimate transition chain terminates in a state
-		 * that returns itself (no further transition). If we have
-		 * looped more than AIS_FSM_MAX_TRANSITIONS times without
-		 * settling, a cyclic transition has been introduced by a
-		 * code change. Break out immediately, force IDLE as the
-		 * safest recovery state, and fire a loud error so the bug
-		 * shows up in any log level — not just verbose builds. */
-		if (ucTransitionCount >= AIS_FSM_MAX_TRANSITIONS) {
-			DBGLOG(AIS, ERROR,
-			       "[AIS%d] FSM CYCLE DETECTED: %d transitions without "
-			       "settling. currentState=%s(%d) pendingNext=%s(%d). "
-			       "Forcing IDLE to prevent hard-lock.\n",
-			       ucBssIndex,
-			       ucTransitionCount,
-			       AIS_STATE_NAME(prAisFsmInfo->eCurrentState),
-			       prAisFsmInfo->eCurrentState,
-			       AIS_STATE_NAME(eNextState),
-			       eNextState);
-			ASSERT(0);
-			/* Force a clean landing — IDLE will deactivate the
-			 * network and wait for a fresh external request rather
-			 * than leaving hardware in a partially-configured state. */
-			prAisFsmInfo->eCurrentState = AIS_STATE_IDLE;
-			break;
-		}
-		ucTransitionCount++;
-
-		/* Record the transition */
-		prAisFsmInfo->ePreviousState = prAisFsmInfo->eCurrentState;
-
-		DBGLOG(AIS, STATE,
-		       "[AIS%d] TRANSITION(%d): [%s(%d)] -> [%s(%d)] "
-		       "connState=%d fgIsChannelRequested=%d\n",
-		       ucBssIndex,
-		       ucTransitionCount,
-		       AIS_STATE_NAME(prAisFsmInfo->eCurrentState),
-		       prAisFsmInfo->eCurrentState,
-		       AIS_STATE_NAME(eNextState), eNextState,
-		       prAisBssInfo->eConnectionState,
-		       prAisFsmInfo->fgIsChannelRequested);
-
-		/* NOTE(Kevin): This is the only place to change eCurrentState
-		 * (except during initialisation). */
-		prAisFsmInfo->eCurrentState = eNextState;
-
-		aisPostponedEventOfDisconnTimeout(prAdapter, ucBssIndex);
-
-		/* ---- Dispatch to the per-state handler ---- */
-		switch (prAisFsmInfo->eCurrentState) {
-		case AIS_STATE_IDLE:
-			eResultState = aisHandleState_IDLE(prAdapter, ucBssIndex);
-			break;
-		case AIS_STATE_SEARCH:
-			eResultState = aisHandleState_SEARCH(prAdapter, ucBssIndex);
-			break;
-		case AIS_STATE_WAIT_FOR_NEXT_SCAN:
-			eResultState = aisHandleState_WAIT_FOR_NEXT_SCAN(prAdapter, ucBssIndex);
-			break;
-		case AIS_STATE_SCAN:
-		case AIS_STATE_ONLINE_SCAN:
-		case AIS_STATE_LOOKING_FOR:
-			eResultState = aisHandleState_SCAN_FAMILY(prAdapter, ucBssIndex);
-			break;
-		case AIS_STATE_REQ_CHANNEL_JOIN:
-			eResultState = aisHandleState_REQ_CHANNEL_JOIN(prAdapter, ucBssIndex);
-			break;
-		case AIS_STATE_JOIN:
-			eResultState = aisHandleState_JOIN(prAdapter, ucBssIndex);
-			break;
-		case AIS_STATE_JOIN_FAILURE:
-			eResultState = aisHandleState_JOIN_FAILURE(prAdapter, ucBssIndex);
-			break;
+    do {
+        /* 🔒 CRITICAL SECTION: Update state variables atomically */
+        mutex_lock(&prAdapter->rAisFsmMutex);
+        
+        /* Cycle detection guard */
+        if (ucTransitionCount >= AIS_FSM_MAX_TRANSITIONS) {
+            DBGLOG(AIS, ERROR,
+                   "[AIS%d] FSM CYCLE DETECTED: %d transitions without "
+                   "settling. currentState=%s(%d) pendingNext=%s(%d). "
+                   "Forcing IDLE.\n",
+                   ucBssIndex, ucTransitionCount,
+                   AIS_STATE_NAME(prAisFsmInfo->eCurrentState),
+                   prAisFsmInfo->eCurrentState,
+                   AIS_STATE_NAME(eNextState), eNextState);
+            /* Don't ASSERT(0) in production - just log and recover */
+            WARN_ON_ONCE(1);
+            prAisFsmInfo->eCurrentState = AIS_STATE_IDLE;
+            mutex_unlock(&prAdapter->rAisFsmMutex);
+            break;
+        }
+        
+        ucTransitionCount++;
+        
+        /* Record the transition */
+        prAisFsmInfo->ePreviousState = prAisFsmInfo->eCurrentState;
+        eCurrentState = prAisFsmInfo->eCurrentState;
+        
+        DBGLOG(AIS, STATE,
+               "[AIS%d] TRANSITION(%d): [%s(%d)] -> [%s(%d)] "
+               "connState=%d fgIsChannelRequested=%d\n",
+               ucBssIndex, ucTransitionCount,
+               AIS_STATE_NAME(eCurrentState), eCurrentState,
+               AIS_STATE_NAME(eNextState), eNextState,
+               prAisBssInfo->eConnectionState,
+               prAisFsmInfo->fgIsChannelRequested);
+        
+        /* Update current state */
+        prAisFsmInfo->eCurrentState = eNextState;
+        
+        /* 🔓 UNLOCK before calling handler - handlers may block! */
+        mutex_unlock(&prAdapter->rAisFsmMutex);
+        
+        /* Postponed event handling (outside lock) */
+        aisPostponedEventOfDisconnTimeout(prAdapter, ucBssIndex);
+        
+        /* ---- Dispatch to handler WITHOUT holding lock ---- */
+        switch (eNextState) {
+        case AIS_STATE_IDLE:
+            eResultState = aisHandleState_IDLE(prAdapter, ucBssIndex);
+            break;
+        case AIS_STATE_SEARCH:
+            eResultState = aisHandleState_SEARCH(prAdapter, ucBssIndex);
+            break;
+        case AIS_STATE_WAIT_FOR_NEXT_SCAN:
+            eResultState = aisHandleState_WAIT_FOR_NEXT_SCAN(prAdapter, ucBssIndex);
+            break;
+        case AIS_STATE_SCAN:
+        case AIS_STATE_ONLINE_SCAN:
+        case AIS_STATE_LOOKING_FOR:
+            eResultState = aisHandleState_SCAN_FAMILY(prAdapter, ucBssIndex);
+            break;
+        case AIS_STATE_REQ_CHANNEL_JOIN:
+            eResultState = aisHandleState_REQ_CHANNEL_JOIN(prAdapter, ucBssIndex);
+            break;
+        case AIS_STATE_JOIN:
+            eResultState = aisHandleState_JOIN(prAdapter, ucBssIndex);
+            break;
+        case AIS_STATE_JOIN_FAILURE:
+            eResultState = aisHandleState_JOIN_FAILURE(prAdapter, ucBssIndex);
+            break;
 #if CFG_SUPPORT_ADHOC
-		case AIS_STATE_IBSS_ALONE:
-			eResultState = aisHandleState_IBSS_ALONE(prAdapter, ucBssIndex);
-			break;
-		case AIS_STATE_IBSS_MERGE:
-			eResultState = aisHandleState_IBSS_MERGE(prAdapter, ucBssIndex);
-			break;
+        case AIS_STATE_IBSS_ALONE:
+            eResultState = aisHandleState_IBSS_ALONE(prAdapter, ucBssIndex);
+            break;
+        case AIS_STATE_IBSS_MERGE:
+            eResultState = aisHandleState_IBSS_MERGE(prAdapter, ucBssIndex);
+            break;
 #endif
-		case AIS_STATE_NORMAL_TR:
-			eResultState = aisHandleState_NORMAL_TR(prAdapter, ucBssIndex);
-			break;
-		case AIS_STATE_DISCONNECTING:
-			eResultState = aisHandleState_DISCONNECTING(prAdapter, ucBssIndex);
-			break;
-		case AIS_STATE_REQ_REMAIN_ON_CHANNEL:
-			eResultState = aisHandleState_REQ_REMAIN_ON_CHANNEL(prAdapter, ucBssIndex);
-			break;
-		case AIS_STATE_REMAIN_ON_CHANNEL:
-			eResultState = aisHandleState_REMAIN_ON_CHANNEL(prAdapter, ucBssIndex);
-			break;
-		case AIS_STATE_OFF_CHNL_TX:
-			eResultState = aisHandleState_OFF_CHNL_TX(prAdapter, ucBssIndex);
-			break;
-		default:
-			DBGLOG(AIS, ERROR,
-			       "[AIS%d] UNHANDLED STATE: %d\n",
-			       ucBssIndex, prAisFsmInfo->eCurrentState);
-			ASSERT(0);
-			eResultState = prAisFsmInfo->eCurrentState;
-			break;
-		}
-
-		/* A handler signals a transition by returning a state
-		 * different from the one it was entered with. */
-		fgIsTransition = (eResultState != prAisFsmInfo->eCurrentState);
-		eNextState     = eResultState;
-
-	} while (fgIsTransition);
-
-	DBGLOG(AIS, LOUD,
-	       "[AIS%d] FSM EXIT: FinalState=%s(%d) transitions=%d netActive=%d "
-	       "fgIsScanning=%d fgIsChannelReq=%d\n",
-	       ucBssIndex,
-	       AIS_STATE_NAME(prAisFsmInfo->eCurrentState),
-	       prAisFsmInfo->eCurrentState,
-	       ucTransitionCount,
-	       IS_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex),
-	       prAisFsmInfo->fgIsScanning,
-	       prAisFsmInfo->fgIsChannelRequested);
+        case AIS_STATE_NORMAL_TR:
+            eResultState = aisHandleState_NORMAL_TR(prAdapter, ucBssIndex);
+            break;
+        case AIS_STATE_DISCONNECTING:
+            eResultState = aisHandleState_DISCONNECTING(prAdapter, ucBssIndex);
+            break;
+        case AIS_STATE_REQ_REMAIN_ON_CHANNEL:
+            eResultState = aisHandleState_REQ_REMAIN_ON_CHANNEL(prAdapter, ucBssIndex);
+            break;
+        case AIS_STATE_REMAIN_ON_CHANNEL:
+            eResultState = aisHandleState_REMAIN_ON_CHANNEL(prAdapter, ucBssIndex);
+            break;
+        case AIS_STATE_OFF_CHNL_TX:
+            eResultState = aisHandleState_OFF_CHNL_TX(prAdapter, ucBssIndex);
+            break;
+        default:
+            DBGLOG(AIS, ERROR, "[AIS%d] UNHANDLED STATE: %d\n",
+                   ucBssIndex, eNextState);
+            WARN_ON_ONCE(1);
+            eResultState = eNextState; /* Stay in current state */
+            break;
+        }
+        
+        /* Handler completed - check if we need to transition again */
+        fgIsTransition = (eResultState != eNextState);
+        eNextState     = eResultState;
+        
+    } while (fgIsTransition);
+    
+    DBGLOG(AIS, LOUD,
+           "[AIS%d] FSM EXIT: FinalState=%s(%d) transitions=%d\n",
+           ucBssIndex,
+           AIS_STATE_NAME(prAisFsmInfo->eCurrentState),
+           prAisFsmInfo->eCurrentState,
+           ucTransitionCount);
 }
 
 
