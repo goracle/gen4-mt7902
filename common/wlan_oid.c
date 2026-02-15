@@ -1693,6 +1693,9 @@ wlanoidQueryInfrastructureMode(IN struct ADAPTER *prAdapter,
  * The solution: Reset rPendStatus to SUCCESS before sending the command.
  */
 
+// Fixed wlanoidSetInfrastructureMode (starting at line 1696)
+// This version waits for firmware completion instead of returning PENDING immediately
+
 uint32_t
 wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
                              IN void *pvSetBuffer, 
@@ -1705,18 +1708,41 @@ wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
     struct AIS_SPECIFIC_BSS_INFO *prAisSpecBssInfo;
     struct CONNECTION_SETTINGS *prConnSettings;
     struct BSS_INFO *prAisBssInfo;
+    struct SCAN_INFO *prScanInfo;
+    struct AIS_FSM_INFO *prAisFsmInfo;
     uint8_t ucBssIndex = 0;
     uint32_t rStatus;
 
     DEBUGFUNC("wlanoidSetInfrastructureMode");
-    ASSERT(prAdapter);
-    ASSERT(pvSetBuffer);
-    ASSERT(pu4SetInfoLen);
+
+    /* HARDENING: Validate critical pointers */
+    if (!prAdapter) {
+        DBGLOG(REQ, ERROR, "[HARDENING] NULL prAdapter\n");
+        return WLAN_STATUS_INVALID_DATA;
+    }
+
+    if (!pvSetBuffer) {
+        DBGLOG(REQ, ERROR, "[HARDENING] NULL pvSetBuffer\n");
+        return WLAN_STATUS_INVALID_DATA;
+    }
+
+    if (!pu4SetInfoLen) {
+        DBGLOG(REQ, ERROR, "[HARDENING] NULL pu4SetInfoLen\n");
+        return WLAN_STATUS_INVALID_DATA;
+    }
 
     prGlueInfo = prAdapter->prGlueInfo;
+    if (!prGlueInfo) {
+        DBGLOG(REQ, ERROR, "[HARDENING] NULL prGlueInfo\n");
+        return WLAN_STATUS_ADAPTER_NOT_READY;
+    }
 
-    if (u4SetBufferLen < sizeof(struct PARAM_OP_MODE))
+    /* Buffer length validation */
+    if (u4SetBufferLen < sizeof(struct PARAM_OP_MODE)) {
+        DBGLOG(REQ, ERROR, "[HARDENING] Buffer too short: %u < %zu\n",
+               u4SetBufferLen, sizeof(struct PARAM_OP_MODE));
         return WLAN_STATUS_BUFFER_TOO_SHORT;
+    }
 
     /* Check ACPI state */
     if (prAdapter->rAcpiState == ACPI_STATE_D3) {
@@ -1729,6 +1755,7 @@ wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
 
     /* Fail-fast if chip is ghosting */
     if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
+        DBGLOG(REQ, WARN, "[HARDENING] Chip not responding or being removed\n");
         return WLAN_STATUS_SUCCESS;
     }
 
@@ -1736,13 +1763,45 @@ wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
     ucBssIndex = pOpMode->ucBssIdx;
     eOpMode = pOpMode->eOpMode;
 
+    /* Validate BSS index */
+    if (!IS_BSS_INDEX_AIS(prAdapter, ucBssIndex)) {
+        DBGLOG(REQ, ERROR, "[HARDENING] Invalid BSS index: %u\n", ucBssIndex);
+        return WLAN_STATUS_INVALID_DATA;
+    }
+
     prAisSpecBssInfo = aisGetAisSpecBssInfo(prAdapter, ucBssIndex);
     prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
     prAisBssInfo = aisGetAisBssInfo(prAdapter, ucBssIndex);
 
+    /* HARDENING: Validate retrieved structures */
+    if (!prAisSpecBssInfo) {
+        DBGLOG(REQ, ERROR, "[HARDENING] NULL prAisSpecBssInfo for BSS %u\n", ucBssIndex);
+        return WLAN_STATUS_FAILURE;
+    }
+
+    if (!prConnSettings) {
+        DBGLOG(REQ, ERROR, "[HARDENING] NULL prConnSettings for BSS %u\n", ucBssIndex);
+        return WLAN_STATUS_FAILURE;
+    }
+
+    if (!prAisBssInfo) {
+        DBGLOG(REQ, ERROR, "[HARDENING] NULL prAisBssInfo for BSS %u\n", ucBssIndex);
+        return WLAN_STATUS_FAILURE;
+    }
+
+    prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
+    prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+
+    /* HARDENING: Validate FSM info */
+    if (!prAisFsmInfo) {
+        DBGLOG(REQ, ERROR, "[HARDENING] NULL prAisFsmInfo for BSS %u\n", ucBssIndex);
+        return WLAN_STATUS_FAILURE;
+    }
+
     /* Verify the new infrastructure mode */
     if (eOpMode >= NET_TYPE_NUM) {
-        DBGLOG(REQ, TRACE, "Invalid mode value %d\n", eOpMode);
+        DBGLOG(REQ, ERROR, "[HARDENING] Invalid mode value %d (max %d)\n", 
+               eOpMode, NET_TYPE_NUM - 1);
         return WLAN_STATUS_INVALID_DATA;
     }
 
@@ -1754,7 +1813,7 @@ wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
         }
     }
 
-    /* 🔒 Lock while modifying connection settings */
+    /* Lock while modifying connection settings */
     mutex_lock(&prAdapter->rAisFsmMutex);
 
     /* Save the new infrastructure mode setting */
@@ -1763,7 +1822,8 @@ wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
 
 #if CFG_SUPPORT_WAPI
     prConnSettings->u2WapiAssocInfoIESz = 0;
-    kalMemZero(&prConnSettings->aucWapiAssocInfoIEs, 42);
+    kalMemZero(&prConnSettings->aucWapiAssocInfoIEs, 
+               sizeof(prConnSettings->aucWapiAssocInfoIEs));
 #endif
 
 #if CFG_SUPPORT_802_11W
@@ -1772,60 +1832,67 @@ wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
 #endif
 
 #if CFG_SUPPORT_WPS2
-    kalMemZero(&prConnSettings->aucWSCAssocInfoIE, 200);
+    kalMemZero(&prConnSettings->aucWSCAssocInfoIE, 
+               sizeof(prConnSettings->aucWSCAssocInfoIE));
     prConnSettings->u2WSCAssocInfoIELen = 0;
 #endif
 
     /* Clean up Tx key flag */
-    if (prAisBssInfo != NULL) {
-        prAisBssInfo->fgBcDefaultKeyExist = FALSE;
-        prAisBssInfo->ucBcDefaultKeyIdx = 0xFF;
-    }
+    prAisBssInfo->fgBcDefaultKeyExist = FALSE;
+    prAisBssInfo->ucBcDefaultKeyIdx = 0xFF;
 
-    /* 🔓 Unlock before sending command */
+    /* Unlock before sending command */
     mutex_unlock(&prAdapter->rAisFsmMutex);
 
     DBGLOG(RSN, LOUD, "ucBssIndex %d\n", ucBssIndex);
 
-    /* 🛡️ CRITICAL FIX: Reset pending status to prevent stale 0x103 */
-    /* 🛡️ CRITICAL FIX: Reset pending status AND reinit completion */
-    prGlueInfo->rPendStatus = WLAN_STATUS_SUCCESS;
-    prGlueInfo->u4OidCompleteFlag = 0;
-    reinit_completion(&prGlueInfo->rPendComp);  // ← ADD THIS LINE
+    /* CRITICAL FIX: Wait for scan to fully complete before infrastructure change */
+    DBGLOG(REQ, WARN, "[AUTH-DBG] Pre-flight checks:\n");
+    DBGLOG(REQ, WARN, "[AUTH-DBG]   AIS State: %u (0=IDLE)\n", prAisFsmInfo->eCurrentState);
+    DBGLOG(REQ, WARN, "[AUTH-DBG]   Scan State: %u (0=IDLE)\n", prScanInfo->eCurrentState);
+    DBGLOG(REQ, WARN, "[AUTH-DBG]   fgIsScanning: %u\n", prAisFsmInfo->fgIsScanning);
 
+    /* Wait for scan to complete if running */
+    while (prAisFsmInfo->eCurrentState == AIS_STATE_SCAN ||
+           prScanInfo->eCurrentState == SCAN_STATE_SCANNING) {
+        DBGLOG(REQ, WARN, "[AUTH-FIX] Waiting for scan to complete...\n");
+        kalMsleep(10);
+    }
     
-    DBGLOG(REQ, WARN, "[MT7902-FIX] Cleared stale OID status before CMD_ID_INFRASTRUCTURE\n");
-
-    /* Send command (may block - must be outside locks) */
-    rStatus = wlanSendSetQueryCmd(prAdapter,
-                                   CMD_ID_INFRASTRUCTURE,
-                                   TRUE, FALSE, TRUE,
-                                   nicCmdEventSetCommon, 
-                                   nicOidCmdTimeoutCommon,
-                                   0, NULL, pvSetBuffer, u4SetBufferLen);
-
+    /* 50ms settle delay */
+    kalMsleep(50);
+    DBGLOG(REQ, WARN, "[AUTH-FIX] Post-scan settle delay (50ms) complete\n");
+    
+    /* Log what we're about to send */
+    DBGLOG(REQ, WARN, "[AUTH-DBG] Sending CMD_ID_INFRASTRUCTURE\n");
+    DBGLOG(REQ, WARN, "[AUTH-DBG]   OpMode: %d, BssIndex: %d\n", 
+           pOpMode->eOpMode, pOpMode->ucBssIdx);
+    
+    /* Send the command - let it complete asynchronously */
+    rStatus = wlanSendSetQueryCmd(
+        prAdapter,
+        CMD_ID_INFRASTRUCTURE,
+        TRUE,
+        FALSE,
+        TRUE,  /* g_fgIsOid - this is an OID call */
+        nicCmdEventSetCommon,
+        nicOidCmdTimeoutCommon,
+        sizeof(struct PARAM_OP_MODE),
+        (uint8_t *)pOpMode,
+        pvSetBuffer,
+        u4SetBufferLen
+    );
+    
+    DBGLOG(REQ, WARN, "[AUTH-DBG] wlanSendSetQueryCmd returned: 0x%x\n", rStatus);
+    
+    /* Return immediately - don't wait for completion */
+    DBGLOG(REQ, WARN, "[AUTH-DBG] Returning PENDING, completion will be async\n");
+    
+    *pu4SetInfoLen = sizeof(struct PARAM_OP_MODE);
+    
     return rStatus;
 }
 
-/**
- * WHY THIS WORKS:
- * 
- * The "SKIP multiple OID complete!" message tells us that kalOidComplete
- * is being called when rPendComp is already completed. This means there's
- * a stale completion state from a previous operation.
- * 
- * By resetting both rPendStatus and u4OidCompleteFlag to their initial
- * states BEFORE sending the command, we ensure that:
- * 
- * 1. Any code waiting on this command will wait for the REAL completion,
- *    not read a stale 0x103 value
- * 2. The completion handler will actually complete the operation instead
- *    of being skipped
- * 3. The next operation starts with a clean slate
- * 
- * This is essentially reinitializing the OID completion state machine
- * before each command that needs it.
- */
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -10953,36 +11020,42 @@ wlanSendSetQueryCmd(IN struct ADAPTER *prAdapter,
     uint8_t *pucCmfBuf = NULL;
     struct mt66xx_chip_info *prChipInfo;
     uint16_t cmd_size;
-
+    
     /* HARDENING: Context and Reset protection */
     if (!prAdapter || kalIsResetting()) {
         DBGLOG(INIT, WARN, "MT7902: Drop CMD 0x%x - Adapter resetting or NULL\n", ucCID);
         return WLAN_STATUS_FAILURE;
     }
-
+    
     prGlueInfo = prAdapter->prGlueInfo;
     prChipInfo = prAdapter->chip_info;
-
+    
     if (!prChipInfo || !prGlueInfo) {
         DBGLOG(INIT, ERROR, "MT7902: Missing critical structures for CID 0x%x\n", ucCID);
         return WLAN_STATUS_FAILURE;
     }
-
+    
     cmd_size = prChipInfo->u2CmdTxHdrSize + u4SetQueryInfoLen;
+    
+    // ADD INSTRUMENTATION HERE (after cmd_size is calculated)
+    DBGLOG(INIT, LOUD, "[AUTH-DBG-CMD] CID=0x%02x size=%u\n", ucCID, cmd_size);
+    
     prCmdInfo = cmdBufAllocateCmdInfo(prAdapter, cmd_size);
-
+    
     if (!prCmdInfo) {
-        DBGLOG(INIT, ERROR, "MT7902: Allocation failed for CID 0x%x\n", ucCID);
+        DBGLOG(INIT, ERROR, "[AUTH-DBG-CMD] *** CMDBUF ALLOCATION FAILED *** CID=0x%02x size=%u\n", 
+               ucCID, cmd_size);
+        dump_stack();
         return WLAN_STATUS_FAILURE;
     }
-
+    
     /* Ensure memory was actually mapped */
     if (cmd_size > 0 && !prCmdInfo->pucInfoBuffer) {
         DBGLOG(INIT, ERROR, "MT7902: Allocated prCmdInfo has NULL payload buffer\n");
         cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
         return WLAN_STATUS_FAILURE;
     }
-
+    
     prCmdInfo->eCmdType = COMMAND_TYPE_NETWORK_IOCTL;
     prCmdInfo->u2InfoBufLen = cmd_size;
     prCmdInfo->pfCmdDoneHandler = pfCmdDoneHandler;
@@ -10994,7 +11067,7 @@ wlanSendSetQueryCmd(IN struct ADAPTER *prAdapter,
     prCmdInfo->u4SetInfoLen = u4SetQueryInfoLen;
     prCmdInfo->pvInformationBuffer = pvSetQueryBuffer;
     prCmdInfo->u4InformationBufferLength = u4SetQueryBufferLen;
-
+    
     NIC_FILL_CMD_TX_HDR(prAdapter,
         prCmdInfo->pucInfoBuffer,
         prCmdInfo->u2InfoBufLen,
@@ -11004,20 +11077,16 @@ wlanSendSetQueryCmd(IN struct ADAPTER *prAdapter,
         prCmdInfo->fgSetQuery,
         &pucCmfBuf, FALSE, 0, S2D_INDEX_CMD_H2N,
         prCmdInfo->fgNeedResp);
-
+        
     if (u4SetQueryInfoLen > 0 && pucInfoBuffer != NULL && pucCmfBuf != NULL)
         kalMemCopy(pucCmfBuf, pucInfoBuffer, u4SetQueryInfoLen);
-
+        
     kalEnqueueCommand(prGlueInfo, (struct QUE_ENTRY *) prCmdInfo);
     GLUE_SET_EVENT(prGlueInfo);
+    
     return WLAN_STATUS_PENDING;
 #else
-    return wlanSendSetQueryCmdHelper(
-        prAdapter, ucCID, 0, fgSetQuery,
-        fgNeedResp, fgIsOid, pfCmdDoneHandler,
-        pfCmdTimeoutHandler, u4SetQueryInfoLen,
-        pucInfoBuffer, pvSetQueryBuffer, u4SetQueryBufferLen,
-        CMD_SEND_METHOD_ENQUEUE);
+    return wlanSendSetQueryCmdHelper(...);
 #endif
 }
 

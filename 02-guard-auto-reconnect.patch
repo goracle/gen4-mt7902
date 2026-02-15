@@ -1,0 +1,39 @@
+--- a/mgmt/ais_fsm.c
++++ b/mgmt/ais_fsm.c
+@@ -2856,8 +2856,15 @@ enum ENUM_AIS_STATE aisFsmStateSearchAction(IN struct ADAPTER *prAdapter,
+ 
+ 	if (ucPhase == AIS_FSM_STATE_SEARCH_ACTION_PHASE_0) {
+ 		if (prConnSettings->eOPMode == NET_TYPE_INFRA) {
+-			/* issue reconnect request, */
+-			/*and retreat to idle state for scheduling */
++			/* Check if cfg80211/userspace is driving this connection */
++			if (prAisFsmInfo->fgIsCfg80211Connecting) {
++				DBGLOG(AIS, INFO,
++					"[AIS%d] cfg80211 owns connection (skip driver auto-reconnect phase 0)\n",
++					ucBssIndex);
++				eState = AIS_STATE_IDLE;
++				return eState;
++			}
++			
+ 			aisFsmInsertRequest(prAdapter, AIS_REQUEST_RECONNECT,
+ 				ucBssIndex);
+ 			eState = AIS_STATE_IDLE;
+@@ -2890,9 +2897,15 @@ enum ENUM_AIS_STATE aisFsmStateSearchAction(IN struct ADAPTER *prAdapter,
+ 		/* 4 <B> We've do SCAN already, now wait in some STATE. */
+ 		else {
+ 			if (prConnSettings->eOPMode == NET_TYPE_INFRA) {
+-
+-				/* issue reconnect request, and */
+-				/* retreat to idle state for scheduling */
++				/* Check if cfg80211/userspace is driving this connection */
++				if (prAisFsmInfo->fgIsCfg80211Connecting) {
++					DBGLOG(AIS, INFO,
++						"[AIS%d] cfg80211 owns connection (skip driver auto-reconnect phase 1)\n",
++						ucBssIndex);
++					eState = AIS_STATE_IDLE;
++					return eState;
++				}
++				
+ 				aisFsmInsertRequest(prAdapter,
+ 						    AIS_REQUEST_RECONNECT,
+ 						    ucBssIndex);

@@ -1,0 +1,12 @@
+--- a/include/mgmt/ais_fsm.h
++++ b/include/mgmt/ais_fsm.h
+@@ -235,6 +235,9 @@ struct AIS_FSM_INFO {
+ 	enum ENUM_AIS_STATE ePreviousState;
+ 	enum ENUM_AIS_STATE eCurrentState;
+ 	uint32_t u4ScanReportStartTime;
++	
++	/* Flag to prevent AIS auto-reconnect when cfg80211/userspace is driving connection */
++	u_int8_t fgIsCfg80211Connecting;
+ 
+ 	/* New members for dynamic timeout logic */
+ 	uint32_t u4ScanStartTime;     /* Track when the hardware sweep began */

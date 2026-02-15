@@ -356,115 +356,154 @@ void cmdBufDumpCmdQueue(struct QUE *prQueue,
  */
 /*----------------------------------------------------------------------------*/
 #if CFG_DBG_MGT_BUF
-struct CMD_INFO *cmdBufAllocateCmdInfoX(IN struct ADAPTER
-					   *prAdapter, IN uint32_t u4Length,
-					   uint8_t *fileAndLine)
+struct CMD_INFO *cmdBufAllocateCmdInfoX(IN struct ADAPTER *prAdapter, 
+                                         IN uint32_t u4Length,
+                                         uint8_t *fileAndLine)
 #else
-struct CMD_INFO *cmdBufAllocateCmdInfo(IN struct ADAPTER
-					   *prAdapter, IN uint32_t u4Length)
+struct CMD_INFO *cmdBufAllocateCmdInfo(IN struct ADAPTER *prAdapter, 
+                                        IN uint32_t u4Length)
 #endif
 {
 	struct CMD_INFO *prCmdInfo = NULL;
-	uint8_t ucRetryCount = 0;
 	uint8_t fgIsDyn = FALSE;
-
+	uint32_t u4FreeCount, u4PendingCount;
+	unsigned long u4StartTime;
 	KAL_SPIN_LOCK_DECLARATION();
+	
 	ASSERT(prAdapter);
-
-retry_alloc:
+	
+	/* Record allocation attempt time */
+	u4StartTime = kalGetTimeTick();
+	
 	/* 1. Try to get a command from the static free pool */
 	KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_CMD_RESOURCE);
+	u4FreeCount = prAdapter->rFreeCmdList.u4NumElem;
+	u4PendingCount = prAdapter->rPendingCmdQueue.u4NumElem;
 	QUEUE_REMOVE_HEAD(&prAdapter->rFreeCmdList, prCmdInfo, struct CMD_INFO *);
 	KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_CMD_RESOURCE);
-
-#if (CFG_TX_DYN_CMD_SUPPORT == 1)
-	/* 2. If static pool is empty, allocate a new one from heap */
+	
+	/* Log pool state for debugging */
 	if (!prCmdInfo) {
-		prCmdInfo = cmdDynBufAlloc(prAdapter);
-		if (prCmdInfo)
-			fgIsDyn = TRUE;
+		DBGLOG(MEM, WARN, "[CMD-POOL] Static pool exhausted. Free=0 Pending=%u\n", 
+		       u4PendingCount);
 	}
-#endif
-
-	/* 3. EMERGENCY RECOVERY: If still no command, steal from pending queue */
-	if (!prCmdInfo && ucRetryCount == 0) {
-		if (!QUEUE_IS_EMPTY(&prAdapter->rPendingCmdQueue)) {
-			DBGLOG(MEM, WARN, "Emergency harvest: stealing CMD from pending queue\n");
-			
-			KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_CMD_RESOURCE);
-			QUEUE_REMOVE_HEAD(&prAdapter->rPendingCmdQueue, prCmdInfo, struct CMD_INFO *);
-			KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_CMD_RESOURCE);
-
-			if (prCmdInfo) {
-				cmdFreeBufEnQ(prAdapter, prCmdInfo);
-				ucRetryCount++;
-				goto retry_alloc;
-			}
-		}
-	}
-
-	if (prCmdInfo) {
-		/* Reset basic flags */
-		prCmdInfo->u2InfoBufLen = 0;
-		prCmdInfo->fgIsOid = FALSE;
-		prCmdInfo->fgNeedResp = FALSE;
+	
 #if (CFG_TX_DYN_CMD_SUPPORT == 1)
-		prCmdInfo->fgDynCmd = fgIsDyn;
-#endif
-
-		/* 4. Handle Buffer Allocation */
-		if (u4Length) {
-			u4Length = TFCB_FRAME_PAD_TO_DW(u4Length);
-
-#if (CFG_TX_DYN_CMD_SUPPORT == 1)
-			/* FIX: If the struct is dynamic, the buffer MUST be dynamic for kfree safety */
-			if (fgIsDyn) {
-				prCmdInfo->pucInfoBuffer = (uint8_t *)kmalloc(u4Length, GFP_ATOMIC);
-			} else
-#endif
-			{
-				/* Use standard internal pool for static commands */
-#if CFG_DBG_MGT_BUF
-				prCmdInfo->pucInfoBuffer = cnmMemAllocX(prAdapter, RAM_TYPE_BUF, u4Length, fileAndLine);
-#else
-				prCmdInfo->pucInfoBuffer = cnmMemAlloc(prAdapter, RAM_TYPE_BUF, u4Length);
-#endif
-			}
-
-			if (prCmdInfo->pucInfoBuffer == NULL) {
-				DBGLOG(MEM, ERROR, "Buffer alloc failed, freeing CMD_INFO %p\n", prCmdInfo);
-				cmdFreeBufEnQ(prAdapter, prCmdInfo);
-				prCmdInfo = NULL;
-			} else {
-				kalMemZero(prCmdInfo->pucInfoBuffer, u4Length);
-			}
-		} else {
-			prCmdInfo->pucInfoBuffer = NULL;
+	/* 2. If static pool is empty, try dynamic allocation */
+	if (!prCmdInfo) {
+		/* Don't allow dynamic allocation if pending queue is too deep */
+		if (u4PendingCount > CFG_CMD_MAX_PENDING_COUNT) {
+			DBGLOG(MEM, ERROR, 
+			       "[CMD-POOL] Pending queue overflow (%u). Blocking dynamic alloc.\n",
+			       u4PendingCount);
+			goto alloc_failed;
 		}
-
-		/* Success state cleanup */
-		fgCmdDumpIsDone = FALSE;
-		prAdapter->fgIsCmdAllocFail = FALSE;
 		
-		DBGLOG(MEM, LOUD, "CMD[0x%p] allocated! Dyn[%u] LEN[%u] Rest[%u]\n",
-			   prCmdInfo, fgIsDyn, u4Length, prAdapter->rFreeCmdList.u4NumElem);
+		prCmdInfo = cmdDynBufAlloc(prAdapter);
+		if (prCmdInfo) {
+			fgIsDyn = TRUE;
+			DBGLOG(MEM, WARN, "[CMD-POOL] Using dynamic allocation\n");
+		}
+	}
+#endif
+	
+	/* 3. Total allocation failure */
+	if (!prCmdInfo) {
+		goto alloc_failed;
+	}
+	
+	/* 4. Command struct acquired - now allocate the payload buffer */
+	prCmdInfo->u2InfoBufLen = 0;
+	prCmdInfo->fgIsOid = FALSE;
+	prCmdInfo->fgNeedResp = FALSE;
+	
+#if (CFG_TX_DYN_CMD_SUPPORT == 1)
+	prCmdInfo->fgDynCmd = fgIsDyn;
+#endif
+	
+	if (u4Length > 0) {
+		u4Length = TFCB_FRAME_PAD_TO_DW(u4Length);
+		
+#if (CFG_TX_DYN_CMD_SUPPORT == 1)
+		/* Dynamic CMD struct requires dynamic buffer for safe kfree */
+		if (fgIsDyn) {
+			prCmdInfo->pucInfoBuffer = (uint8_t *)kmalloc(u4Length, GFP_ATOMIC);
+			if (!prCmdInfo->pucInfoBuffer) {
+				DBGLOG(MEM, ERROR, 
+				       "[CMD-POOL] Dynamic buffer kmalloc failed (%u bytes)\n",
+				       u4Length);
+			}
+		} else
+#endif
+		{
+			/* Static CMD uses internal memory pool */
+#if CFG_DBG_MGT_BUF
+			prCmdInfo->pucInfoBuffer = cnmMemAllocX(prAdapter, RAM_TYPE_BUF, 
+			                                         u4Length, fileAndLine);
+#else
+			prCmdInfo->pucInfoBuffer = cnmMemAlloc(prAdapter, RAM_TYPE_BUF, 
+			                                        u4Length);
+#endif
+			if (!prCmdInfo->pucInfoBuffer) {
+				DBGLOG(MEM, ERROR, 
+				       "[CMD-POOL] Internal buffer alloc failed (%u bytes)\n",
+				       u4Length);
+			}
+		}
+		
+		/* Buffer allocation failed - cleanup and return NULL */
+		if (!prCmdInfo->pucInfoBuffer) {
+			DBGLOG(MEM, ERROR, 
+			       "[CMD-POOL] Buffer alloc failed, returning CMD struct to pool\n");
+			cmdFreeBufEnQ(prAdapter, prCmdInfo);
+			prCmdInfo = NULL;
+			goto alloc_failed;
+		}
+		
+		/* Zero the allocated buffer */
+		kalMemZero(prCmdInfo->pucInfoBuffer, u4Length);
 	} else {
-		/* Total failure - trigger driver reset if it persists */
-		DBGLOG(MEM, ERROR, "CMD allocation FATAL failure! Rest[%u]\n",
-			   prAdapter->rFreeCmdList.u4NumElem);
-
-		if (!prAdapter->fgIsCmdAllocFail) {
-			prAdapter->fgIsCmdAllocFail = TRUE;
-			prAdapter->u4CmdAllocStartFailTime = kalGetTimeTick();
-		} else if (CHECK_FOR_TIMEOUT(kalGetTimeTick(),
-					 prAdapter->u4CmdAllocStartFailTime,
-					 CFG_CMD_ALLOC_FAIL_TIMEOUT_MS)) {
+		/* Zero-length buffer is valid for some commands */
+		prCmdInfo->pucInfoBuffer = NULL;
+	}
+	
+	/* Success - reset failure tracking */
+	fgCmdDumpIsDone = FALSE;
+	prAdapter->fgIsCmdAllocFail = FALSE;
+	
+	DBGLOG(MEM, LOUD, 
+	       "[CMD-POOL] Allocated CMD=%p Dyn=%u Len=%u Free=%u Pending=%u\n",
+	       prCmdInfo, fgIsDyn, u4Length, u4FreeCount - 1, u4PendingCount);
+	
+	return prCmdInfo;
+	
+alloc_failed:
+	/* Total failure path */
+	DBGLOG(MEM, ERROR, 
+	       "[CMD-POOL] *** ALLOCATION FAILED *** Free=%u Pending=%u Len=%u\n",
+	       u4FreeCount, u4PendingCount, u4Length);
+	
+	/* Track persistent allocation failures */
+	if (!prAdapter->fgIsCmdAllocFail) {
+		prAdapter->fgIsCmdAllocFail = TRUE;
+		prAdapter->u4CmdAllocStartFailTime = u4StartTime;
+		DBGLOG(MEM, ERROR, "[CMD-POOL] First allocation failure, starting timer\n");
+	} else {
+		/* Check if we've been failing for too long */
+		if (CHECK_FOR_TIMEOUT(kalGetTimeTick(),
+		                      prAdapter->u4CmdAllocStartFailTime,
+		                      CFG_CMD_ALLOC_FAIL_TIMEOUT_MS)) {
+			DBGLOG(MEM, ERROR, 
+			       "[CMD-POOL] *** ALLOCATION FAILED FOR %ums - TRIGGERING RESET ***\n",
+			       CFG_CMD_ALLOC_FAIL_TIMEOUT_MS);
 			GL_DEFAULT_RESET_TRIGGER(prAdapter, RST_CMD_EVT_FAIL);
 		}
 	}
-
-	return prCmdInfo;
+	
+	return NULL;
 }
+
+
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief This function is used to free the CMD Packet to the MGMT memory pool.

@@ -237,6 +237,9 @@ struct AIS_FSM_INFO {
 	enum ENUM_AIS_STATE eCurrentState;
 
   uint32_t u4ScanReportStartTime;  /* <--- Add this line here */
+	/* Flag to prevent AIS auto-reconnect when cfg80211/userspace is driving connection */
+	u_int8_t fgIsCfg80211Connecting;
+
 /* New members for dynamic timeout logic */
     uint32_t u4ScanStartTime;     /* Track when the hardware sweep began */
     uint32_t u4ScanChannelNum;    /* Number of channels in the current sweep */

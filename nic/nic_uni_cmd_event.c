@@ -230,9 +230,20 @@ wlanSendSetQueryCmdHelper(IN struct ADAPTER *prAdapter,
 	LINK_INITIALIZE(&info.rUniCmdList);
 
 	/* collect unified cmd info */
+	DBGLOG(REQ, WARN, "[AUTH-DBG] === wlanSendSetQueryCmdHelper ===\n");
+	DBGLOG(REQ, WARN, "[AUTH-DBG] ucCID: 0x%x, Handler: %pS\n", 
+	       ucCID, arUniCmdTable[ucCID]);
+    
+	/* collect unified cmd info */
 	status = arUniCmdTable[ucCID](prAdapter, &info);
-	if (status != WLAN_STATUS_SUCCESS)
-		goto done;
+    
+	DBGLOG(REQ, ERROR, "[AUTH-DBG] UniCmd handler returned: 0x%x\n", status);
+    
+	if (status != WLAN_STATUS_SUCCESS) {
+	  DBGLOG(REQ, ERROR, "[AUTH-DBG] *** UniCmd PREPARATION FAILED ***\n");
+	  DBGLOG(REQ, ERROR, "[AUTH-DBG] ucCID=0x%x returned status=0x%x\n", ucCID, status);
+	  goto done;
+	}
 
 	link = &info.rUniCmdList;
 

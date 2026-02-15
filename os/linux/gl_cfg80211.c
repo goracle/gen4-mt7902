@@ -1151,6 +1151,10 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 #if CFG_SUPPORT_802_11R
 	uint32_t u4InfoBufLen = 0;
 #endif
+	/* bounded scan wait parameters */
+	const int scan_wait_step_ms = 10;
+	const int scan_wait_max_ms = 3000; /* 3s max wait for scan to finish */
+	int scan_wait_elapsed = 0;
 
 	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
 	ASSERT(prGlueInfo);
@@ -1165,6 +1169,10 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	DBGLOG(REQ, INFO, "auth_type:%d\n", req->auth_type);
 
 	prConnSettings = aisGetConnSettings(prGlueInfo->prAdapter, ucBssIndex);
+	if (!prConnSettings) {
+		DBGLOG(REQ, ERROR, "No conn settings for BSS %u\n", ucBssIndex);
+		return -ENODEV;
+	}
 
 	/* ====================================================================
 	 * <1> Set OP mode
@@ -1174,17 +1182,56 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	else
 		rOpMode.eOpMode = prConnSettings->eOPMode;
 
+	/* Wait for any ongoing scan to finish, but bounded to avoid indefinite blocking */
+	{
+		struct AIS_SPECIFIC_BSS_INFO *prAisSpecBssInfo = NULL;
+		struct SCAN_INFO *prScanInfo = NULL;
+		struct AIS_FSM_INFO *prAisFsmInfo = NULL;
+
+		prAisSpecBssInfo = aisGetAisSpecBssInfo(prGlueInfo->prAdapter, ucBssIndex);
+		prScanInfo = &prGlueInfo->prAdapter->rWifiVar.rScanInfo;
+		prAisFsmInfo = aisGetAisFsmInfo(prGlueInfo->prAdapter, ucBssIndex);
+
+		if (!prAisSpecBssInfo || !prAisFsmInfo || !prScanInfo) {
+			DBGLOG(REQ, WARN, "Scan/ais structures missing, skipping bounded wait\n");
+		} else {
+			DBGLOG(REQ, WARN, "[AUTH-DBG] Pre-flight checks:\n");
+			DBGLOG(REQ, WARN, "[AUTH-DBG]   AIS State: %u (0=IDLE)\n", prAisFsmInfo->eCurrentState);
+			DBGLOG(REQ, WARN, "[AUTH-DBG]   Scan State: %u (0=IDLE)\n", prScanInfo->eCurrentState);
+			DBGLOG(REQ, WARN, "[AUTH-DBG]   fgIsScanning: %u\n", prAisFsmInfo->fgIsScanning);
+
+			while ((prAisFsmInfo->eCurrentState == AIS_STATE_SCAN ||
+				prScanInfo->eCurrentState == SCAN_STATE_SCANNING) &&
+				scan_wait_elapsed < scan_wait_max_ms) {
+				kalMsleep(scan_wait_step_ms);
+				scan_wait_elapsed += scan_wait_step_ms;
+			}
+
+			if (scan_wait_elapsed >= scan_wait_max_ms) {
+				DBGLOG(REQ, WARN, "[AUTH-FIX] Scan wait timed out after %d ms\n", scan_wait_elapsed);
+			} else {
+				DBGLOG(REQ, WARN, "[AUTH-FIX] Scan finished after %d ms\n", scan_wait_elapsed);
+			}
+		}
+	}
+
+	/* small settle delay after scan completes or times out */
+	kalMsleep(50);
+	DBGLOG(REQ, WARN, "[AUTH-FIX] Post-scan settle delay (50ms) complete\n");
+
+	/* Send OP mode set as an OID (async) and accept pending as success-in-progress */
 	rStatus = kalIoctl(prGlueInfo,
 			   wlanoidSetInfrastructureMode,
 			   &rOpMode, sizeof(rOpMode),
 			   FALSE, FALSE, TRUE, &u4BufLen);
 
-	if (rStatus != WLAN_STATUS_SUCCESS) {
-		DBGLOG(INIT, ERROR,
-			"wlanoidSetInfrastructureMode failed: 0x%x\n",
-			rStatus);
-		return -EFAULT;
+	DBGLOG(INIT, INFO, "wlanoidSetInfrastructureMode returned: 0x%x\n", rStatus);
+
+	if (rStatus != WLAN_STATUS_SUCCESS && rStatus != WLAN_STATUS_PENDING) {
+		DBGLOG(INIT, ERROR, "wlanoidSetInfrastructureMode failed: 0x%x\n", rStatus);
+		return -EIO;
 	}
+	/* note: treat PENDING as success-in-progress; completion should be signalled via OID event path */
 
 	/* ====================================================================
 	 * <2> Set Auth data (for SAE, etc.)
@@ -1247,7 +1294,8 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 #if CFG_SUPPORT_REPLAY_DETECTION
 	/* Reset replay detection state */
 	prDetRplyInfo = aisGetDetRplyInfo(prGlueInfo->prAdapter, ucBssIndex);
-	kalMemZero(prDetRplyInfo, sizeof(struct GL_DETECT_REPLAY_INFO));
+	if (prDetRplyInfo)
+		kalMemZero(prDetRplyInfo, sizeof(struct GL_DETECT_REPLAY_INFO));
 #endif
 
 	/* ====================================================================
@@ -1342,14 +1390,14 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 				   prWepKey, prWepKey->u4Length,
 				   FALSE, FALSE, TRUE, &u4BufLen);
 
-		if (rStatus != WLAN_STATUS_SUCCESS) {
+		if (rStatus != WLAN_STATUS_SUCCESS && rStatus != WLAN_STATUS_PENDING) {
 			DBGLOG(REQ, ERROR,
 				"wlanoidSetAddWep failed: 0x%x\n", rStatus);
 			return -EFAULT;
 		}
 
 		DBGLOG(REQ, INFO,
-			"WEP key installed: idx=%u len=%u tx=%d\n",
+			"WEP key queued/installed: idx=%u len=%u tx=%d\n",
 			prWepKey->u4KeyIndex & ~IS_TRANSMIT_KEY,
 			prWepKey->u4KeyLength,
 			!!(prWepKey->u4KeyIndex & IS_TRANSMIT_KEY));
@@ -1391,7 +1439,6 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 				break;
 			}
 
-
 			if (ucElemId == ELEM_ID_SSID) {
 				/* Found SSID IE */
 				if (ucElemLen > 0 && ucElemLen <= 32) {
@@ -1399,8 +1446,8 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 					rNewSsid.pucSsid = (uint8_t *)&pucIE[2];
 					rNewSsid.u4SsidLen = ucElemLen;
 
-					/* FIXED: Create null-terminated copy for safe logging */
-					char ssid_str[33];  /* 32 bytes + null */
+					/* Create null-terminated copy for safe logging */
+					char ssid_str[33];
 					kalMemCopy(ssid_str, &pucIE[2], ucElemLen);
 					ssid_str[ucElemLen] = '\0';
 
@@ -1439,7 +1486,7 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 			rStatus = kalIoctl(prGlueInfo, wlanoidUpdateFtIes,
 					   (void *)req->ie, req->ie_len,
 					   FALSE, FALSE, FALSE, &u4InfoBufLen);
-			if (rStatus != WLAN_STATUS_SUCCESS) {
+			if (rStatus != WLAN_STATUS_SUCCESS && rStatus != WLAN_STATUS_PENDING) {
 				DBGLOG(REQ, ERROR,
 					"wlanoidUpdateFtIes failed: 0x%x\n",
 					rStatus);
@@ -1467,10 +1514,11 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 				   sizeof(struct PARAM_CONNECT),
 				   FALSE, FALSE, FALSE, &u4BufLen);
 
-		if (rStatus != WLAN_STATUS_SUCCESS) {
+		/* Accept success-in-progress (PENDING) for async firmware */
+		if (rStatus != WLAN_STATUS_SUCCESS && rStatus != WLAN_STATUS_PENDING) {
 			DBGLOG(REQ, ERROR,
 				"wlanoidSetConnect failed: 0x%x\n", rStatus);
-			return -EINVAL;
+			return -EIO;
 		}
 	} else {
 		/* Already connected, just send auth frame */
@@ -1479,11 +1527,11 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 					    MAC_ADDR_LEN,
 					    FALSE, FALSE, TRUE,
 					    &u4BufLen, ucBssIndex);
-		if (rStatus != WLAN_STATUS_SUCCESS) {
+		if (rStatus != WLAN_STATUS_SUCCESS && rStatus != WLAN_STATUS_PENDING) {
 			DBGLOG(REQ, ERROR,
 				"wlanoidSendAuthAssoc failed: 0x%x\n",
 				rStatus);
-			return -EINVAL;
+			return -EIO;
 		}
 	}
 
@@ -1495,11 +1543,23 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 				   prWepKey, prWepKey->u4Length,
 				   FALSE, FALSE, TRUE, &u4BufLen);
 
-		if (rStatus != WLAN_STATUS_SUCCESS) {
+		if (rStatus != WLAN_STATUS_SUCCESS && rStatus != WLAN_STATUS_PENDING) {
 			DBGLOG(REQ, ERROR,
 				"Deferred wlanoidSetAddWep failed: 0x%x\n",
 				rStatus);
 			return -EFAULT;
+		}
+	}
+
+	/* Return 0 to indicate the operation was started (cfg80211 semantics).
+	 * Final success/failure must be sent asynchronously via cfg80211_* result APIs.
+	 */
+	/* Mark that cfg80211/userspace is driving this connection */
+	{
+		struct AIS_FSM_INFO *prAisFsmInfo = aisGetAisFsmInfo(prGlueInfo->prAdapter, ucBssIndex);
+		if (prAisFsmInfo) {
+			prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
+			DBGLOG(REQ, INFO, "[CFG80211] Marked cfg80211-connecting for BSS %u\n", ucBssIndex);
 		}
 	}
 

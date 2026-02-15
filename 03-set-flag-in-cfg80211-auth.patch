@@ -1,0 +1,21 @@
+--- a/os/linux/gl_cfg80211.c
++++ b/os/linux/gl_cfg80211.c
+@@ -1437,6 +1437,17 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
+ 		}
+ 	}
+ 
++	/* ====================================================================
++	 * <10.5> Mark that cfg80211/userspace is driving this connection
++	 *        This prevents AIS FSM from auto-inserting reconnect requests
++	 * ==================================================================== */
++	{
++		struct AIS_FSM_INFO *prAisFsmInfo = aisGetAisFsmInfo(prGlueInfo->prAdapter, ucBssIndex);
++		if (prAisFsmInfo) {
++			prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
++			DBGLOG(REQ, INFO, "[CFG80211] Marked cfg80211-connecting for BSS %u\n", ucBssIndex);
++		}
++	}
++
+ 	/* Return 0 to indicate the operation was started (cfg80211 semantics).
+ 	 * Final success/failure must be sent asynchronously via cfg80211_* result APIs.
+ 	 */

@@ -2859,8 +2859,16 @@ enum ENUM_AIS_STATE aisFsmStateSearchAction(IN struct ADAPTER *prAdapter,
 
 			/* issue reconnect request, */
 			/*and retreat to idle state for scheduling */
-			aisFsmInsertRequest(prAdapter, AIS_REQUEST_RECONNECT,
-				ucBssIndex);
+			/* Check if cfg80211/userspace is driving this connection */
+			if (prAisFsmInfo->fgIsCfg80211Connecting) {
+				DBGLOG(AIS, INFO,
+					"[AIS%d] cfg80211 owns connection (skip driver auto-reconnect phase 0)\n",
+					ucBssIndex);
+				eState = AIS_STATE_IDLE;
+			} else {
+							aisFsmInsertRequest(prAdapter, AIS_REQUEST_RECONNECT,
+								ucBssIndex);
+			}
 			eState = AIS_STATE_IDLE;
 		}
 #if CFG_SUPPORT_ADHOC
@@ -2889,9 +2897,15 @@ enum ENUM_AIS_STATE aisFsmStateSearchAction(IN struct ADAPTER *prAdapter,
 		/* 4 <B> We've do SCAN already, now wait in some STATE. */
 		else {
 			if (prConnSettings->eOPMode == NET_TYPE_INFRA) {
-
-				/* issue reconnect request, and */
-				/* retreat to idle state for scheduling */
+				/* Check if cfg80211/userspace is driving this connection */
+				if (prAisFsmInfo->fgIsCfg80211Connecting) {
+					DBGLOG(AIS, INFO,
+						"[AIS%d] cfg80211 owns connection (skip driver auto-reconnect phase 1)\n",
+						ucBssIndex);
+					eState = AIS_STATE_IDLE;
+					return eState;
+				}
+				
 				aisFsmInsertRequest(prAdapter,
 						    AIS_REQUEST_RECONNECT,
 						    ucBssIndex);
@@ -3442,6 +3456,9 @@ enum ENUM_AIS_STATE aisFsmJoinCompleteAction(IN struct ADAPTER *prAdapter,
 				prAisFsmInfo->rJoinReqTime = 0;
 
 			/* Support AP Selection */
+		/* Clear cfg80211 connecting flag on successful join */
+		prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+
 			prAisFsmInfo->prTargetBssDesc->fgDeauthLastTime = FALSE;
 			prAisFsmInfo->ucJoinFailCntAfterScan = 0;
 			/* end Support AP Selection */
@@ -3524,6 +3541,10 @@ enum ENUM_AIS_STATE aisFsmJoinCompleteAction(IN struct ADAPTER *prAdapter,
 
 				if (prBssDesc == NULL) {
 					DBGLOG(AIS, WARN,
+					
+					/* Clear cfg80211 connecting flag on unrecoverable failure */
+					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+					
 					"prBssDesc == NULL ->JOIN FAIL");
 					/* Free STA-REC */
 					if (prStaRec !=
@@ -3540,6 +3561,9 @@ enum ENUM_AIS_STATE aisFsmJoinCompleteAction(IN struct ADAPTER *prAdapter,
 					DBGLOG(AIS, WARN,
 						"no bss find, Join failure\n");
 #endif
+					/* Clear cfg80211 connecting flag on join failure */
+					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+
 					eNextState = AIS_STATE_JOIN_FAILURE;
 
 					break;
@@ -3650,15 +3674,24 @@ enum ENUM_AIS_STATE aisFsmJoinCompleteAction(IN struct ADAPTER *prAdapter,
 						SEC_TO_SYSTIME
 						(AIS_JOIN_TIMEOUT))) {
 					/* 4.a temrminate join operation */
+					/* Clear cfg80211 connecting flag on join failure */
+					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+
 					eNextState = AIS_STATE_JOIN_FAILURE;
 				} else if (prAisFsmInfo->rJoinReqTime != 0
 					   && prBssDesc->ucJoinFailureCount >=
 					   SCN_BSS_JOIN_FAIL_THRESOLD
 					   && prBssDesc->u2JoinStatus) {
+					/* Clear cfg80211 connecting flag before giving up */
+					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+					
 					/* AP reject STA for
 					 * STATUS_CODE_ASSOC_DENIED_AP_OVERLOAD
 					 * , or AP block STA
 					 */
+					/* Clear cfg80211 connecting flag on join failure */
+					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+
 					eNextState = AIS_STATE_JOIN_FAILURE;
 				} else {
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
@@ -3666,8 +3699,14 @@ enum ENUM_AIS_STATE aisFsmJoinCompleteAction(IN struct ADAPTER *prAdapter,
 					 * not to try driver reconnect
 					 */
 					prAdapter->rWifiVar.
+					
+					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+					
 						rConnSettings[ucBssIndex].
 						bss = NULL;
+					/* Clear cfg80211 connecting flag on join failure */
+					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+
 					eNextState = AIS_STATE_JOIN_FAILURE;
 					DBGLOG(AIS, WARN,
 						"Join fail, disconnect\n");
@@ -5071,6 +5110,9 @@ void aisFsmRunEventJoinTimeout(IN struct ADAPTER *prAdapter,
 			/* 3.4 Retreat to AIS_STATE_JOIN_FAILURE to
 			 * terminate join operation
 			 */
+			/* Clear cfg80211 connecting flag on join failure */
+			prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+
 			eNextState = AIS_STATE_JOIN_FAILURE;
 		}
 #endif
