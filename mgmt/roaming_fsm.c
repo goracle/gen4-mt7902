@@ -800,20 +800,45 @@ void roamingFsmRunEventAbort(IN struct ADAPTER *prAdapter,
  * @return none
  */
 /*----------------------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
+/*!
+ * @brief Process events from firmware
+ *
+ * @param [IN P_ADAPTER_T]       prAdapter
+ * [IN P_ROAMING_PARAM_T] prParam
+ *
+ * @return none
+ */
+/*----------------------------------------------------------------------------*/
 uint32_t roamingFsmProcessEvent(IN struct ADAPTER *prAdapter,
 	IN struct CMD_ROAMING_TRANSIT *prTransit)
 {
 	uint8_t ucBssIndex = prTransit->ucBssidx;
+	struct AIS_FSM_INFO *prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 	int32_t rssi;
 #endif
 
 	struct net_device *prNetDev = NULL;
 
+	/* ARCH SOVEREIGNTY: Kernel Control Enforcement
+	 * If fgIsCfg80211Connecting is set, it means iwd/cfg80211 has 
+	 * explicit control over the BSSID and Frequency. We must ignore 
+	 * firmware-initiated roaming events to prevent unauthorized band-switching.
+	 */
+	if (prAisFsmInfo->fgIsCfg80211Connecting) {
+		DBGLOG(ROAMING, INFO, 
+		       "[Sovereign] Ignoring firmware roaming event %u (Kernel is in control)\n", 
+		       prTransit->u2Event);
+		return WLAN_STATUS_SUCCESS;
+	}
+
 	DBGLOG(ROAMING, LOUD,
 	       "[%d] ROAMING Process Events: Current Time = %d\n",
 	       ucBssIndex,
 	       kalGetTimeTick());
+
 	prNetDev = (struct net_device *)wlanGetNetInterfaceByBssIdx(
 		prAdapter->prGlueInfo, ucBssIndex);
 	if (!prNetDev)
@@ -834,14 +859,6 @@ uint32_t roamingFsmProcessEvent(IN struct ADAPTER *prAdapter,
 			kalIndicateCqmRssiNotify(prNetDev,
 				NL80211_CQM_RSSI_THRESHOLD_EVENT_LOW,
 				rssi);
-		}
-		if (prTransit->eReason == ROAMING_REASON_TX_ERR) {
-			/* TBD */
-			/*
-			 * kalIndicateCqmTxeNotify(
-			 *	prNetDev,
-			 *	prConnSettings->aucBSSID, 0, 0, 0);
-			 */
 		}
 #else
 		roamingFsmRunEventDiscovery(prAdapter, prTransit);

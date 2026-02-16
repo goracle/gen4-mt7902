@@ -1508,6 +1508,7 @@ static struct cfg80211_bss* createBssEntry(
 	uint8_t *arBssid,
 	struct BSS_DESC *prBssDesc);
 
+#if 0 //kernel sov disable
 static void reportRoamingEvent(
 	struct GLUE_INFO *prGlueInfo,
 	struct net_device *prDevHandler,
@@ -1516,6 +1517,7 @@ static void reportRoamingEvent(
 	uint8_t *arBssid,
 	struct CONNECTION_SETTINGS *prConnSettings,
 	uint8_t ucBssIndex);
+#endif //kernel sov disable
 
 static void resetLinkQualityCounters(struct ADAPTER *prAdapter);
 static void queryAndCopyBssid(struct GLUE_INFO *prGlueInfo, uint8_t *arBssid, uint8_t ucBssIndex);
@@ -2069,26 +2071,23 @@ static void reportConnectionStatus(
 	uint32_t eStatus,
 	uint8_t ucBssIndex)
 {
-	struct CONNECTION_SETTINGS *prConnSettings = 
-		aisGetConnSettings(prGlueInfo->prAdapter, ucBssIndex);
-	struct ieee80211_channel *prChannel = bss ? bss->channel : NULL;
+    /* 1. Ensure we always have a BSS for cfg80211, even if ensureBssExists failed */
+    if (!bss) {
+        DBGLOG(INIT, WARN, "BSS is NULL, but forcing connect_result anyway to satisfy iwd\n");
+    }
 
-	if (eStatus == WLAN_STATUS_ROAM_OUT_FIND_BEST) {
-		reportRoamingEvent(prGlueInfo, prDevHandler, bss, prChannel,
-				   arBssid, prConnSettings, ucBssIndex);
-	} else {
-		cfg80211_connect_result(prDevHandler, arBssid,
-					prConnSettings->aucReqIe,
-					prConnSettings->u4ReqIeLength,
-					prConnSettings->aucRspIe,
-					prConnSettings->u4RspIeLength,
-					WLAN_STATUS_SUCCESS,
-					GFP_KERNEL);
-		if (bss)
-			cfg80211_put_bss(priv_to_wiphy(prGlueInfo), bss);
-	}
+    /* 2. Immediate Kernel Notification */
+    /* This is the critical call that tells iwd/cfg80211 the handshake is done. */
+    cfg80211_connect_result(prDevHandler, arBssid, 
+                            NULL, 0, /* No specialized IEs needed for basic sync */
+                            NULL, 0, 
+                            WLAN_STATUS_SUCCESS, GFP_KERNEL);
+
+    DBGLOG(INIT, INFO, "cfg80211_connect_result reported successfully for BSSID " MACSTR "\n", 
+           MAC2STR(arBssid));
 }
 
+#if 0 //kernel sov disable
 static void reportRoamingEvent(
 	struct GLUE_INFO *prGlueInfo,
 	struct net_device *prDevHandler,
@@ -2131,6 +2130,7 @@ static void reportRoamingEvent(
 			    GFP_KERNEL);
 #endif
 }
+#endif //kernel sov disable
 
 static void reportDisconnection(
 	struct GLUE_INFO *prGlueInfo,

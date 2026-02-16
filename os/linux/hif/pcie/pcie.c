@@ -296,32 +296,44 @@ static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	return ret;
 }
 
+
 static void mtk_pci_remove(struct pci_dev *pdev)
 {
-	struct GLUE_INFO *prGlueInfo = pci_get_drvdata(pdev);
-	struct ADAPTER *prAdapter;
+    struct GLUE_INFO *prGlueInfo = pci_get_drvdata(pdev);
+    struct ADAPTER *prAdapter;
 
-	if (!prGlueInfo)
-		return;
+    /* SAFETY CHECK: If probe failed, drvdata is NULL. 
+     * We must simply exit; touching registers here will panic. 
+     */
+    if (!prGlueInfo) {
+        DBGLOG(HAL, WARN, "mtk_pci_remove: NULL glue info (Probe failed?), skipping cleanup\n");
+        return;
+    }
 
-	prAdapter = prGlueInfo->prAdapter;
+    prAdapter = prGlueInfo->prAdapter;
 
-	/* 1. Silence hardware IRQs */
-	if (prAdapter && prAdapter->prHalOps && prAdapter->prHalOps->pfnDisableInterrupt)
-		prAdapter->prHalOps->pfnDisableInterrupt(prAdapter);
+    /* 1. Silence hardware IRQs - ONLY if adapter exists */
+    if (prAdapter && prAdapter->prHalOps && prAdapter->prHalOps->pfnDisableInterrupt) {
+        prAdapter->prHalOps->pfnDisableInterrupt(prAdapter);
+    }
 
-	/* 2. Sync point: ensures any running ISR finishes before code is unmapped */
-	synchronize_irq(pdev->irq);
+    /* 2. Sync point */
+    if (pdev->irq) {
+        synchronize_irq(pdev->irq);
+        /* 3. Drop IRQ line */
+        devm_free_irq(&pdev->dev, pdev->irq, prGlueInfo);
+    }
 
-	/* 3. Drop IRQ line */
-	devm_free_irq(&pdev->dev, pdev->irq, prGlueInfo);
+    /* 4. Invalidate VTable */
+    if (prAdapter)
+        prAdapter->prHalOps = NULL;
 
-	/* 4. Invalidate the VTable pointer */
-	if (prAdapter)
-		prAdapter->prHalOps = NULL;
-
-	/* 5. Cleanup - pfWlanRemove takes 0 arguments in this tree */
-	pfWlanRemove();
+    /* 5. Cleanup - Check if pfWlanRemove is valid before calling */
+    if (pfWlanRemove)
+        pfWlanRemove();
+        
+    /* Clear driver data so subsequent calls don't crash */
+    pci_set_drvdata(pdev, NULL);
 }
 
 /*----------------------------------------------------------------------------*/
@@ -795,51 +807,72 @@ void glSetHifInfo(struct GLUE_INFO *prGlueInfo, unsigned long ulCookie)
 {
 	struct GL_HIF_INFO *prHif = NULL;
 	struct HIF_MEM_OPS *prMemOps;
+	struct pci_dev *pdev = (struct pci_dev *)ulCookie;
+
+	if (!prGlueInfo || !pdev) {
+		pr_err("[Sovereignty] CRITICAL: glSetHifInfo called with NULL context!\n");
+		return;
+	}
 
 	prHif = &prGlueInfo->rHifInfo;
-
-	prHif->pdev = (struct pci_dev *)ulCookie;
 	prMemOps = &prHif->rMemOps;
-	prHif->prDmaDev = prHif->pdev;
 
+	/* Basic PCIe setup */
+	prHif->pdev = pdev;
+	prHif->prDmaDev = pdev;
 	prHif->CSRBaseAddress = CSRBaseAddress;
 
-	pci_set_drvdata(prHif->pdev, prGlueInfo);
+	/* * Link the glue info to pdev immediately. 
+	 * This is our "lifeline" for the mtk_pci_remove safety check. 
+	 */
+	pci_set_drvdata(pdev, prGlueInfo);
+	SET_NETDEV_DEV(prGlueInfo->prDevHandler, &pdev->dev);
 
-	SET_NETDEV_DEV(prGlueInfo->prDevHandler, &prHif->pdev->dev);
+	/* * SOVEREIGNTY: PCIe HARDENING
+	 * We disable ASPM at the Linux Kernel level before the driver even 
+	 * touches the registers. This prevents the Vivobook's firmware from 
+	 * trying to "help" us save power while we are initializing.
+	 */
+	pci_disable_link_state(pdev, PCIE_LINK_STATE_L0S | 
+				     PCIE_LINK_STATE_L1 | 
+				     PCIE_LINK_STATE_CLKPM);
 
-	/* Disable runtime PM — MTK firmware assumes the platform never does
-	 * surprise PM. On Android the WiFi service owns this. On Linux, nothing
-	 * does. This card draws ~2mW idle anyway. */
-	pm_runtime_forbid(&prHif->pdev->dev);
-	pm_runtime_set_active(&prHif->pdev->dev);
-	/* Force ASPM off - link state transitions can wedge PDMA during reset */
-	glBusConfigASPM(prHif->pdev, 0);
+	/* Disable Linux Runtime PM - Keep the rail hot */
+	pm_runtime_forbid(&pdev->dev);
+	pm_runtime_get_noresume(&pdev->dev);
+	pm_runtime_set_active(&pdev->dev);
 
+	/* Call our (now stubbed/neutered) driver-level ASPM config */
+	glBusConfigASPM(pdev, 0);
+	glBusConfigASPML1SS(pdev, 0);
+
+	/* Initialize internal states */
 	prGlueInfo->u4InfType = MT_DEV_INF_PCIE;
-
 	prHif->rErrRecoveryCtl.eErrRecovState = ERR_RECOV_STOP_IDLE;
 	prHif->rErrRecoveryCtl.u4Status = 0;
 
+	/* Recovery Timer Setup */
 #if KERNEL_VERSION(4, 15, 0) <= LINUX_VERSION_CODE
 	timer_setup(&prHif->rSerTimer, halHwRecoveryTimeout, 0);
 #else
 	init_timer(&prHif->rSerTimer);
 	prHif->rSerTimer.function = halHwRecoveryTimeout;
 	prHif->rSerTimer.data = (unsigned long)prGlueInfo;
-	prHif->rSerTimer.expires =
-		jiffies + HIF_SER_TIMEOUT * HZ / MSEC_PER_SEC;
 #endif
 
+	/* Networking Queues */
 	INIT_LIST_HEAD(&prHif->rTxCmdQ);
 	INIT_LIST_HEAD(&prHif->rTxDataQ);
 	prHif->u4TxDataQLen = 0;
 
+	/* Power State Defaults */
 	prHif->fgIsPowerOff = true;
 	prHif->fgIsDumpLog  = false;
+	
+	/* DebugFS and logging */
 	pcie_recovery_debugfs_set_hif(prHif);
-	prHif->fgIsDumpLog = false;
 
+	/* Register DMA and Memory Operations */
 	prMemOps->allocTxDesc = pcieAllocDesc;
 	prMemOps->allocRxDesc = pcieAllocDesc;
 	prMemOps->allocTxCmdBuf = NULL;
@@ -860,7 +893,10 @@ void glSetHifInfo(struct GLUE_INFO *prGlueInfo, unsigned long ulCookie)
 	prMemOps->freePacket = pcieFreePacket;
 	prMemOps->dumpTx = pcieDumpTx;
 	prMemOps->dumpRx = pcieDumpRx;
+
+	DBGLOG(HAL, INFO, "[Sovereignty] HIF Info initialized and PCIe bus hardened.\n");
 }
+
 
 /* short helper */
 void dump_pci_state(struct pci_dev *pdev)
@@ -1904,97 +1940,28 @@ void kalRemoveProbe(IN struct GLUE_INFO *prGlueInfo)
 
 
 #if CFG_SUPPORT_PCIE_ASPM
+#if 0
 static void pcieSetASPML1SS(struct pci_dev *dev, int i4Enable)
 {
-	int pos;
-	uint32_t u4Reg = 0;
-
-	pos = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_L1PMSS);
-
-	if (!pos) {
-		DBGLOG(INIT, INFO, "L1 PM Substate capability is not found!\n");
-		return;
-	}
-
-	pci_read_config_dword(dev, pos + PCI_L1PMSS_CTR1, &u4Reg);
-	u4Reg &= ~PCI_L1PMSS_ENABLE_MASK;
-	u4Reg |= i4Enable;
-	pci_write_config_dword(dev, pos + PCI_L1PMSS_CTR1, u4Reg);
+  return;
 }
 static void pcieSetASPML1(struct pci_dev *dev, int i4Enable)
 {
-	uint16_t u2Reg = 0;
-	int i4Pos = dev->pcie_cap;
-
-	pci_read_config_word(dev, i4Pos + PCI_EXP_LNKCTL, &u2Reg);
-	u2Reg &= ~PCI_L1PM_ENABLE_MASK;
-	u2Reg |= i4Enable;
-	pci_write_config_word(dev, i4Pos + PCI_EXP_LNKCTL, u2Reg);
+  return;
 }
 static bool pcieCheckASPML1SS(struct pci_dev *dev, int i4BitMap)
 {
-	int i4Pos;
-	uint32_t u4Reg = 0;
-
-	i4Pos = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_L1PMSS);
-
-	if (!i4Pos) {
-		DBGLOG(INIT, INFO, "L1 PM Substate capability is not found!\n");
-		return FALSE;
-	}
-
-	pci_read_config_dword(dev, i4Pos + PCI_L1PMSS_CAP, &u4Reg);
-	if (i4BitMap != 0) {
-		if ((i4BitMap & PCI_L1PM_CAP_ASPM_L12) &&
-				(!(u4Reg & PCI_L1PM_CAP_ASPM_L12))) {
-			DBGLOG(INIT, INFO, "not support ASPM L1.2!\n");
-			return FALSE;
-		}
-		if ((i4BitMap & PCI_L1PM_CAP_ASPM_L11) &&
-				(!(u4Reg & PCI_L1PM_CAP_ASPM_L11))) {
-			DBGLOG(INIT, INFO, "not support ASPM L1.1!\n");
-			return FALSE;
-		}
-	}
-	return TRUE;
+	return FALSE;
 }
+#endif
 bool glBusConfigASPM(struct pci_dev *dev, int i4Enable)
 {
 
 /* FORCED DISABLE: Prevent PCIe link collapse on Vivobook */
     return FALSE;
-
-	uint32_t u4Reg = 0;
-	struct pci_dev *parent = dev->bus->self;
-	int pos = parent->pcie_cap;
-
-
-	pci_read_config_dword(parent, pos + PCI_EXP_LNKCAP, &u4Reg);
-	if (PCIE_ASPM_CHECK_L1(u4Reg)) {
-		pos = dev->pcie_cap;
-		pci_read_config_dword(dev, pos + PCI_EXP_LNKCAP, &u4Reg);
-		if (PCIE_ASPM_CHECK_L1(u4Reg)) {
-			pcieSetASPML1(parent, i4Enable);
-			pcieSetASPML1(dev, i4Enable);
-			DBGLOG(INIT, INFO, "ASPM STATUS %d\n", i4Enable);
-			return TRUE;
-		}
-	}
-	return FALSE;
-
 }
 bool glBusConfigASPML1SS(struct pci_dev *dev, int i4Enable)
 {
-	struct pci_dev *parent = dev->bus->self;
-
-	if (pcieCheckASPML1SS(parent, i4Enable)) {
-		if (pcieCheckASPML1SS(dev, i4Enable)) {
-			pcieSetASPML1SS(parent, i4Enable);
-			pcieSetASPML1SS(dev, i4Enable);
-			DBGLOG(INIT, INFO, "Config ASPM-L1SS\n");
-			return TRUE;
-		}
-	}
 	return FALSE;
 }
 

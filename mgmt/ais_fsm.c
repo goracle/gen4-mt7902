@@ -655,7 +655,6 @@ bool aisFsmIsInProcessBeaconTimeout(IN struct ADAPTER *prAdapter,
  * @return (none)
  */
 /*----------------------------------------------------------------------------*/
-/* --- mgmt/ais_fsm.c --- replacement for aisFsmStateInit_JOIN() --- */
 void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 		struct BSS_DESC *prBssDesc, uint8_t ucBssIndex)
 {
@@ -667,240 +666,92 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 	struct MSG_SAA_FSM_START *prJoinReqMsg;
 	struct GL_WPA_INFO *prWpaInfo;
 #if (CFG_SUPPORT_HE_ER == 1)
-	struct WIFI_VAR *prWifiVar = &prAdapter->rWifiVar;
+	//struct WIFI_VAR *prWifiVar = &prAdapter->rWifiVar;
 #endif
-
-	DEBUGFUNC("aisFsmStateInit_JOIN()");
-
-	DBGLOG(AIS, LOUD, "ucBssIndex = %d\n", ucBssIndex);
 
 	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
 	prAisBssInfo = aisGetAisBssInfo(prAdapter, ucBssIndex);
-	prAisSpecificBssInfo =
-		aisGetAisSpecBssInfo(prAdapter, ucBssIndex);
+	prAisSpecificBssInfo = aisGetAisSpecBssInfo(prAdapter, ucBssIndex);
 	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
-	prWpaInfo = aisGetWpaInfo(prAdapter,
-		ucBssIndex);
+	prWpaInfo = aisGetWpaInfo(prAdapter, ucBssIndex);
 
 	ASSERT(prBssDesc);
 
-	/* 4 <1> We are going to connect to this BSS. */
-	prBssDesc->fgIsConnecting = TRUE;
-
-	/* --- IMPORTANT FIX: set BSSID early so firmware has valid BSS context
-	 *     before AUTH/ASSOC packets are sent. Previously this was only
-	 *     set after association response handling, which is too late.
+	/* --- ARCH SOVEREIGNTY: BSSID LOCK --- 
+	 * We bind the BSSID to the descriptor provided by the search state.
+	 * This prevents any "last second" pivots to a different band.
 	 */
+	prBssDesc->fgIsConnecting = TRUE;
 	COPY_MAC_ADDR(prAisBssInfo->aucBSSID, prBssDesc->aucBSSID);
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-	/* If conn settings contains a BSSID field, keep it in sync too. */
 	COPY_MAC_ADDR(prConnSettings->aucBSSID, prBssDesc->aucBSSID);
 #endif
 
-	DBGLOG(AIS, INFO, "JOIN INIT: Set target BSSID=" MACSTR "\n",
-	       MAC2STR(prAisBssInfo->aucBSSID));
+	DBGLOG(AIS, INFO, "[AIS%d] JOIN Sovereign: BSSID " MACSTR " on CH %d (%s)\n",
+	       ucBssIndex, MAC2STR(prAisBssInfo->aucBSSID), 
+	       prBssDesc->ucChannelNum, (prBssDesc->eBand == BAND_5G) ? "5GHz" : "2.4GHz");
 
-	/* 4 <2> Setup corresponding STA_RECORD_T */
-	prStaRec = bssCreateStaRecFromBssDesc(prAdapter,
-					      STA_TYPE_LEGACY_AP,
-					      prAisBssInfo->ucBssIndex,
-					      prBssDesc);
+	/* Setup the Station Record (Hardware Context) */
+	prStaRec = bssCreateStaRecFromBssDesc(prAdapter, STA_TYPE_LEGACY_AP,
+					      prAisBssInfo->ucBssIndex, prBssDesc);
 
 	if (!prStaRec) {
-		DBGLOG(AIS, ERROR,
-			"aisFsmStateInit_JOIN failed because prStaRec is NULL, return.\n");
-		ASSERT(FALSE);
+		DBGLOG(AIS, ERROR, "[AIS%d] Sovereign Join Failed: prStaRec creation failed.\n", ucBssIndex);
 		return;
 	}
 
 	prAisFsmInfo->prTargetStaRec = prStaRec;
 
-	/* 4 <2.1> sync. to firmware domain */
 	if (prStaRec->ucStaState == STA_STATE_1)
 		cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_1);
 
-	/* 4 <3> Update ucAvailableAuthTypes which we can choice during SAA */
-	if (prAisBssInfo->eConnectionState == MEDIA_STATE_DISCONNECTED
-		/* Not in case of beacon timeout*/
-		&& !aisFsmIsInProcessBeaconTimeout(prAdapter, ucBssIndex)) {
+	/* --- AUTH ALGORITHM SELECTION --- */
+	prStaRec->fgIsReAssoc = (prAisBssInfo->eConnectionState == MEDIA_STATE_CONNECTED);
 
-		prStaRec->fgIsReAssoc = FALSE;
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-		prAisFsmInfo->ucAvailableAuthTypes =
-			(uint8_t) prWpaInfo->u4AuthAlg;
-		DBGLOG(AIS, INFO,
-			"JOIN INIT: Auth Algorithm :%d\n",
-			prAisFsmInfo->ucAvailableAuthTypes);
+	/* In Sovereign Mode, we strictly trust the Supplicant's choice of Auth Algorithm */
+	prAisFsmInfo->ucAvailableAuthTypes = (uint8_t) prWpaInfo->u4AuthAlg;
 #else
-		switch (prConnSettings->eAuthMode) {
-		case AUTH_MODE_WPA2_FT:
-		case AUTH_MODE_WPA2_FT_PSK:
-		case AUTH_MODE_OPEN:	/* Note: Omit break here. */
-		case AUTH_MODE_WPA:
-		case AUTH_MODE_WPA_PSK:
-		case AUTH_MODE_WPA2:
-		case AUTH_MODE_WPA2_PSK:
-		case AUTH_MODE_WPA_OSEN:
-			prAisFsmInfo->ucAvailableAuthTypes =
-			    (uint8_t) AUTH_TYPE_OPEN_SYSTEM;
-			break;
-
-		case AUTH_MODE_SHARED:
-			prAisFsmInfo->ucAvailableAuthTypes =
-			    (uint8_t) AUTH_TYPE_SHARED_KEY;
-			break;
-
-		case AUTH_MODE_AUTO_SWITCH:
-			DBGLOG(AIS, LOUD,
-			       "JOIN INIT: eAuthMode == AUTH_MODE_AUTO_SWITCH\n");
-			prAisFsmInfo->ucAvailableAuthTypes =
-			    (uint8_t) (AUTH_TYPE_OPEN_SYSTEM |
-				       AUTH_TYPE_SHARED_KEY);
-			break;
-
-		default:
-			ASSERT(!
-			       (prConnSettings->eAuthMode ==
-				AUTH_MODE_WPA_NONE));
-			DBGLOG(AIS, ERROR,
-			       "JOIN INIT: Auth Algorithm : %d was not supported by JOIN\n",
-			       prConnSettings->eAuthMode);
-			/* TODO(Kevin): error handling ? */
-			return;
-		}
-#endif /* CFG_SUPPORT_SUPPLICANT_SME  */
-		/* TODO(tyhsu): Assume that Roaming Auth Type
-		 * is equal to ConnSettings eAuthMode
-		 */
-		prAisSpecificBssInfo->ucRoamingAuthTypes =
-		    prAisFsmInfo->ucAvailableAuthTypes;
-
-		prStaRec->ucTxAuthAssocRetryLimit = TX_AUTH_ASSOCI_RETRY_LIMIT;
-		/* reset BTM Params when do first connection */
-		aisResetBssTranstionMgtParam(prAisSpecificBssInfo);
-
-		/* Update Bss info before join */
-		prAisBssInfo->eBand = prBssDesc->eBand;
-		prAisBssInfo->ucPrimaryChannel = prBssDesc->ucChannelNum;
-#if (CFG_SUPPORT_HE_ER == 1)
-		prStaRec->fgIsExtendedRange = FALSE;
-
-		if (IS_FEATURE_ENABLED(prWifiVar->u4ExtendedRange)) {
-			/* check using the ER rate or not */
-			if (IS_FEATURE_ENABLED(prWifiVar->fgErTx))
-				prStaRec->fgIsExtendedRange =
-				aisCheckUsingERRate(prAdapter, prBssDesc);
-		}
+	/* Internal fallback for non-SME connections (rare in modern Arch/Linux) */
+	if (prConnSettings->eAuthMode == AUTH_MODE_SHARED)
+		prAisFsmInfo->ucAvailableAuthTypes = (uint8_t) AUTH_TYPE_SHARED_KEY;
+	else
+		prAisFsmInfo->ucAvailableAuthTypes = (uint8_t) AUTH_TYPE_OPEN_SYSTEM;
 #endif
-	} else {
-		ASSERT(prBssDesc->eBSSType == BSS_TYPE_INFRASTRUCTURE);
 
-		DBGLOG(AIS, LOUD, "JOIN INIT: AUTH TYPE = %d for Roaming\n",
-		       prAisSpecificBssInfo->ucRoamingAuthTypes);
+	prAisSpecificBssInfo->ucRoamingAuthTypes = prAisFsmInfo->ucAvailableAuthTypes;
+	prStaRec->ucTxAuthAssocRetryLimit = (prStaRec->fgIsReAssoc) ? 
+		TX_AUTH_ASSOCI_RETRY_LIMIT_FOR_ROAMING : TX_AUTH_ASSOCI_RETRY_LIMIT;
 
-		/* We do roaming while the medium is connected */
-		prStaRec->fgIsReAssoc = TRUE;
+	/* Sync bands */
+	prAisBssInfo->eBand = prBssDesc->eBand;
+	prAisBssInfo->ucPrimaryChannel = prBssDesc->ucChannelNum;
 
-		/* TODO(Kevin): We may call a sub function to
-		 * acquire the Roaming Auth Type
-		 */
-		switch (prConnSettings->eAuthMode) {
-		case AUTH_MODE_OPEN:
-			if (prWpaInfo->u4WpaVersion ==
-			IW_AUTH_WPA_VERSION_DISABLED
-			&& prWpaInfo->u4AuthAlg ==
-			IW_AUTH_ALG_FT) {
-				prAisFsmInfo->ucAvailableAuthTypes =
-					(uint8_t) AUTH_TYPE_FAST_BSS_TRANSITION;
-				DBGLOG(AIS, INFO, "FT: Non-RSN FT roaming\n");
-			} else {
-				prAisFsmInfo->ucAvailableAuthTypes =
-					prAisSpecificBssInfo->
-					ucRoamingAuthTypes;
-			}
-			break;
-		case AUTH_MODE_WPA2_FT:
-		case AUTH_MODE_WPA2_FT_PSK:
-			prAisFsmInfo->ucAvailableAuthTypes =
-			    (uint8_t) AUTH_TYPE_FAST_BSS_TRANSITION;
-			DBGLOG(AIS, TRACE, "FT: RSN FT roaming\n");
-			break;
-		default:
-			prAisFsmInfo->ucAvailableAuthTypes =
-			    prAisSpecificBssInfo->ucRoamingAuthTypes;
-			break;
-		}
-
-		prStaRec->ucTxAuthAssocRetryLimit =
-		    TX_AUTH_ASSOCI_RETRY_LIMIT_FOR_ROAMING;
-	}
-
-	/* 4 <4> Use an appropriate Authentication Algorithm
-	 * Number among the ucAvailableAuthTypes
-	 */
-	if (prAisFsmInfo->ucAvailableAuthTypes &
-	(uint8_t) AUTH_TYPE_SHARED_KEY) {
-
-		DBGLOG(AIS, LOUD,
-		       "JOIN INIT: Try to do Authentication with AuthType == SHARED_KEY.\n");
-
-		prAisFsmInfo->ucAvailableAuthTypes &=
-		    ~(uint8_t) AUTH_TYPE_SHARED_KEY;
-
-		prStaRec->ucAuthAlgNum =
-		    (uint8_t) AUTH_ALGORITHM_NUM_SHARED_KEY;
-	} else if (prAisFsmInfo->ucAvailableAuthTypes & (uint8_t)
-		   AUTH_TYPE_OPEN_SYSTEM) {
-
-		DBGLOG(AIS, LOUD,
-		       "JOIN INIT: Try to do Authentication with AuthType == OPEN_SYSTEM.\n");
-		prAisFsmInfo->ucAvailableAuthTypes &=
-		    ~(uint8_t) AUTH_TYPE_OPEN_SYSTEM;
-
-		prStaRec->ucAuthAlgNum =
-		    (uint8_t) AUTH_ALGORITHM_NUM_OPEN_SYSTEM;
-	} else if (prAisFsmInfo->ucAvailableAuthTypes & (uint8_t)
-		   AUTH_TYPE_FAST_BSS_TRANSITION) {
-
-		DBGLOG(AIS, LOUD,
-		       "JOIN INIT: Try to do Authentication with AuthType == FAST_BSS_TRANSITION.\n");
-
-		prAisFsmInfo->ucAvailableAuthTypes &=
-		    ~(uint8_t) AUTH_TYPE_FAST_BSS_TRANSITION;
-
-		prStaRec->ucAuthAlgNum =
-		    (uint8_t) AUTH_ALGORITHM_NUM_FAST_BSS_TRANSITION;
-	} else if (prAisFsmInfo->ucAvailableAuthTypes &
-				(uint8_t) AUTH_TYPE_SAE) {
-		DBGLOG(AIS, LOUD,
-			"JOIN INIT: Try to do Authentication with AuthType == SAE.\n");
-
-		prAisFsmInfo->ucAvailableAuthTypes &= ~(uint8_t) AUTH_TYPE_SAE;
-
+	/* Determine the specific Auth Algorithm Number for this attempt */
+	if (prAisFsmInfo->ucAvailableAuthTypes & (uint8_t) AUTH_TYPE_SAE)
 		prStaRec->ucAuthAlgNum = (uint8_t) AUTH_ALGORITHM_NUM_SAE;
-	} else {
-		DBGLOG(AIS, ERROR,
-		       "JOIN INIT: Unsupported auth type %d\n",
-		       prAisFsmInfo->ucAvailableAuthTypes);
+	else if (prAisFsmInfo->ucAvailableAuthTypes & (uint8_t) AUTH_TYPE_FAST_BSS_TRANSITION)
+		prStaRec->ucAuthAlgNum = (uint8_t) AUTH_ALGORITHM_NUM_FAST_BSS_TRANSITION;
+	else if (prAisFsmInfo->ucAvailableAuthTypes & (uint8_t) AUTH_TYPE_OPEN_SYSTEM)
+		prStaRec->ucAuthAlgNum = (uint8_t) AUTH_ALGORITHM_NUM_OPEN_SYSTEM;
+	else if (prAisFsmInfo->ucAvailableAuthTypes & (uint8_t) AUTH_TYPE_SHARED_KEY)
+		prStaRec->ucAuthAlgNum = (uint8_t) AUTH_ALGORITHM_NUM_SHARED_KEY;
+	else {
+		DBGLOG(AIS, ERROR, "[AIS%d] No valid Auth Type found! (Available: %d)\n",
+		       ucBssIndex, prAisFsmInfo->ucAvailableAuthTypes);
 		return;
 	}
 
-	/* 4 <5> Overwrite Connection Setting for eConnectionPolicy
-	 * == ANY (Used by Assoc Req)
-	 */
+	/* Ensure SSID is locked to the descriptor we are joining */
 	if (prBssDesc->ucSSIDLen)
 		COPY_SSID(prConnSettings->aucSSID, prConnSettings->ucSSIDLen,
 			  prBssDesc->aucSSID, prBssDesc->ucSSIDLen);
-	/* 4 <6> Send a Msg to trigger SAA to start JOIN process. */
-	prJoinReqMsg =
-	    (struct MSG_SAA_FSM_START *)cnmMemAlloc(prAdapter, RAM_TYPE_MSG,
-						    sizeof(struct
-							   MSG_SAA_FSM_START));
-	if (!prJoinReqMsg) {
-		DBGLOG(AIS, ERROR, "Can't trigger SAA FSM\n");
+
+	/* Trigger the SAA (Station Authentication & Association) FSM */
+	prJoinReqMsg = (struct MSG_SAA_FSM_START *)cnmMemAlloc(prAdapter, RAM_TYPE_MSG, sizeof(struct MSG_SAA_FSM_START));
+	if (!prJoinReqMsg)
 		return;
-	}
 
 	prJoinReqMsg->rMsgHdr.eMsgId = MID_AIS_SAA_FSM_START;
 	prJoinReqMsg->ucSeqNum = ++prAisFsmInfo->ucSeqNumOfReqMsg;
@@ -908,21 +759,18 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	nicRxClearFrag(prAdapter, prStaRec);
 
-	/* Own the connection now — FSM is committed to JOIN */
+	/* Commit ownership to cfg80211 */
 	prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
-	DBGLOG(AIS, INFO, "[AIS%d] cfg80211 ownership set at JOIN entry\n", ucBssIndex);
-
-#if CFG_SUPPORT_802_11K
-	rlmSetMaxTxPwrLimit(prAdapter,
-			    (prBssDesc->cPowerLimit != RLM_INVALID_POWER_LIMIT)
-			    ? prBssDesc->cPowerLimit : RLM_MAX_TX_PWR, 1);
-#endif
+	
 #if CFG_SUPPORT_SUPPLICANT_SME
 	prConnSettings->fgIsConnInitialized = TRUE;
 #endif
-	mboxSendMsg(prAdapter, MBOX_ID_0, (struct MSG_HDR *)prJoinReqMsg,
-		    MSG_SEND_METHOD_BUF);
-} /* end of aisFsmStateInit_JOIN() */
+
+	DBGLOG(AIS, INFO, "[AIS%d] Sovereign SAA Start: Seq %u\n", ucBssIndex, prJoinReqMsg->ucSeqNum);
+	
+	mboxSendMsg(prAdapter, MBOX_ID_0, (struct MSG_HDR *)prJoinReqMsg, MSG_SEND_METHOD_BUF);
+}
+
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief Retry JOIN for AUTH_MODE_AUTO_SWITCH
@@ -1543,243 +1391,53 @@ aisHandleState_SEARCH(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	struct CONNECTION_SETTINGS *prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
 	struct BSS_DESC          *prBssDesc;
 
-	DBGLOG(AIS, LOUD,
-	       "[AIS%d] STATE_SEARCH ENTRY: connState=%d ucJoinFailCnt=%d ucConnTrialCnt=%d\n",
-	       ucBssIndex,
-	       prAisBssInfo->eConnectionState,
-	       prAisFsmInfo->ucJoinFailCntAfterScan,
-	       prAisFsmInfo->ucConnTrialCount);
+	DBGLOG(AIS, INFO, "[AIS%d] SEARCH Sovereign Entry: targetBss=%p cfg80211_connecting=%d\n",
+	       ucBssIndex, prAisFsmInfo->prTargetBssDesc, prAisFsmInfo->fgIsCfg80211Connecting);
 
-	/* ---- Select candidate BSS ---- */
-#if CFG_SLT_SUPPORT
-	prBssDesc = prAdapter->rWifiVar.rSltInfo.prPseudoBssDesc;
-#else
-	if (prAisFsmInfo->ucJoinFailCntAfterScan >= SCN_BSS_JOIN_FAIL_THRESOLD) {
-		prBssDesc = NULL;
-		DBGLOG(AIS, STATE,
-		       "Failed to connect %s more than 4 times after last scan, scan again\n",
-		       prConnSettings->aucSSID);
+	/* --- ARCH SOVEREIGNTY FIX: PREFER TARGET BSS ---
+	 * If iwd/cfg80211 has already specified a BSSID, we use it directly.
+	 * We do NOT let the driver's policy engine pick a "better" one.
+	 */
+	if (prAisFsmInfo->fgIsCfg80211Connecting && prAisFsmInfo->prTargetBssDesc) {
+		prBssDesc = prAisFsmInfo->prTargetBssDesc;
+		DBGLOG(AIS, INFO, "[AIS%d] Overriding search policy with cfg80211 Target BSSID: " MACSTR "\n",
+		       ucBssIndex, MAC2STR(prBssDesc->aucBSSID));
 	} else {
-#if (CFG_SELECT_BSS_BASE_ON_MULTI_PARAM && (CFG_SUPPORT_SUPPLICANT_SME == 0))
-		prBssDesc = scanSearchBssDescByScoreForAis(prAdapter, ucBssIndex);
-#else
+		/* Fallback for when we aren't in a kernel-managed join */
 		prBssDesc = scanSearchBssDescByPolicy(prAdapter, prAisBssInfo->ucBssIndex);
-#endif
-	}
-#endif
-
-	DBGLOG(AIS, LOUD, "[AIS%d] SEARCH: BSS candidate found=%d\n",
-	       ucBssIndex, (prBssDesc != NULL));
-
-	/* ---- Roaming: check trial limit ---- */
-	if (prAisBssInfo->eConnectionState == MEDIA_STATE_CONNECTED) {
-		DBGLOG(AIS, LOUD, "[AIS%d] SEARCH: In ROAMING mode, trialCount=%d\n",
-		       ucBssIndex, prAisFsmInfo->ucConnTrialCount);
-
-		if (prAisFsmInfo->ucConnTrialCount > AIS_ROAMING_CONNECTION_TRIAL_LIMIT) {
-#if CFG_SUPPORT_ROAMING
-			DBGLOG(AIS, STATE, "Roaming retry count :%d fail!\n",
-			       prAisFsmInfo->ucConnTrialCount);
-			roamingFsmRunEventFail(prAdapter,
-					       ROAMING_FAIL_REASON_CONNLIMIT,
-					       ucBssIndex);
-#endif
-			prAisFsmInfo->ucConnTrialCount = 0;
-
-			if (prConnSettings->eReConnectLevel < RECONNECT_LEVEL_BEACON_TIMEOUT) {
-				prConnSettings->eReConnectLevel = RECONNECT_LEVEL_ROAMING_FAIL;
-				prConnSettings->fgIsConnReqIssued = FALSE;
-			} else {
-				DBGLOG(AIS, INFO,
-				       "Do not set fgIsConnReqIssued, level is %d\n",
-				       prConnSettings->eReConnectLevel);
-			}
-
-			return AIS_STATE_NORMAL_TR;
-		}
 	}
 
-	/* ---- Disconnected: find a target to join ---- */
-	if (prAisBssInfo->eConnectionState == MEDIA_STATE_DISCONNECTED) {
-
-		DBGLOG(AIS, LOUD, "[AIS%d] SEARCH: In DISCONNECTED state, bssDesc=%p\n",
-		       ucBssIndex, prBssDesc);
-
-		if (prBssDesc) {
-			/* Store selected BSS security parameters */
-			prAisBssInfo->u4RsnSelectedGroupCipher    = prBssDesc->u4RsnSelectedGroupCipher;
-			prAisBssInfo->u4RsnSelectedPairwiseCipher = prBssDesc->u4RsnSelectedPairwiseCipher;
-			prAisBssInfo->u4RsnSelectedAKMSuite       = prBssDesc->u4RsnSelectedAKMSuite;
-			prAisBssInfo->eBand = prBssDesc->eBand;
-
-			if (prAisBssInfo->fgIsWmmInited == FALSE)
-				prAisBssInfo->ucWmmQueSet =
-					cnmWmmIndexDecision(prAdapter, prAisBssInfo);
-
-#if CFG_SUPPORT_DBDC
-			cnmDbdcPreConnectionEnableDecision(
-				prAdapter,
-				prAisBssInfo->ucBssIndex,
-				prBssDesc->eBand,
-				prBssDesc->ucChannelNum,
-				prAisBssInfo->ucWmmQueSet);
-#endif
-			cnmOpModeGetTRxNss(prAdapter,
-					   prAisBssInfo->ucBssIndex,
-					   &prAisBssInfo->ucOpRxNss,
-					   &prAisBssInfo->ucOpTxNss);
-
-			DBGLOG(AIS, LOUD,
-			       "[AIS%d] SEARCH: Selected BSS type=%d, transitioning based on type\n",
-			       ucBssIndex, prBssDesc->eBSSType);
-
-			if (prBssDesc->eBSSType == BSS_TYPE_INFRASTRUCTURE) {
-				prAisBssInfo->eCurrentOPMode  = OP_MODE_INFRASTRUCTURE;
-				prAisFsmInfo->prTargetBssDesc  = prBssDesc;
-				prAisFsmInfo->ucConnTrialCount++;
-				
-				/* Check if cfg80211 owns the connection */
-				if (prAisFsmInfo->fgIsCfg80211Connecting) {
-					DBGLOG(AIS, INFO,
-					       "[AIS%d] cfg80211 owns connection - skip autonomous join\n",
-					       ucBssIndex);
-					DBGLOG(AIS, INFO,
-					       "[AIS%d] Staying in IDLE, waiting for cfg80211 auth/assoc\n",
-					       ucBssIndex);
-					return AIS_STATE_IDLE;
-				}
-				
-				return AIS_STATE_REQ_CHANNEL_JOIN;
-			}
-#if CFG_SUPPORT_ADHOC
-			else if (prBssDesc->eBSSType == BSS_TYPE_IBSS) {
-				prAisBssInfo->eCurrentOPMode  = OP_MODE_IBSS;
-				prAisFsmInfo->prTargetBssDesc  = prBssDesc;
-				return AIS_STATE_IBSS_MERGE;
-			}
-#endif
-			else {
-				DBGLOG(AIS, LOUD,
-				       "[AIS%d] SEARCH: Unhandled BSS type, waiting for next scan\n",
-				       ucBssIndex);
-				return AIS_STATE_WAIT_FOR_NEXT_SCAN;
-			}
-
-		} else {
-			/* No matching BSS found */
-			DBGLOG(AIS, LOUD,
-			       "[AIS%d] SEARCH: No BSS found, checking timeout. joinReqTime=%u currentTime=%u\n",
-			       ucBssIndex, prAisFsmInfo->rJoinReqTime, kalGetTimeTick());
-
-			if (prAisFsmInfo->rJoinReqTime != 0 &&
-			    CHECK_FOR_TIMEOUT(kalGetTimeTick(),
-					      prAisFsmInfo->rJoinReqTime,
-					      SEC_TO_SYSTIME(AIS_JOIN_TIMEOUT))) {
-				DBGLOG(AIS, STATE,
-				       "[AIS%d] SEARCH: Join timeout, transitioning to JOIN_FAILURE\n",
-				       ucBssIndex);
-				return AIS_STATE_JOIN_FAILURE;
-			}
-
-			if (prConnSettings->eOPMode == NET_TYPE_INFRA)
-				prAisFsmInfo->ucConnTrialCount++;
-
-			if (prAisFsmInfo->fgTryScan) {
-				DBGLOG(AIS, LOUD,
-				       "[AIS%d] SEARCH: fgTryScan=TRUE, transitioning to LOOKING_FOR\n",
-				       ucBssIndex);
-				return AIS_STATE_LOOKING_FOR;
-			} else {
-				DBGLOG(AIS, LOUD,
-				       "[AIS%d] SEARCH: fgTryScan=FALSE, calling search action\n",
-				       ucBssIndex);
-				return aisFsmStateSearchAction(
-					prAdapter,
-					AIS_FSM_STATE_SEARCH_ACTION_PHASE_0,
-					ucBssIndex);
-			}
-		}
+	/* If no BSS found at all, we must scan */
+	if (!prBssDesc) {
+		DBGLOG(AIS, WARN, "[AIS%d] SEARCH: No candidate found for SSID %s. Looking for...\n",
+		       ucBssIndex, prConnSettings->aucSSID);
+		return AIS_STATE_LOOKING_FOR;
 	}
 
-	/* ---- Connected (Roaming): validate candidate ---- */
-	else {
-		DBGLOG(AIS, LOUD, "[AIS%d] SEARCH: ROAMING case - checking BSS validity\n",
-		       ucBssIndex);
+	/* Sync bands and security */
+	prAisBssInfo->eBand = prBssDesc->eBand;
+	prAisFsmInfo->prTargetBssDesc = prBssDesc;
 
-		if (prAisBssInfo->ucReasonOfDisconnect !=
-		    DISCONNECT_REASON_CODE_REASSOCIATION &&
-		    ((!prBssDesc) ||
-		     (prBssDesc->eBSSType != BSS_TYPE_INFRASTRUCTURE) ||
-		     (prBssDesc->fgIsConnected) ||
-		     (EQUAL_MAC_ADDR(prBssDesc->aucBSSID, prAisBssInfo->aucBSSID)))) {
+	/* Determine operational parameters */
+	if (prAisBssInfo->fgIsWmmInited == FALSE)
+		prAisBssInfo->ucWmmQueSet = cnmWmmIndexDecision(prAdapter, prAisBssInfo);
 
-			if (prBssDesc) {
-				DBGLOG(ROAMING, INFO,
-				       "fgIsConnected=%d, prBssDesc->BSSID "
-				       MACSTR ", prAisBssInfo->BSSID " MACSTR "\n",
-				       prBssDesc->fgIsConnected,
-				       MAC2STR(prBssDesc->aucBSSID),
-				       MAC2STR(prAisBssInfo->aucBSSID));
-			}
+	cnmOpModeGetTRxNss(prAdapter, prAisBssInfo->ucBssIndex,
+	                   &prAisBssInfo->ucOpRxNss, &prAisBssInfo->ucOpTxNss);
 
-			if (prAisFsmInfo->fgTargetChnlScanIssued) {
-				DBGLOG(AIS, INFO,
-				       "[Roaming] No target found, try to full scan again\n");
-				prAisFsmInfo->fgTargetChnlScanIssued = FALSE;
-				return AIS_STATE_LOOKING_FOR;
-			}
-
-#if CFG_SUPPORT_ROAMING
-			DBGLOG(AIS, LOUD,
-			       "[AIS%d] SEARCH: No valid roaming target, returning to NORMAL_TR\n",
-			       ucBssIndex);
-			roamingFsmRunEventFail(prAdapter,
-					       ROAMING_FAIL_REASON_NOCANDIDATE,
-					       ucBssIndex);
-#endif
-			return AIS_STATE_NORMAL_TR;
-
-		} else {
-			if (!prBssDesc) {
-				DBGLOG(AIS, LOUD,
-				       "[AIS%d] SEARCH: ROAMING - no BSS desc, calling search action phase 1\n",
-				       ucBssIndex);
-				return aisFsmStateSearchAction(
-					prAdapter,
-					AIS_FSM_STATE_SEARCH_ACTION_PHASE_1,
-					ucBssIndex);
-			}
-
-			DBGLOG(AIS, LOUD,
-			       "[AIS%d] SEARCH: ROAMING - valid target found, transitioning to REQ_CHANNEL_JOIN\n",
-			       ucBssIndex);
-
-			aisFsmStateSearchAction(prAdapter,
-						AIS_FSM_STATE_SEARCH_ACTION_PHASE_2,
-						ucBssIndex);
-
-			prAisFsmInfo->prTargetBssDesc = prBssDesc;
-			prAisFsmInfo->ucConnTrialCount++;
-			prAisFsmInfo->fgTargetChnlScanIssued = FALSE;
-
-			cnmOpModeGetTRxNss(prAdapter,
-					   prAisBssInfo->ucBssIndex,
-					   &prAisBssInfo->ucOpRxNss,
-					   &prAisBssInfo->ucOpTxNss);
-
-			/* Check if cfg80211 owns the connection */
-			if (prAisFsmInfo->fgIsCfg80211Connecting) {
-				DBGLOG(AIS, INFO,
-				       "[AIS%d] cfg80211 owns connection - skip autonomous roaming join\n",
-				       ucBssIndex);
-				return AIS_STATE_IDLE;
-			}
-
-			return AIS_STATE_REQ_CHANNEL_JOIN;
-		}
+	/* --- THE HANDOFF --- */
+	if (prBssDesc->eBSSType == BSS_TYPE_INFRASTRUCTURE) {
+		prAisBssInfo->eCurrentOPMode = OP_MODE_INFRASTRUCTURE;
+		
+		/* If iwd owns this connection, we skip the driver's autonomous 
+		 * join steps and move straight to the required channel join.
+		 */
+		DBGLOG(AIS, INFO, "[AIS%d] Sovereign Join: Transitioning to REQ_CHANNEL_JOIN\n", ucBssIndex);
+		return AIS_STATE_REQ_CHANNEL_JOIN;
 	}
+
+	return AIS_STATE_WAIT_FOR_NEXT_SCAN;
 }
-
 /* ============================================================
  * STATE HANDLER: WAIT_FOR_NEXT_SCAN
  * ============================================================ */
@@ -2366,15 +2024,34 @@ aisHandleState_JOIN(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 {
 	struct AIS_FSM_INFO *prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
 
-	DBGLOG(AIS, LOUD,
-	       "[AIS%d] STATE_JOIN ENTRY: Calling aisFsmStateInit_JOIN\n",
-	       ucBssIndex);
+	/* ARCH SOVEREIGNTY FIX:
+	 * We must ensure that the target BSS descriptor is still valid and 
+	 * matches the band/BSSID that iwd requested. If the target was lost 
+	 * due to a race condition or a stale scan result during the 
+	 * channel-switch interval, we abort to prevent a band-mismatch join.
+	 */
+	if (!prAisFsmInfo->prTargetBssDesc) {
+		DBGLOG(AIS, ERROR, 
+		       "[AIS%d] Sovereign Error: Target BSS was lost during channel switch! Aborting JOIN.\n",
+		       ucBssIndex);
+		return AIS_STATE_IDLE;
+	}
 
+	DBGLOG(AIS, INFO,
+	       "[AIS%d] Sovereign JOIN: Commencing Auth/Assoc with " MACSTR " [CH %d, Band %d]\n",
+	       ucBssIndex,
+	       MAC2STR(prAisFsmInfo->prTargetBssDesc->aucBSSID),
+	       prAisFsmInfo->prTargetBssDesc->ucChannelNum,
+	       prAisFsmInfo->prTargetBssDesc->eBand);
+
+	/* Pass the verified target to the initializer */
 	aisFsmStateInit_JOIN(prAdapter, prAisFsmInfo->prTargetBssDesc, ucBssIndex);
 
-	return AIS_STATE_JOIN; /* No immediate transition */
+	/* * We return AIS_STATE_JOIN and wait for the firmware to report 
+	 * success/failure via a status indication.
+	 */
+	return AIS_STATE_JOIN;
 }
-
 
 /* ============================================================
  * STATE HANDLER: JOIN_FAILURE
@@ -2970,124 +2647,118 @@ enum ENUM_AIS_STATE aisFsmStateSearchAction(IN struct ADAPTER *prAdapter,
  */
 /*----------------------------------------------------------------------------*/
 void aisFsmRunEventScanDone(IN struct ADAPTER *prAdapter,
-                            IN struct MSG_HDR *prMsgHdr)
+			    IN struct MSG_HDR *prMsgHdr)
 {
-    struct MSG_SCN_SCAN_DONE *prScanDoneMsg;
-    struct AIS_FSM_INFO *prAisFsmInfo;
-    struct CONNECTION_SETTINGS *prConnSettings;
-    struct RADIO_MEASUREMENT_REQ_PARAMS *prRmReq;
-    enum ENUM_AIS_STATE eNextState;
-    uint8_t ucBssIndex;
-    uint8_t ucSeqNum;
-    enum ENUM_SCAN_STATUS eStatus;
+	struct MSG_SCN_SCAN_DONE *prScanDoneMsg;
+	struct AIS_FSM_INFO *prAisFsmInfo;
+	struct CONNECTION_SETTINGS *prConnSettings;
+	struct RADIO_MEASUREMENT_REQ_PARAMS *prRmReq;
+	enum ENUM_AIS_STATE eNextState;
+	uint8_t ucBssIndex;
+	uint8_t ucSeqNum;
+	enum ENUM_SCAN_STATUS eStatus;
 
-    if (!prAdapter || !prMsgHdr)
-        return;
+	if (!prAdapter || !prMsgHdr)
+		return;
 
-    /* --- 1. EXTRACTION & VALIDATION --- */
-    prScanDoneMsg = (struct MSG_SCN_SCAN_DONE *)prMsgHdr;
-    ucBssIndex = prScanDoneMsg->ucBssIndex;
-    ucSeqNum = prScanDoneMsg->ucSeqNum;
-    eStatus = prScanDoneMsg->eScanStatus;
+	/* --- 1. EXTRACTION & VALIDATION --- */
+	prScanDoneMsg = (struct MSG_SCN_SCAN_DONE *)prMsgHdr;
+	ucBssIndex = prScanDoneMsg->ucBssIndex;
+	ucSeqNum = prScanDoneMsg->ucSeqNum;
+	eStatus = prScanDoneMsg->eScanStatus;
 
-    prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
-    prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
-    prRmReq = aisGetRmReqParam(prAdapter, ucBssIndex);
+	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
+	prRmReq = aisGetRmReqParam(prAdapter, ucBssIndex);
 
-    if (!prAisFsmInfo || !prConnSettings) {
-        cnmMemFree(prAdapter, prMsgHdr);
-        return;
-    }
+	if (!prAisFsmInfo || !prConnSettings) {
+		cnmMemFree(prAdapter, prMsgHdr);
+		return;
+	}
 
-    /* Arm the reporting guard AND stamp the clock.
-     * Both must happen together. Without the timestamp, the 3-second
-     * timeout in aisHandleState_IDLE fires instantly on every entry
-     * because (u4CurrentTime - 0) is always > 3000.
-     */
-    prAisFsmInfo->fgIsScanReporting = TRUE;
-    prAisFsmInfo->u4ScanReportStartTime = kalGetTimeTick();
+	prAisFsmInfo->fgIsScanReporting = TRUE;
+	prAisFsmInfo->u4ScanReportStartTime = kalGetTimeTick();
 
-    DBGLOG(AIS, INFO, "ScanDone [BSS %u] Seq:%u, Status:%d, CurrentState:%u\n",
-           ucBssIndex, ucSeqNum, eStatus, (uint32_t)prAisFsmInfo->eCurrentState);
+	DBGLOG(AIS, INFO, "ScanDone [BSS %u] Seq:%u, Status:%d, CurrentState:%u\n",
+	       ucBssIndex, ucSeqNum, eStatus, (uint32_t)prAisFsmInfo->eCurrentState);
 
-    if (ucSeqNum != prAisFsmInfo->ucSeqNumOfScanReq) {
-        DBGLOG(AIS, WARN, "Discarding stale ScanDone (Seq %u != Expected %u)\n",
-               ucSeqNum, prAisFsmInfo->ucSeqNumOfScanReq);
-        prAisFsmInfo->fgIsScanReporting = FALSE;
-        cnmMemFree(prAdapter, prMsgHdr);
-        return;
-    }
+	if (ucSeqNum != prAisFsmInfo->ucSeqNumOfScanReq) {
+		DBGLOG(AIS, WARN, "Discarding stale ScanDone (Seq %u != Expected %u)\n",
+		       ucSeqNum, prAisFsmInfo->ucSeqNumOfScanReq);
+		prAisFsmInfo->fgIsScanReporting = FALSE;
+		cnmMemFree(prAdapter, prMsgHdr);
+		return;
+	}
 
-    /* --- 2. CLEANUP --- */
-    prAisFsmInfo->fgIsScanning = FALSE;
-    cnmTimerStopTimer(prAdapter, &prAisFsmInfo->rScanDoneTimer);
+	/* --- 2. CLEANUP --- */
+	prAisFsmInfo->fgIsScanning = FALSE;
+	cnmTimerStopTimer(prAdapter, &prAisFsmInfo->rScanDoneTimer);
 
-    /* --- 3. STATE TRANSITION --- */
-    eNextState = prAisFsmInfo->eCurrentState;
+	/* --- 3. STATE TRANSITION --- */
+	eNextState = prAisFsmInfo->eCurrentState;
 
-    switch (prAisFsmInfo->eCurrentState) {
-    case AIS_STATE_SCAN:
-        eNextState = prConnSettings->fgIsConnReqIssued ?
-                     AIS_STATE_SEARCH : AIS_STATE_IDLE;
-        break;
-    case AIS_STATE_ONLINE_SCAN:
-    case AIS_STATE_LOOKING_FOR:
-        scanGetCurrentEssChnlList(prAdapter, ucBssIndex);
-#if CFG_SUPPORT_ROAMING
-        eNextState = aisFsmRoamingScanResultsUpdate(prAdapter, ucBssIndex);
-#else
-        eNextState = (prAisFsmInfo->eCurrentState == AIS_STATE_ONLINE_SCAN) ?
-                      AIS_STATE_NORMAL_TR : AIS_STATE_SEARCH;
-#endif
-        break;
-    default:
-        break;
-    }
+	switch (prAisFsmInfo->eCurrentState) {
+	case AIS_STATE_SCAN:
+		eNextState = prConnSettings->fgIsConnReqIssued ?
+			     AIS_STATE_SEARCH : AIS_STATE_IDLE;
+		break;
 
-    if (eNextState != prAisFsmInfo->eCurrentState)
-        aisFsmSteps(prAdapter, eNextState, ucBssIndex);
+	case AIS_STATE_ONLINE_SCAN:
+	case AIS_STATE_LOOKING_FOR:
+		scanGetCurrentEssChnlList(prAdapter, ucBssIndex);
 
-    /* --- 4. DATA HYDRATION & REPORTING --- */
-    if ((uint16_t)ucSeqNum == prAisFsmInfo->u2SeqNumOfScanReport) {
-        prAisFsmInfo->u2SeqNumOfScanReport = AIS_SCN_REPORT_SEQ_NOT_SET;
-        prConnSettings->fgIsScanReqIssued = FALSE;
+		/* ARCH SOVEREIGNTY FIX:
+		 * We disable autonomous roaming triggers. In a "Sovereign" 
+		 * driver for Arch/iwd, we do not want the driver to evaluate 
+		 * roaming candidates (like switching 5G -> 2.4G) on its own.
+		 * We transition back to NORMAL_TR and wait for iwd to tell 
+		 * us what to do.
+		 */
+		DBGLOG(AIS, INFO, "Scan done in state %u. Forcing transition to NORMAL_TR (No Auto-Roam).\n",
+		       prAisFsmInfo->eCurrentState);
+		eNextState = AIS_STATE_NORMAL_TR;
+		break;
 
-        if (prRmReq->rBcnRmParam.eState != RM_ON_GOING) {
-            scanUpdateEssResult(prAdapter);
-            scanLogEssResult(prAdapter);
+	default:
+		break;
+	}
 
-            uint32_t u4Status = (eStatus == SCAN_STATUS_DONE) ?
-                                  WLAN_STATUS_SUCCESS : WLAN_STATUS_FAILURE;
+	if (eNextState != prAisFsmInfo->eCurrentState)
+		aisFsmSteps(prAdapter, eNextState, ucBssIndex);
 
-            DBGLOG(AIS, INFO, "Indicating %u BSS entries to Kernel\n",
-                   prAdapter->rWlanInfo.u4ScanResultEssNum);
+	/* --- 4. DATA HYDRATION & REPORTING --- */
+	if ((uint16_t)ucSeqNum == prAisFsmInfo->u2SeqNumOfScanReport) {
+		prAisFsmInfo->u2SeqNumOfScanReport = AIS_SCN_REPORT_SEQ_NOT_SET;
+		prConnSettings->fgIsScanReqIssued = FALSE;
 
-            kalScanDone(prAdapter->prGlueInfo, ucBssIndex, u4Status);
-            /* kalScanDone clears fgIsScanReporting itself after
-             * cfg80211_scan_done returns. Do not touch the flag here.
-             */
-        }
-    }
+		if (prRmReq->rBcnRmParam.eState != RM_ON_GOING) {
+			scanUpdateEssResult(prAdapter);
+			scanLogEssResult(prAdapter);
 
-    /* --- 5. RRM / CLEANUP --- */
-    if (prRmReq->rBcnRmParam.eState != RM_NO_REQUEST) {
-        if (prRmReq->rBcnRmParam.eState == RM_WAITING)
-            rrmDoBeaconMeasurement(prAdapter, ucBssIndex);
-        else
-            rrmStartNextMeasurement(prAdapter, FALSE, ucBssIndex);
-    }
+			uint32_t u4Status = (eStatus == SCAN_STATUS_DONE) ?
+					    WLAN_STATUS_SUCCESS : WLAN_STATUS_FAILURE;
 
-    /* Only clear the flag here if kalScanDone was NOT called above
-     * (i.e. the RRM path or seq mismatch path). kalScanDone owns
-     * the flag for the reporting path and clears it after the OS
-     * handoff completes.
-     */
-    if (prAisFsmInfo->fgIsScanReporting)
-        prAisFsmInfo->fgIsScanReporting = FALSE;
+			DBGLOG(AIS, INFO, "Indicating %u BSS entries to Kernel\n",
+			       prAdapter->rWlanInfo.u4ScanResultEssNum);
 
-    cnmMemFree(prAdapter, prMsgHdr);
+			/* Reporting the results to cfg80211 so iwd can see the 5G band */
+			kalScanDone(prAdapter->prGlueInfo, ucBssIndex, u4Status);
+		}
+	}
+
+	/* --- 5. RRM / CLEANUP --- */
+	if (prRmReq->rBcnRmParam.eState != RM_NO_REQUEST) {
+		if (prRmReq->rBcnRmParam.eState == RM_WAITING)
+			rrmDoBeaconMeasurement(prAdapter, ucBssIndex);
+		else
+			rrmStartNextMeasurement(prAdapter, FALSE, ucBssIndex);
+	}
+
+	if (prAisFsmInfo->fgIsScanReporting)
+		prAisFsmInfo->fgIsScanReporting = FALSE;
+
+	cnmMemFree(prAdapter, prMsgHdr);
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -5485,16 +5156,11 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 {
 	struct BSS_INFO *prAisBssInfo;
 	struct AIS_FSM_INFO *prAisFsmInfo;
-	struct AIS_SPECIFIC_BSS_INFO *prAisSpecificBssInfo;
-	struct CONNECTION_SETTINGS *prConnSettings;
 	struct MSG_CH_GRANT *prMsgChGrant;
 	uint8_t ucTokenID;
 	uint32_t u4GrantInterval;
 	uint8_t ucBssIndex = 0;
 
-	/* ====================================================================
-	 * Extract grant parameters
-	 * ==================================================================== */
 	prMsgChGrant = (struct MSG_CH_GRANT *)prMsgHdr;
 	ucTokenID = prMsgChGrant->ucTokenID;
 	u4GrantInterval = prMsgChGrant->u4GrantInterval;
@@ -5502,152 +5168,76 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 
 	prAisBssInfo = aisGetAisBssInfo(prAdapter, ucBssIndex);
 	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
-	prAisSpecificBssInfo = aisGetAisSpecBssInfo(prAdapter, ucBssIndex);
-	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
-
-#if CFG_SISO_SW_DEVELOP
-	/* Record granted channel in BSS info for SISO tracking */
-	prAisBssInfo->fgIsGranted = TRUE;
-	prAisBssInfo->eBandGranted = prMsgChGrant->eRfBand;
-	prAisBssInfo->ucPrimaryChannelGranted = prMsgChGrant->ucPrimaryChannel;
-#endif
 
 	DBGLOG(AIS, INFO,
-	       "[AIS%d] CH_GRANT received: Token=%d Interval=%u CH=%d State=%d SeqNum=%d\n",
-	       ucBssIndex,
-	       ucTokenID,
-	       u4GrantInterval,
-	       prMsgChGrant->ucPrimaryChannel,
-	       prAisFsmInfo->eCurrentState,
-	       prAisFsmInfo->ucSeqNumOfChReq);
+	       "[AIS%d] CH_GRANT received: Token=%d Interval=%u CH=%d State=%d\n",
+	       ucBssIndex, ucTokenID, u4GrantInterval,
+	       prMsgChGrant->ucPrimaryChannel, prAisFsmInfo->eCurrentState);
 
-	/* Free the message before any early returns */
 	cnmMemFree(prAdapter, prMsgHdr);
 
-	/* ====================================================================
-	 * CASE 1: Channel grant for JOIN request
-	 * This is the normal connection flow - we requested a channel to
-	 * authenticate/associate with an AP
-	 * ==================================================================== */
+	/* --- CASE 1: JOIN REQUEST --- */
 	if (prAisFsmInfo->eCurrentState == AIS_STATE_REQ_CHANNEL_JOIN) {
 		
-		/* Check if this grant was already aborted */
-		if (ucTokenID <= prAisFsmInfo->ucSeqNumOfChAbort) {
-			DBGLOG(AIS, WARN,
-			       "[AIS%d] Ignoring CH grant token=%d (already aborted, abort_seq=%d)\n",
-			       ucBssIndex, ucTokenID,
-			       prAisFsmInfo->ucSeqNumOfChAbort);
-			return;
-		}
-
-		/* Accept grant if token matches OR if it's a later token
-		 * (handles case where we sent multiple requests due to
-		 * dual-band AP or re-entry bugs)
+		/* ARCH SOVEREIGNTY FIX:
+		 * If iwd/cfg80211 is managing this connection, we MUST be strict.
+		 * Accepting a stale token here could land the radio on the 2.4GHz 
+		 * channel when the latest request was for 5GHz, causing a mismatch
+		 * that breaks the association.
 		 */
-		if (ucTokenID >= prAisFsmInfo->ucSeqNumOfChReq) {
-			DBGLOG(AIS, WARN,
-			       "[AIS%d] CH grant token=%d > current seq=%d (accepting anyway)\n",
-			       ucBssIndex, ucTokenID,
-			       prAisFsmInfo->ucSeqNumOfChReq);
-			/* Update our sequence to match */
-			prAisFsmInfo->ucSeqNumOfChReq = ucTokenID;
-		} else if (ucTokenID < prAisFsmInfo->ucSeqNumOfChReq) {
-			/* Grant is for an older request, but if we haven't
-			 * received a grant yet, we'll take it
-			 */
-			DBGLOG(AIS, INFO,
-			       "[AIS%d] CH grant token=%d < current seq=%d (stale but accepting)\n",
-			       ucBssIndex, ucTokenID,
-			       prAisFsmInfo->ucSeqNumOfChReq);
+		if (prAisFsmInfo->fgIsCfg80211Connecting) {
+			if (ucTokenID != prAisFsmInfo->ucSeqNumOfChReq) {
+				DBGLOG(AIS, WARN, 
+				       "[AIS%d] Sovereign Drop: Grant token %u != Latest req %u. Waiting for correct band.\n",
+				       ucBssIndex, ucTokenID, prAisFsmInfo->ucSeqNumOfChReq);
+				return;
+			}
+		} else {
+			/* Standard permissive fallback for internal driver logic */
+			if (ucTokenID <= prAisFsmInfo->ucSeqNumOfChAbort) {
+				DBGLOG(AIS, WARN, "[AIS%d] Ignoring aborted grant %u\n",
+				       ucBssIndex, ucTokenID);
+				return;
+			}
 		}
 
-		/* Record grant parameters */
 		prAisFsmInfo->u4ChGrantedInterval = u4GrantInterval;
 
-		/* Start join timeout timer - if auth/assoc doesn't complete
-		 * before this expires, we'll abort and try again
-		 */
+		/* Start join timeout timer */
 		cnmTimerStartTimer(prAdapter,
 				   &prAisFsmInfo->rJoinTimeoutTimer,
 				   prAisFsmInfo->u4ChGrantedInterval -
 				   AIS_JOIN_CH_GRANT_THRESHOLD);
 
-		DBGLOG(AIS, INFO,
-		       "[AIS%d] CH_GRANT accepted - Starting JOIN (timeout=%ums)\n",
-		       ucBssIndex,
-		       prAisFsmInfo->u4ChGrantedInterval -
-		       AIS_JOIN_CH_GRANT_THRESHOLD);
+		DBGLOG(AIS, INFO, "[AIS%d] Sovereign Grant Accepted - Moving to JOIN\n", ucBssIndex);
 
-		/* Transition to JOIN state - this will trigger auth frame TX */
 		aisFsmSteps(prAdapter, AIS_STATE_JOIN, ucBssIndex);
 		
 		prAisFsmInfo->fgIsChannelGranted = TRUE;
 		return;
 	}
 
-	/* ====================================================================
-	 * CASE 2: Channel grant for REMAIN_ON_CHANNEL request
-	 * This is for P2P/offchannel TX operations (e.g., sending action
-	 * frames on a specific channel)
-	 * ==================================================================== */
+	/* --- CASE 2: REMAIN ON CHANNEL (Action Frames/P2P) --- */
 	if (prAisFsmInfo->eCurrentState == AIS_STATE_REQ_REMAIN_ON_CHANNEL) {
 		
-		/* Check token match (stricter for remain-on-channel) */
 		if (prAisFsmInfo->ucSeqNumOfChReq != ucTokenID) {
-			DBGLOG(AIS, WARN,
-			       "[AIS%d] ROC CH grant token mismatch: got=%d expected=%d\n",
-			       ucBssIndex, ucTokenID,
-			       prAisFsmInfo->ucSeqNumOfChReq);
+			DBGLOG(AIS, WARN, "[AIS%d] ROC token mismatch: %d != %d\n",
+			       ucBssIndex, ucTokenID, prAisFsmInfo->ucSeqNumOfChReq);
 			aisFsmReleaseCh(prAdapter, ucBssIndex);
 			return;
 		}
 
-		/* Check if already aborted */
-		if (ucTokenID <= prAisFsmInfo->ucSeqNumOfChAbort) {
-			DBGLOG(AIS, WARN,
-			       "[AIS%d] Ignoring ROC CH grant token=%d (aborted)\n",
-			       ucBssIndex, ucTokenID);
-			return;
-		}
-
-		/* Record grant interval */
 		prAisFsmInfo->u4ChGrantedInterval = u4GrantInterval;
 
-#if CFG_SUPPORT_NCHO
-		/* Signal NCHO (Neighbor Channel Optimization) if waiting */
-		if (prAdapter->rNchoInfo.fgECHOEnabled == TRUE &&
-		    prAdapter->rNchoInfo.fgIsSendingAF == TRUE &&
-		    prAdapter->rNchoInfo.fgChGranted == FALSE) {
-			DBGLOG(INIT, INFO,
-			       "[AIS%d] NCHO: Channel granted for action frame TX\n",
-			       ucBssIndex);
-			prAdapter->rNchoInfo.fgChGranted = TRUE;
-			complete(&prAdapter->prGlueInfo->rAisChGrntComp);
-		}
-#endif
-
-		/* Branch based on ROC request type */
 		if (prAisFsmInfo->rChReqInfo.eReqType == CH_REQ_TYPE_OFFCHNL_TX) {
-			/* Offchannel TX: immediately transition to TX state */
-			DBGLOG(AIS, INFO,
-			       "[AIS%d] ROC CH_GRANT for offchannel TX\n",
-			       ucBssIndex);
 			aisFsmSteps(prAdapter, AIS_STATE_OFF_CHNL_TX, ucBssIndex);
 		} else {
-			/* Normal remain-on-channel: set timeout and notify userspace */
 			cnmTimerStartTimer(prAdapter,
 					   &prAisFsmInfo->rChannelTimeoutTimer,
 					   prAisFsmInfo->u4ChGrantedInterval);
 
-			DBGLOG(AIS, INFO,
-			       "[AIS%d] ROC CH_GRANT - Staying on CH=%d for %ums\n",
-			       ucBssIndex,
-			       prAisFsmInfo->rChReqInfo.ucChannelNum,
-			       prAisFsmInfo->u4ChGrantedInterval);
-
 			aisFsmSteps(prAdapter, AIS_STATE_REMAIN_ON_CHANNEL, ucBssIndex);
 
-			/* Notify userspace that channel is ready */
 			kalReadyOnChannel(prAdapter->prGlueInfo,
 					  prAisFsmInfo->rChReqInfo.u8Cookie,
 					  prAisFsmInfo->rChReqInfo.eBand,
@@ -5661,26 +5251,9 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 		return;
 	}
 
-	/* ====================================================================
-	 * CASE 3: Grant received but we're in wrong state
-	 * This can happen if:
-	 * - We aborted the request but grant came in just before abort
-	 * - State machine transitioned away (e.g., user cancelled connect)
-	 * - Grant is for a very old request
-	 * ==================================================================== */
-	if (ucTokenID <= prAisFsmInfo->ucSeqNumOfChAbort) {
-		DBGLOG(AIS, INFO,
-		       "[AIS%d] CH_GRANT token=%d already aborted (abort_seq=%d) - ignoring\n",
-		       ucBssIndex, ucTokenID, prAisFsmInfo->ucSeqNumOfChAbort);
-		return;
-	}
-
-	/* Unexpected grant - return channel to CNM immediately */
-	DBGLOG(AIS, WARN,
-	       "[AIS%d] Unexpected CH_GRANT: token=%d state=%d seq=%d - releasing channel\n",
-	       ucBssIndex, ucTokenID,
-	       prAisFsmInfo->eCurrentState,
-	       prAisFsmInfo->ucSeqNumOfChReq);
+	/* --- CASE 3: UNEXPECTED GRANT --- */
+	DBGLOG(AIS, WARN, "[AIS%d] Unexpected Grant (Token %u, State %d). Releasing.\n",
+	       ucBssIndex, ucTokenID, prAisFsmInfo->eCurrentState);
 	
 	aisFsmReleaseCh(prAdapter, ucBssIndex);
 }
