@@ -175,16 +175,23 @@ static struct pci_driver mtk_pci_driver = {
 static inline u_int8_t mt7902_mmio_dead(struct GL_HIF_INFO *prHifInfo)
 {
 	uint32_t u4Val;
+	int i;
 	
 	if (!prHifInfo || !prHifInfo->CSRBaseAddress)
 		return TRUE;
 	
-	/* Read a safe register - chip ID at offset 0x0 */
-	u4Val = readl(prHifInfo->CSRBaseAddress + 0x0);
+	/* * INNOVATION: Give the 1x1 chip 3 tries to wake up.
+	 * During a cold boot, the link might be 'retraining'.
+	 */
+	for (i = 0; i < 3; i++) {
+		u4Val = readl(prHifInfo->CSRBaseAddress + 0x0);
+		if (u4Val != 0xFFFFFFFF && u4Val != 0x00000000)
+			return FALSE;
+		mdelay(1); /* Wait for PLL lock */
+	}
 	
-	return (u4Val == 0xFFFFFFFF);
+	return TRUE;
 }
-
 
 
 
@@ -272,28 +279,76 @@ static irqreturn_t mtk_pci_interrupt(int irq, void *dev_instance)
 	return IRQ_HANDLED;
 }
 
-static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+static int mtk_pci_probe(struct pci_dev *pdev,
+                         const struct pci_device_id *id)
 {
-	int ret;
-	struct GLUE_INFO *prGlueInfo;
+    int ret;
+    struct GLUE_INFO *prGlueInfo = NULL;
+    bool irq_disabled = false;
 
-	/* * If the driver is dying at dma_set_mask, it's because it needs 
-	 * the pdev associated with the glue layer immediately.
-	 */
-	ret = pci_enable_device(pdev);
-	if (ret) return ret;
-	pci_set_master(pdev);
+    ret = pci_enable_device(pdev);
+    if (ret)
+        return ret;
 
-	/* Call probe - let the platform handle the NULL glue */
-	ret = pfWlanProbe(pdev, (void *)id->driver_data);
+    pci_set_master(pdev);
 
-	/* After probe, we MUST ensure the HAL ops are linked for the remove fix */
-	prGlueInfo = pci_get_drvdata(pdev);
-	if (prGlueInfo && prGlueInfo->prAdapter) {
-		prGlueInfo->prAdapter->prHalOps = mtk_pcie_get_ops();
-	}
+    DBGLOG(INIT, WARN,
+           "MT7902-FIX: Quiescing bus before WLAN probe\n");
 
-	return ret;
+    /*
+     * HARD QUIESCE STEP
+     * Mask Linux-side IRQ handling before the device
+     * potentially asserts garbage during WFSYS reset.
+     */
+    if (pdev->irq) {
+        disable_irq(pdev->irq);
+        irq_disabled = true;
+        DBGLOG(INIT, INFO,
+               "MT7902-FIX: PCI IRQ masked before pfWlanProbe\n");
+    }
+
+    /* Save PCI config in case link drops */
+    pci_save_state(pdev);
+
+    /*
+     * Call main WLAN probe (this may:
+     *  - reset WFSYS
+     *  - toggle link
+     *  - temporarily kill the fabric
+     */
+    ret = pfWlanProbe(pdev, (void *)id->driver_data);
+
+    if (ret == -EIO) {
+        DBGLOG(INIT, WARN,
+               "MT7902-FIX: Link lost during reset, restoring state...\n");
+
+        pci_restore_state(pdev);
+        msleep(500);
+
+        /*
+         * IMPORTANT:
+         * We do NOT automatically re-run pfWlanProbe here.
+         * Let upper layers decide.
+         */
+    }
+
+    /*
+     * Only re-enable IRQ if probe succeeded.
+     * If probe failed, leave it disabled so remove()
+     * or retry path handles cleanly.
+     */
+    if (irq_disabled && ret == 0) {
+        enable_irq(pdev->irq);
+        DBGLOG(INIT, INFO,
+               "MT7902-FIX: PCI IRQ unmasked after successful probe\n");
+    }
+
+    prGlueInfo = pci_get_drvdata(pdev);
+    if (prGlueInfo && prGlueInfo->prAdapter) {
+        prGlueInfo->prAdapter->prHalOps = mtk_pcie_get_ops();
+    }
+
+    return ret;
 }
 
 

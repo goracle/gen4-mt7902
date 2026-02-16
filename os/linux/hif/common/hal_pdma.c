@@ -2373,6 +2373,8 @@ void halWpdmaInitRxRing(IN struct GLUE_INFO *prGlueInfo)
 	}
 }
 
+
+
 void halWpdmaProcessCmdDmaDone(IN struct GLUE_INFO *prGlueInfo,
 	IN uint16_t u2Port)
 {
@@ -2391,16 +2393,33 @@ void halWpdmaProcessCmdDmaDone(IN struct GLUE_INFO *prGlueInfo,
 	prMemOps = &prHifInfo->rMemOps;
 	prTxRing = &prHifInfo->TxRing[u2Port];
 
+	/* We skip the Cell check because it's a fixed array, 
+	 * but we keep the prTxRing check just in case. 
+	 */
+	if (!prTxRing)
+		return;
+
 	spin_lock_irqsave(&prTxRing->rTxDmaQLock, flags);
 
 	kalDevRegRead(prGlueInfo, prTxRing->hw_didx_addr, &u4DmaIdx);
 	u4SwIdx = prTxRing->TxSwUsedIdx;
 
+	if (u4SwIdx == u4DmaIdx)
+		goto unlock;
+
 	do {
+		/* This is the critical MT7902 1x1 fix: 
+		 * Check the Virtual Address pointer inside the array element.
+		 */
+		if (!prTxRing->Cell[u4SwIdx].AllocVa) {
+			break;
+		}
+
 		pBuffer = prTxRing->Cell[u4SwIdx].pBuffer;
 		PacketPa = prTxRing->Cell[u4SwIdx].PacketPa;
 		pTxD = (struct TXD_STRUCT *) prTxRing->Cell[u4SwIdx].AllocVa;
 
+		/* The bitfield access that caused the GPF */
 		if (pTxD->DMADONE == 0)
 			break;
 
@@ -2414,6 +2433,7 @@ void halWpdmaProcessCmdDmaDone(IN struct GLUE_INFO *prGlueInfo,
 		pTxD->DMADONE = 0;
 		if (prMemOps->freeBuf && pBuffer)
 			prMemOps->freeBuf(pBuffer, 0);
+		
 		prTxRing->Cell[u4SwIdx].pBuffer = NULL;
 		prTxRing->Cell[u4SwIdx].pPacket = NULL;
 		prTxRing->u4UsedCnt--;
@@ -2430,13 +2450,13 @@ void halWpdmaProcessCmdDmaDone(IN struct GLUE_INFO *prGlueInfo,
 
 	prTxRing->TxSwUsedIdx = u4SwIdx;
 
+unlock:
 	spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
 
 #if CFG_SUPPORT_MULTITHREAD
-	if (!QUEUE_IS_EMPTY(&prGlueInfo->prAdapter->rTxCmdQueue))
+	if (prGlueInfo->prAdapter && !QUEUE_IS_EMPTY(&prGlueInfo->prAdapter->rTxCmdQueue))
 		kalSetTxCmdEvent2Hif(prGlueInfo);
 #endif
-
 }
 
 void halWpdmaProcessDataDmaDone(IN struct GLUE_INFO *prGlueInfo,
@@ -3430,9 +3450,19 @@ void halRxTasklet(unsigned long data)
 	if (prGlueInfo->ulFlag & GLUE_FLAG_HALT
 		|| kalIsResetting()
 		) {
+
+
+static bool has_fired = false; // Persistent across calls
+if (!has_fired) {
+    dump_stack();
+}
+
 		/* Should stop now... skip pending interrupt */
+if (!has_fired) {
 		DBGLOG(INIT, INFO,
 		       "ignore pending interrupt\n");
+ }
+    has_fired = true;
 	} else {
 		/* DBGLOG(INIT, INFO, ("HIF Interrupt!\n")); */
 		prGlueInfo->TaskIsrCnt++;

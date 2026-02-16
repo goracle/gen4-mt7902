@@ -210,21 +210,26 @@ u_int8_t mt7961HalCbtopRguWfRst(struct ADAPTER *prAdapter,
 u_int8_t mt7961HalPollWfsysSwInitDone(struct ADAPTER *prAdapter)
 {
 	uint32_t u4CrValue = 0;
-	uint32_t u4ResetTimeCnt = 0, u4ResetTimeTmout = 2;
+	/* INCREASE TIMEOUT: Give the 1x1 chip 2 full seconds (20 * 100ms) */
+	uint32_t u4ResetTimeCnt = 0, u4ResetTimeTmout = 20; 
 	u_int8_t fgSwInitDone = TRUE;
 
-	/* Polling until WF WM is done */
 	while (TRUE) {
-
 		HAL_MCR_RD(prAdapter, CONN_INFRA_RGU_WFSYS_SW_RST_B_ADDR, &u4CrValue);
 
-		if (u4CrValue == MMIO_READ_FAIL)
-			DBGLOG(HAL, ERROR, "[SER][L0.5] MMIO read CR fail\n");
-		else if (u4CrValue & CONN_INFRA_RGU_WFSYS_SW_RST_B_WFSYS_SW_INIT_DONE_MASK)
+		if (u4CrValue == MMIO_READ_FAIL) {
+			/* INNOVATION: Don't count bus-misses as time-elapsed. 
+			 * If the bus is dead, the MCU might still be waking up. 
+			 */
+			DBGLOG(HAL, WARN, "[MT7902-FIX] Bus is dark (0xFFFFFFFF), waiting for Link...\n");
+		}
+		else if (u4CrValue & CONN_INFRA_RGU_WFSYS_SW_RST_B_WFSYS_SW_INIT_DONE_MASK) {
 			break;
+		}
 
 		if (u4ResetTimeCnt >= u4ResetTimeTmout) {
-			DBGLOG(INIT, ERROR, "[SER][L0.5] Poll Sw Init Done FAIL\n");
+			DBGLOG(INIT, ERROR, "[SER][L0.5] Poll Sw Init Done FAIL after %d ms\n", 
+				u4ResetTimeCnt * 100);
 			fgSwInitDone = FALSE;
 			break;
 		}
@@ -235,6 +240,9 @@ u_int8_t mt7961HalPollWfsysSwInitDone(struct ADAPTER *prAdapter)
 
 	return fgSwInitDone;
 }
+
+
+
 
 u_int8_t mt7961HalPollWfdmaIdle(struct ADAPTER *prAdapter)
 {

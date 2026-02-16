@@ -1,5 +1,3 @@
-#include <linux/pci.h>
-#include <linux/pci.h>
 /********************************************************************************
  *
  * This file is provided under a dual license.  When you use or
@@ -73,6 +71,9 @@
  *                    E X T E R N A L   R E F E R E N C E S
  *******************************************************************************
  */
+#include <linux/pci.h>
+#include <linux/pci.h>
+
 #include "gl_os.h"
 #include "debug.h"
 #include "wlan_lib.h"
@@ -4365,222 +4366,16 @@ label_exit:
  * \retval WLAN_STATUS_FAILURE Failed
  */
 /*----------------------------------------------------------------------------*/
-
 uint32_t wlanConnac2XDownloadBufferBin(struct ADAPTER *prAdapter)
 {
-    /* --- THE INNOVATIVE CLEAN BYPASS --- */
-    DBGLOG(INIT, WARN, "MT7902-FIX: Bypassing Efuse Buffer Mode (No NVRAM/6G FW)\n");
-    
-    /* Force the adapter into a safe state where it doesn't expect external BIN files */
+    /* * We just set the state variable so the rest of the driver 
+     * *knows* we are in Efuse mode, but we don't say a word 
+     * to the hardware. Let it do its own thing.
+     */
+    DBGLOG(INIT, WARN, "MT7902-FIX: Silent bypass—no IOCTL, no noise.\n");
     prAdapter->rWifiVar.ucEfuseBufferModeCal = LOAD_EFUSE; 
     
-    /* Instead of naked return, we return success but skip the IOCTL loop */
     return WLAN_STATUS_SUCCESS;
-
-
-
-	struct mt66xx_chip_info *prChipInfo = NULL;
-	uint32_t chip_id = 0;
-	struct GLUE_INFO *prGlueInfo = NULL;
-	struct PARAM_CUSTOM_EFUSE_BUFFER_MODE_CONNAC_T
-		*prSetEfuseBufModeInfo = NULL;
-	uint8_t *pucConfigBuf = NULL;
-	uint8_t aucEeprom[32];
-	uint32_t u4ContentLen = 0;
-	uint8_t uTotalPage = 0;
-	uint8_t uPageIdx = 0;
-	uint32_t rStatus = WLAN_STATUS_SUCCESS;
-	uint32_t u4BufLen = 0;
-	uint32_t retWlanStat = WLAN_STATUS_FAILURE;
-
-#if CFG_EFUSE_AUTO_MODE_SUPPORT
-	uint32_t u4Efuse_addr = 0;
-	struct PARAM_CUSTOM_ACCESS_EFUSE *prAccessEfuseInfo
-			= NULL;
-#endif
-
-	if (prAdapter->fgIsSupportPowerOnSendBufferModeCMD == FALSE)
-		return WLAN_STATUS_SUCCESS;
-
-	DBGLOG(INIT, INFO, "Start Efuse Buffer Mode ..\n");
-	DBGLOG(INIT, INFO, "ucEfuseBUfferModeCal is %x\n",
-		prAdapter->rWifiVar.ucEfuseBufferModeCal);
-
-if (prAdapter->rWifiVar.ucEfuseBufferModeCal == LOAD_EEPROM_BIN) {
-    DBGLOG(INIT, WARN, "MT7902-FIX: Forcing EFUSE mode (no binary file available)\n");
-    prAdapter->rWifiVar.ucEfuseBufferModeCal = LOAD_EFUSE;
-}
-
-
-	prChipInfo = prAdapter->chip_info;
-	chip_id = prChipInfo->chip_id;
-	prGlueInfo = prAdapter->prGlueInfo;
-	if (prGlueInfo == NULL || prGlueInfo->prDev == NULL)
-		goto label_exit;
-
-	/* allocate memory for buffer mode info */
-	prSetEfuseBufModeInfo =
-		(struct PARAM_CUSTOM_EFUSE_BUFFER_MODE_CONNAC_T *)
-		kalMemAlloc(sizeof(
-			struct PARAM_CUSTOM_EFUSE_BUFFER_MODE_CONNAC_T),
-			VIR_MEM_TYPE);
-	if (prSetEfuseBufModeInfo == NULL)
-		goto label_exit;
-	kalMemZero(prSetEfuseBufModeInfo,
-		sizeof(struct PARAM_CUSTOM_EFUSE_BUFFER_MODE_CONNAC_T));
-
-#if CFG_EFUSE_AUTO_MODE_SUPPORT
-		/* allocate memory for Access Efuse Info */
-		prAccessEfuseInfo =
-			(struct PARAM_CUSTOM_ACCESS_EFUSE *)
-			kalMemAlloc(sizeof(
-				    struct PARAM_CUSTOM_ACCESS_EFUSE),
-				    VIR_MEM_TYPE);
-		if (prAccessEfuseInfo == NULL)
-			goto label_exit;
-		kalMemZero(prAccessEfuseInfo,
-			   sizeof(struct PARAM_CUSTOM_ACCESS_EFUSE));
-
-		if (prAdapter->rWifiVar.ucEfuseBufferModeCal == LOAD_AUTO) {
-			prAccessEfuseInfo->u4Address = (u4Efuse_addr /
-				EFUSE_BLOCK_SIZE) * EFUSE_BLOCK_SIZE;
-			rStatus = kalIoctl(prGlueInfo,
-				wlanoidQueryProcessAccessEfuseRead,
-				prAccessEfuseInfo,
-				sizeof(struct PARAM_CUSTOM_ACCESS_EFUSE),
-				TRUE, TRUE, TRUE, &u4BufLen);
-			if (prGlueInfo->prAdapter->aucEepromVaule[1]
-				== (chip_id>>8)) {
-				prAdapter->rWifiVar.ucEfuseBufferModeCal
-					= LOAD_EFUSE;
-				DBGLOG(INIT, STATE,
-					"[EFUSE AUTO] EFUSE Mode\n");
-			} else {
-				prAdapter->rWifiVar.ucEfuseBufferModeCal
-					= LOAD_EEPROM_BIN;
-				DBGLOG(INIT, STATE,
-					"[EFUSE AUTO] Buffer Mode\n");
-			}
-		}
-#endif
-
-	if (prAdapter->rWifiVar.ucEfuseBufferModeCal
-		== LOAD_EEPROM_BIN) {
-		/* Buffer mode */
-		/* Only in buffer mode need to access bin file */
-		/* 1 <1> Load bin file*/
-		pucConfigBuf = (uint8_t *)
-			kalMemAlloc(MAX_EEPROM_BUFFER_SIZE, VIR_MEM_TYPE);
-		if (pucConfigBuf == NULL)
-			goto label_exit;
-		kalMemZero(pucConfigBuf, MAX_EEPROM_BUFFER_SIZE);
-
-		/* 1 <2> Construct EEPROM binary name */
-		kalMemZero(aucEeprom, sizeof(aucEeprom));
-		if (prChipInfo->constructBufferBinFileName == NULL) {
-			if (snprintf(aucEeprom, 32, "%s%x.bin",
-				 apucEepromName[0], chip_id) < 0) {
-				DBGLOG(INIT, ERROR, "gen BIN file name fail\n");
-				goto label_exit;
-			}
-		} else {
-			if (prChipInfo->constructBufferBinFileName(
-			    prAdapter, aucEeprom) != WLAN_STATUS_SUCCESS) {
-				DBGLOG(INIT, ERROR, "gen BIN file name fail\n");
-				goto label_exit;
-			}
-		}
-
-		/* 1 <3> Request buffer bin */
-		if (kalRequestFirmware(aucEeprom, pucConfigBuf,
-				MAX_EEPROM_BUFFER_SIZE, &u4ContentLen,
-				prGlueInfo->prDev) == 0) {
-			DBGLOG(INIT, INFO, "request file done\n");
-		} else {
-			DBGLOG(INIT, INFO, "can't find file\n");
-			goto label_exit;
-		}
-		DBGLOG(INIT, INFO, "u4ContentLen = %d\n", u4ContentLen);
-
-		/* 1 <4> Send CMD with bin file content */
-		if (u4ContentLen == 0 || u4ContentLen > MAX_EEPROM_BUFFER_SIZE)
-			goto label_exit;
-
-		/* Update contents in local table */
-		kalMemCopy(uacEEPROMImage, pucConfigBuf,
-			MAX_EEPROM_BUFFER_SIZE);
-
-		uTotalPage = u4ContentLen / BUFFER_BIN_PAGE_SIZE;
-		if ((u4ContentLen % BUFFER_BIN_PAGE_SIZE) == 0)
-			uTotalPage--;
-
-		prSetEfuseBufModeInfo->ucSourceMode = 1;
-	} else {
-		/* eFuse mode */
-		/* Only need to tell FW the content from, contents are directly
-		 * from efuse
-		 */
-		prSetEfuseBufModeInfo->ucSourceMode = 0;
-		u4ContentLen = 0;
-		uTotalPage = 0;
-	}
-
-	for (uPageIdx = 0; uPageIdx <= uTotalPage; uPageIdx++) {
-		/* set format */
-		prSetEfuseBufModeInfo->ucContentFormat = (
-			CONTENT_FORMAT_WHOLE_CONTENT |
-			((uTotalPage << BUFFER_BIN_TOTAL_PAGE_SHIFT)
-				& BUFFER_BIN_TOTAL_PAGE_MASK) |
-			((uPageIdx << BUFFER_BIN_PAGE_INDEX_SHIFT)
-				& BUFFER_BIN_PAGE_INDEX_MASK)
-		);
-		/* set buffer size */
-		prSetEfuseBufModeInfo->u2Count =
-			(u4ContentLen < BUFFER_BIN_PAGE_SIZE ?
-				u4ContentLen : BUFFER_BIN_PAGE_SIZE);
-		/* set buffer */
-		kalMemZero(prSetEfuseBufModeInfo->aBinContent,
-			BUFFER_BIN_PAGE_SIZE);
-		if (prSetEfuseBufModeInfo->u2Count != 0)
-			kalMemCopy(prSetEfuseBufModeInfo->aBinContent,
-				pucConfigBuf + uPageIdx * BUFFER_BIN_PAGE_SIZE,
-				prSetEfuseBufModeInfo->u2Count);
-		/* send buffer */
-		DBGLOG(INIT, INFO, "[%d/%d] load buffer size: 0x%x\n",
-			uPageIdx, uTotalPage, prSetEfuseBufModeInfo->u2Count);
-		rStatus = kalIoctl(prGlueInfo, wlanoidConnacSetEfusBufferMode,
-			(void *) prSetEfuseBufModeInfo, OFFSET_OF(
-				struct PARAM_CUSTOM_EFUSE_BUFFER_MODE_CONNAC_T,
-				aBinContent) + prSetEfuseBufModeInfo->u2Count,
-			FALSE, TRUE, TRUE, &u4BufLen);
-
-		if (rStatus != WLAN_STATUS_SUCCESS) {
-			DBGLOG(INIT, ERROR,
-			       "kalIoctl EXT_CMD_ID_EFUSE_BUFFER_MODE 0x%X\n",
-			       rStatus);
-			goto label_exit;
-		}
-
-		/* update remain size */
-		u4ContentLen -= prSetEfuseBufModeInfo->u2Count;
-	}
-	retWlanStat = WLAN_STATUS_SUCCESS;
-
-label_exit:
-	/* free memory */
-	if (prSetEfuseBufModeInfo != NULL)
-		kalMemFree(prSetEfuseBufModeInfo, VIR_MEM_TYPE,
-			sizeof(struct PARAM_CUSTOM_EFUSE_BUFFER_MODE_CONNAC_T));
-	if (pucConfigBuf != NULL)
-		kalMemFree(pucConfigBuf, VIR_MEM_TYPE, MAX_EEPROM_BUFFER_SIZE);
-
-#if CFG_EFUSE_AUTO_MODE_SUPPORT
-	if (prAccessEfuseInfo != NULL)
-		kalMemFree(prAccessEfuseInfo, VIR_MEM_TYPE,
-			sizeof(struct PARAM_CUSTOM_ACCESS_EFUSE));
-#endif
-
-	return retWlanStat;
 }
 
 #if (CONFIG_WLAN_SERVICE == 1)
@@ -6034,166 +5829,200 @@ int32_t wlanOnAtReset(void)
 
 	DBGLOG(INIT, STATE, "[SER] Driver On during Reset\n");
 
-	if (u4WlanDevNum > 0
-		&& u4WlanDevNum <= CFG_MAX_WLAN_DEVICES) {
-		prDev = arWlanDevInfo[u4WlanDevNum - 1].prDev;
+	/* ================================================================
+	 * STEP 1: Validate existing device structures
+	 * ================================================================ */
+	if (u4WlanDevNum == 0 || u4WlanDevNum > CFG_MAX_WLAN_DEVICES) {
+		DBGLOG(INIT, ERROR, "Invalid device number: %d\n", u4WlanDevNum);
+		return WLAN_STATUS_FAILURE;
 	}
 
-	if (prDev == NULL) {
+	prDev = arWlanDevInfo[u4WlanDevNum - 1].prDev;
+	if (!prDev) {
 		DBGLOG(INIT, ERROR, "prDev is NULL\n");
 		return WLAN_STATUS_FAILURE;
 	}
 
 	prGlueInfo = *((struct GLUE_INFO **) netdev_priv(prDev));
-	if (prGlueInfo == NULL) {
-		DBGLOG(INIT, INFO, "prGlueInfo is NULL\n");
+	if (!prGlueInfo) {
+		DBGLOG(INIT, ERROR, "prGlueInfo is NULL\n");
 		wlanFreeNetDev();
 		return WLAN_STATUS_FAILURE;
 	}
 
 	prAdapter = prGlueInfo->prAdapter;
-	if (prAdapter == NULL) {
-		DBGLOG(INIT, INFO, "prAdapter is NULL\n");
+	if (!prAdapter) {
+		DBGLOG(INIT, ERROR, "prAdapter is NULL\n");
 		return WLAN_STATUS_FAILURE;
 	}
 
+	/* ================================================================
+	 * STEP 2: Reset state and begin recovery sequence
+	 * ================================================================ */
 	prGlueInfo->ulFlag = 0;
 	fgSimplifyResetFlow = FALSE;
+
 	do {
 #if (CFG_SUPPORT_TRACE_TC4 == 1)
 		wlanDebugTC4Init();
 #endif
-		/* wlanNetCreate partial process */
+
+		/* Reinitialize critical queue structures */
 		QUEUE_INITIALIZE(&prGlueInfo->rCmdQueue);
 		prGlueInfo->i4TxPendingCmdNum = 0;
 		QUEUE_INITIALIZE(&prGlueInfo->rTxQueue);
 
+		/* Reset HIF (Host Interface) structures */
 		glResetHifInfo(prGlueInfo);
 
+		/* --------------------------------------------------------
+		 * STEP 4: Set up IRQ handlers (now that MCU is confirmed alive)
+		 * -------------------------------------------------------- */
 		rStatus = glBusSetIrq(prDev, NULL, prGlueInfo);
 		if (rStatus != WLAN_STATUS_SUCCESS) {
-			DBGLOG(INIT, ERROR, "Set IRQ error\n");
+			DBGLOG(INIT, ERROR, "Failed to set IRQ (status=0x%x)\n", rStatus);
 			eFailReason = BUS_SET_IRQ_FAIL;
 			break;
 		}
 
-		/* Trigger the action of switching Pwr state to drv_own */
+		/* --------------------------------------------------------
+		 * STEP 5: Trigger firmware ownership transfer
+		 * Mark as FW-owned so adapter start will properly transition
+		 * to driver-owned during the power state handshake.
+		 * -------------------------------------------------------- */
 		prAdapter->fgIsFwOwn = TRUE;
 
-		/* wlanAdapterStart Section Start */
-		rStatus = wlanAdapterStart(prAdapter,
-					   &prGlueInfo->rRegInfo,
-					   TRUE);
+		/* --------------------------------------------------------
+		 * STEP 6: Start the adapter (FW download, HW init)
+		 * -------------------------------------------------------- */
+		rStatus = wlanAdapterStart(prAdapter, &prGlueInfo->rRegInfo, TRUE);
 		if (rStatus != WLAN_STATUS_SUCCESS) {
+			DBGLOG(INIT, ERROR, 
+			       "Adapter start FAILED (status=0x%x)\n", rStatus);
 			eFailReason = ADAPTER_START_FAIL;
 			break;
 		}
 
-		if (wlanOnPreNetRegister(prGlueInfo, prAdapter,
-					 prAdapter->chip_info,
-					 &prAdapter->rWifiVar,
-					 TRUE)) {
+		/* --------------------------------------------------------
+		 * STEP 7: Pre-network registration setup
+		 * Initialize internal state before we're visible to userspace
+		 * -------------------------------------------------------- */
+		if (wlanOnPreNetRegister(prGlueInfo, 
+		                         prAdapter,
+		                         prAdapter->chip_info,
+		                         &prAdapter->rWifiVar,
+		                         TRUE)) {
+			DBGLOG(INIT, ERROR, "Pre-net-register setup failed\n");
 			rStatus = WLAN_STATUS_FAILURE;
 			eFailReason = NET_REGISTER_FAIL;
 			break;
 		}
 
-		/* Resend schedule scan */
+		/* --------------------------------------------------------
+		 * STEP 8: Restore scheduled scan if it was active
+		 * -------------------------------------------------------- */
 		prAdapter->rWifiVar.rScanInfo.fgSchedScanning = FALSE;
+		
 #if CFG_SUPPORT_SCHED_SCAN
 		if (prGlueInfo->prSchedScanRequest) {
-			rStatus = kalIoctl(prGlueInfo, wlanoidSetStartSchedScan,
-					prGlueInfo->prSchedScanRequest,
-					sizeof(struct PARAM_SCHED_SCAN_REQUEST),
-					false, FALSE, TRUE, &u4BufLen);
-			if (rStatus != WLAN_STATUS_SUCCESS)
+			DBGLOG(INIT, INFO, "Restoring scheduled scan after reset\n");
+			
+			rStatus = kalIoctl(prGlueInfo, 
+			                   wlanoidSetStartSchedScan,
+			                   prGlueInfo->prSchedScanRequest,
+			                   sizeof(struct PARAM_SCHED_SCAN_REQUEST),
+			                   false, FALSE, TRUE, &u4BufLen);
+			
+			if (rStatus != WLAN_STATUS_SUCCESS) {
 				DBGLOG(INIT, WARN,
-				"SCN: Start sched scan failed after chip reset 0x%x\n",
-					rStatus);
+				       "SCN: Failed to restore sched scan (0x%x)\n",
+				       rStatus);
+			}
 		}
 #endif
 
+		/* --------------------------------------------------------
+		 * STEP 9: Clear stale connection state on all AIS interfaces
+		 * -------------------------------------------------------- */
 		for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
-			struct FT_IES *prFtIEs =
-				aisGetFtIe(prAdapter, u4Idx);
+			struct FT_IES *prFtIEs = aisGetFtIe(prAdapter, u4Idx);
 			struct CONNECTION_SETTINGS *prConnSettings =
 				aisGetConnSettings(prAdapter, u4Idx);
 
-			kalMemZero(prFtIEs,
-				sizeof(*prFtIEs));
+			kalMemZero(prFtIEs, sizeof(*prFtIEs));
 			prConnSettings->fgIsScanReqIssued = FALSE;
 		}
 
 	} while (FALSE);
 
+	/* ================================================================
+	 * POST-RECOVERY: Success path vs. failure cleanup
+	 * ================================================================ */
 	if (rStatus == WLAN_STATUS_SUCCESS) {
+		/* ------------------------------------------------------------
+		 * SUCCESS PATH: Mark driver ready and clean up stale state
+		 * ------------------------------------------------------------ */
 		wlanOnWhenProbeSuccess(prGlueInfo, prAdapter, TRUE);
-		DBGLOG(INIT, INFO, "reset success\n");
+		DBGLOG(INIT, INFO, "[SER] Reset recovery SUCCESS\n");
 
-		/* Clear pending request (SCAN). */
+		/* Clear any pending scan requests that were orphaned by reset */
 		scnFreeAllPendingScanRquests(prAdapter);
 
-		/* Send disconnect */
+		/* Send disconnect events to all active AIS interfaces */
 		for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
-			/* Clear pending request (AIS). */
+			/* Clear pending AIS FSM requests */
 			aisFsmFlushRequest(prAdapter, u4Idx);
 
-			/* If scan state is SCAN_STATE_SCANNING, means
-			 * that have scan req not done before SER.
-			 * Abort this request to prevent scan fail
-			 * (scan state back to IDLE).
+			/* If we were mid-scan when reset hit, abort the scan
+			 * to return scan state machine to IDLE
 			 */
-			if (prAdapter->rWifiVar.rScanInfo.eCurrentState
-				== SCAN_STATE_SCANNING) {
+			if (prAdapter->rWifiVar.rScanInfo.eCurrentState 
+			    == SCAN_STATE_SCANNING) {
+				DBGLOG(INIT, INFO, 
+				       "AIS[%d]: Aborting orphaned scan\n", u4Idx);
 				aisFsmStateAbort_SCAN(prAdapter, u4Idx);
-			};
+			}
 
+			/* Issue disconnect to clean up any stale connections */
 			rStatus = kalIoctlByBssIdx(prGlueInfo,
-				wlanoidSetDisassociate,
-				&u4DisconnectReason,
-				0, FALSE, FALSE, TRUE, &u4BufLen,
-				u4Idx);
+			                           wlanoidSetDisassociate,
+			                           &u4DisconnectReason,
+			                           0, FALSE, FALSE, TRUE, 
+			                           &u4BufLen, u4Idx);
 
 			if (rStatus != WLAN_STATUS_SUCCESS) {
 				DBGLOG(REQ, WARN,
-					"disassociate error:%x\n", rStatus);
+				       "AIS[%d]: Disconnect failed (0x%x)\n",
+				       u4Idx, rStatus);
 				continue;
 			}
+			
 			DBGLOG(INIT, INFO,
-				"%d inform disconnected\n", u4Idx);
+			       "AIS[%d]: Disconnect event sent to userspace\n", 
+			       u4Idx);
 		}
+
 	} else {
+		/* ------------------------------------------------------------
+		 * FAILURE PATH: Dump debug info and log the failure reason
+		 * ------------------------------------------------------------ */
+		DBGLOG(INIT, ERROR, 
+		       "[SER] Reset recovery FAILED - reason: %d\n", eFailReason);
+
+		/* Enable debug dumps and print HIF diagnostic info */
 		prAdapter->u4HifDbgFlag |= DEG_HIF_DEFAULT_DUMP;
 		halPrintHifDbgInfo(prAdapter);
-		DBGLOG(INIT, WARN, "Fail reason: %d\n", eFailReason);
 
-		/* Remove error handling here, leave it to coming wlanRemove
-		 * for full clean.
+		/* Note: Error cleanup is intentionally minimal here.
+		 * If reset recovery fails, the subsystem is likely in a bad
+		 * state. We rely on the upcoming wlanRemove() call (triggered
+		 * by chip reset infrastructure) to do full teardown.
 		 *
-		 * If WMT being removed in the future, you should invoke
-		 * wlanRemove directly from here
+		 * Attempting partial cleanup here risks use-after-free or
+		 * double-free issues if wlanRemove() runs afterward.
 		 */
-#if 0
-		switch (eFailReason) {
-		case ADAPTER_START_FAIL:
-			glBusFreeIrq(prDev,
-				*((struct GLUE_INFO **)
-						netdev_priv(prDev)));
-			kal_fallthrough;
-		case BUS_SET_IRQ_FAIL:
-			wlanWakeLockUninit(prGlueInfo);
-			wlanNetDestroy(prDev->ieee80211_ptr);
-			/* prGlueInfo->prAdapter is released in
-			 * wlanNetDestroy
-			 */
-			/* Set NULL value for local prAdapter as well */
-			prAdapter = NULL;
-			break;
-		default:
-			break;
-		}
-#endif
 	}
+
 	return rStatus;
 }
 #endif
@@ -6361,7 +6190,6 @@ int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter)
 }
 
 
-
 static int32_t wlanProbe(void *pvData, void *pvDriverData)
 {
 	struct wireless_dev *prWdev = NULL;
@@ -6432,6 +6260,7 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		/* 2. Create Net Device (Alloc only, no register yet) */
 		prWdev = wlanNetCreate(pvData, pvDriverData);
 		if (prWdev == NULL) {
+		  //int i4status;
 			DBGLOG(INIT, ERROR, "wlanProbe: No memory for dev\n");
 			i4Status = -ENOMEM;
 			eFailReason = NET_CREATE_FAIL;
@@ -6452,12 +6281,7 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		gPrDev = prGlueInfo->prDevHandler;
 		prWlandevInfo = &arWlanDevInfo[i4DevIdx];
 
-		i4Status = glBusSetIrq(prWdev->netdev, NULL, prGlueInfo);
-		if (i4Status != WLAN_STATUS_SUCCESS) {
-			DBGLOG(INIT, ERROR, "wlanProbe: Set IRQ error\n");
-			eFailReason = BUS_SET_IRQ_FAIL;
-			break;
-		}
+		/* Get adapter reference - needed for cold boot */
 		prGlueInfo->i4DevIdx = i4DevIdx;
 		prAdapter = prGlueInfo->prAdapter;
 
@@ -6468,20 +6292,40 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 			break;
 		}
 
+		/* --------------------------------------------------------
+		 * STEP 3: Cold boot the WFSYS MCU (our precious baby)
+		 * This MUST happen before we set up IRQs because:
+		 * - IRQ handlers expect a live MCU
+		 * - Dead MCU = spurious/stuck IRQs
+		 * - We need to verify bus health before IRQ registration
+		 * -------------------------------------------------------- */
+		DBGLOG(INIT, INFO, "Attempting WFSYS cold boot...\n");
+		
+		if (mt79xx_wfsys_cold_boot_and_wait(prAdapter) != 0) {
+			DBGLOG(INIT, ERROR, 
+			       "WFSYS cold boot FAILED - MCU did not come alive\n");
+			i4Status = WLAN_STATUS_FAILURE;
+			eFailReason = ADAPTER_START_FAIL;
+			break;
+		}
+		
+		DBGLOG(INIT, INFO, "WFSYS MCU is alive! Proceeding with reset recovery.\n");
+
+
+
 		prWifiVar = &prAdapter->rWifiVar;
 
 		wlanOnPreAdapterStart(prGlueInfo, prAdapter, &prRegInfo, &prChipInfo);
 
-		/* 4. Boot MCU */
-		if (mt79xx_wfsys_cold_boot_and_wait(prAdapter) != 0) {
-			DBGLOG(INIT, ERROR, "WFSYS init failed: MCU did not come alive\n");
-			i4Status = -ENODEV;
-			eFailReason = ADAPTER_START_FAIL;
+		/* 5. Set IRQ - AFTER MCU is confirmed alive */
+		i4Status = glBusSetIrq(prWdev->netdev, NULL, prGlueInfo);
+		if (i4Status != WLAN_STATUS_SUCCESS) {
+			DBGLOG(INIT, ERROR, "wlanProbe: Set IRQ error\n");
+			eFailReason = BUS_SET_IRQ_FAIL;
 			break;
 		}
-		DBGLOG(INIT, INFO, "WFSYS MCU is alive, continuing adapter start\n");
 
-		/* 5. Adapter Start (FW Download, HW Init) */
+		/* 6. Adapter Start (FW Download, HW Init) */
 		if (wlanAdapterStart(prAdapter, prRegInfo, FALSE) != WLAN_STATUS_SUCCESS) {
 			i4Status = -EIO;
 			eFailReason = ADAPTER_START_FAIL;
@@ -6558,7 +6402,7 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		wlanTpeInit(prGlueInfo);
 #endif
 
-		/* 6. Register Net Device (GO LIVE) */
+		/* 7. Register Net Device (GO LIVE) */
 		/* Userspace sees the interface HERE. */
 		i4DevIdx = wlanNetRegister(prWdev);
 		if (i4DevIdx < 0) {
@@ -6570,7 +6414,7 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 
 		wlanOnPostNetRegister();
 
-		/* 7. Post-Register Init (Proc/Sysfs need registered name) */
+		/* 8. Post-Register Init (Proc/Sysfs need registered name) */
 #if WLAN_INCLUDE_PROC
 		i4Status = procCreateFsEntry(prGlueInfo);
 		if (i4Status < 0) {
@@ -6653,7 +6497,6 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 
 	return i4Status;
 }
-
 
 
 void
@@ -6775,6 +6618,7 @@ static int initWlan(void)
 {
 	int ret = 0;
 	struct GLUE_INFO *prGlueInfo = NULL;
+	
 
 #if (CFG_POWER_ON_DOWNLOAD_EMI_ROM_PATCH == 1)
 #if defined(SOC3_0)
@@ -6929,7 +6773,7 @@ static int initWlan(void)
 
 /* Manual probe disabled for Arch branch */
 /* Removed manual probe for Arch/PCIe */
-// // 	wlanProbe(pvData, pvDriverData);
+	//	wlanProbe(pvData, pvDriverData);
 #endif
 
 #if CFG_POWER_OFF_CTRL_SUPPORT

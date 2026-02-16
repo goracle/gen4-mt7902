@@ -256,10 +256,25 @@ uint32_t halDumpHifStatus(IN struct ADAPTER *prAdapter,
 	struct RTMP_TX_RING *prTxRing;
 	struct RTMP_RX_RING *prRxRing;
 
+	/* * ARCH/MT7902 FIX: If the bus is dead (0xFFFFFFFF), reading further 
+	 * registers will trigger a Kernel Panic (GPF). Exit early.
+	 */
+	if (prAdapter->chip_info->checkMmioAlive && 
+	    !prAdapter->chip_info->checkMmioAlive(prAdapter)) {
+		DBGLOG(HAL, ERROR, "MMIO is dead! Aborting HIF dump to prevent Panic.\n");
+		return 0;
+	}
+
 	LOGBUF(pucBuf, u4Max, u4Len, "\n------<Dump HIF Status>------\n");
 
+	/* --- TX RINGS --- */
 	for (u4Idx = 0; u4Idx < NUM_OF_TX_RING; u4Idx++) {
 		prTxRing = &prHifInfo->TxRing[u4Idx];
+
+		/* MT7902 1x1 specific: Skip rings that aren't mapped in hardware */
+		if (prTxRing->hw_cnt_addr == 0)
+			continue;
+
 		kalDevRegRead(prGlueInfo, prTxRing->hw_cnt_addr, &u4MaxCnt);
 		kalDevRegRead(prGlueInfo, prTxRing->hw_cidx_addr, &u4CpuIdx);
 		kalDevRegRead(prGlueInfo, prTxRing->hw_didx_addr, &u4DmaIdx);
@@ -274,14 +289,9 @@ uint32_t halDumpHifStatus(IN struct ADAPTER *prAdapter,
 			u4CpuIdx, prTxRing->TxDmaIdx,
 			u4DmaIdx, prTxRing->TxSwUsedIdx, prTxRing->u4UsedCnt);
 
-		if (u4Idx == TX_RING_DATA0_IDX_0) {
-			halDumpTxRing(prGlueInfo, u4Idx, prTxRing->TxCpuIdx);
-			halDumpTxRing(prGlueInfo, u4Idx, u4CpuIdx);
-			halDumpTxRing(prGlueInfo, u4Idx, u4DmaIdx);
-			halDumpTxRing(prGlueInfo, u4Idx, prTxRing->TxSwUsedIdx);
-		}
-
-		if (u4Idx == TX_RING_DATA1_IDX_1) {
+		/* Only dump detailed ring info for initialized data rings */
+		if ((u4Idx == TX_RING_DATA0_IDX_0 || u4Idx == TX_RING_DATA1_IDX_1) && 
+		     u4MaxCnt > 0) {
 			halDumpTxRing(prGlueInfo, u4Idx, prTxRing->TxCpuIdx);
 			halDumpTxRing(prGlueInfo, u4Idx, u4CpuIdx);
 			halDumpTxRing(prGlueInfo, u4Idx, u4DmaIdx);
@@ -289,8 +299,13 @@ uint32_t halDumpHifStatus(IN struct ADAPTER *prAdapter,
 		}
 	}
 
+	/* --- RX RINGS --- */
 	for (u4Idx = 0; u4Idx < NUM_OF_RX_RING; u4Idx++) {
 		prRxRing = &prHifInfo->RxRing[u4Idx];
+
+		/* Guard against non-existent RX rings on 1x1 architecture */
+		if (prRxRing->hw_cnt_addr == 0)
+			continue;
 
 		kalDevRegRead(prGlueInfo, prRxRing->hw_cnt_addr, &u4MaxCnt);
 		kalDevRegRead(prGlueInfo, prRxRing->hw_cidx_addr, &u4CpuIdx);
@@ -306,9 +321,11 @@ uint32_t halDumpHifStatus(IN struct ADAPTER *prAdapter,
 		       prRxRing->RxDmaIdx, u4DmaIdx);
 	}
 
+	/* --- Token & Queue Info --- */
 	LOGBUF(pucBuf, u4Max, u4Len, "MSDU Tok: Free[%u] Used[%u]\n",
 		halGetMsduTokenFreeCnt(prGlueInfo->prAdapter),
 		prGlueInfo->rHifInfo.rTokenInfo.u4UsedCnt);
+	
 	LOGBUF(pucBuf, u4Max, u4Len, "Pending QLen Normal[%u] Sec[%u]\n",
 		prGlueInfo->i4TxPendingFrameNum,
 		prGlueInfo->i4TxPendingSecurityFrameNum);
@@ -317,7 +334,6 @@ uint32_t halDumpHifStatus(IN struct ADAPTER *prAdapter,
 
 	return u4Len;
 }
-
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief Compare two struct timeval

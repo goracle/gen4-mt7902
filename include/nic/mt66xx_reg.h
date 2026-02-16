@@ -1456,6 +1456,7 @@ union REG_WFDMA_DCM_CTRL {
 };
 
 struct mt66xx_chip_info {
+u_int8_t (*checkMmioAlive)(struct ADAPTER *prAdapter);
 	struct BUS_INFO *bus_info;
 	struct FWDL_OPS_T *fw_dl_ops;
 	struct TX_DESC_OPS_T *prTxDescOps;

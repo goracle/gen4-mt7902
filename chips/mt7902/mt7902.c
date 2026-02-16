@@ -1589,8 +1589,24 @@ struct ATE_OPS_T mt7902_AteOps = {
 };
 #endif
 
+u_int8_t mt7902_check_mmio_alive(struct ADAPTER *prAdapter)
+{
+    uint32_t u4Val = 0;
+    
+    /* Using the Connectivity Config Chip ID register for the heartbeat check */
+    HAL_MCR_RD(prAdapter, CONN_CFG_CHIP_ID_ADDR, &u4Val);
+    
+    /* If the bus is hanging or disconnected, we get all 1s or all 0s */
+    if (u4Val == 0xFFFFFFFF || u4Val == 0x00000000)
+        return FALSE;
+        
+    return TRUE;
+}
+
+
 /* Litien code refine to support multi chip */
 struct mt66xx_chip_info mt66xx_chip_info_mt7902 = {
+  .checkMmioAlive = mt7902_check_mmio_alive,
 	.bus_info = &mt7902_bus_info,
 #if CFG_ENABLE_FW_DOWNLOAD
 	.fw_dl_ops = &mt7902_fw_dl_ops,
@@ -1625,7 +1641,7 @@ struct mt66xx_chip_info mt66xx_chip_info_mt7902 = {
 	#endif
 	.asicCapInit = asicConnac2xCapInit,
 #if CFG_ENABLE_FW_DOWNLOAD
-	.asicEnableFWDownload = NULL,
+	.asicEnableFWDownload = asicEnableFWDownload,
 #endif /* CFG_ENABLE_FW_DOWNLOAD */
 #if defined(_HIF_USB) || defined(_HIF_SDIO)
 	.asicDumpSerDummyCR = mt7961DumpSerDummyCR,
@@ -1688,5 +1704,7 @@ struct mt66xx_chip_info mt66xx_chip_info_mt7902 = {
 struct mt66xx_hif_driver_data mt66xx_driver_data_mt7902 = {
 	.chip_info = &mt66xx_chip_info_mt7902,
 };
+
+
 
 #endif /* MT7902 */
