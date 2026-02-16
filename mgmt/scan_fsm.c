@@ -826,7 +826,7 @@ void scnEventScanDone(IN struct ADAPTER *prAdapter,
     uint32_t u4BssIndicateCnt = 0;
 
     /* Temporary storage for pointers to indicate outside the lock */
-#define MAX_INDICATE_BSS 256
+#define MAX_INDICATE_BSS 128
     struct BSS_DESC *aprIndicate[MAX_INDICATE_BSS];
     uint32_t u4IndicateNum = 0;
 

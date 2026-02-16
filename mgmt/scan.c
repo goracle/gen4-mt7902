@@ -3516,6 +3516,7 @@ struct BSS_DESC *scanSearchBssDescByPolicy(
 	u_int8_t fgIsFindBestEncryptionLevel = FALSE;
 #endif
 	u_int8_t fgIsFixedChannel;
+	u_int8_t fgIsWildcardBssid;
 	enum ENUM_BAND eBand = BAND_2G4;
 	uint8_t ucChannel = 0;
 	uint32_t u4BssCount = 0;
@@ -3542,6 +3543,15 @@ struct BSS_DESC *scanSearchBssDescByPolicy(
 		fgIsFixedChannel = FALSE;
 	}
 	
+	/* Check if BSSID is wildcard (00:00:00:00:00:00 or ff:ff:ff:ff:ff:ff) */
+	fgIsWildcardBssid = IS_BMCAST_MAC_ADDR(prConnSettings->aucBSSID) ||
+	                    (prConnSettings->aucBSSID[0] == 0x00 &&
+	                     prConnSettings->aucBSSID[1] == 0x00 &&
+	                     prConnSettings->aucBSSID[2] == 0x00 &&
+	                     prConnSettings->aucBSSID[3] == 0x00 &&
+	                     prConnSettings->aucBSSID[4] == 0x00 &&
+	                     prConnSettings->aucBSSID[5] == 0x00);
+	
 #if DBG
 	if (prConnSettings->ucSSIDLen < ELEM_MAX_LEN_SSID)
 		prConnSettings->aucSSID[prConnSettings->ucSSIDLen] = '\0';
@@ -3562,7 +3572,7 @@ struct BSS_DESC *scanSearchBssDescByPolicy(
 			u4BssCount, MAC2STR(prBssDesc->aucBSSID), 
 			prBssDesc->ucChannelNum, prBssDesc->ucPhyTypeSet, prBssDesc->aucSSID);
 		
-		/* --- H-FIX ANCHOR: Force PHY if missing --- */
+		/* Force PHY if missing */
 		if (prBssDesc->ucPhyTypeSet == 0) {
 			if (prBssDesc->ucChannelNum <= 14) {
 				prBssDesc->ucPhyTypeSet = PHY_TYPE_SET_802_11GN;
@@ -3596,7 +3606,7 @@ struct BSS_DESC *scanSearchBssDescByPolicy(
 		if (shouldSkipStaRecord(prStaRec, rCurrentTime))
 			continue;
 		
-		/* Filter 7: Network Type & BSSID Logic (The H-FIX Patch) */
+		/* Filter 7: Network Type & BSSID Logic */
 		if (prBssInfo->eNetworkType == NETWORK_TYPE_AIS) {
 			enum ENUM_BSS_TYPE eBSSType = prBssDesc->eBSSType;
 			enum ENUM_PARAM_OP_MODE eOPMode = prConnSettings->eOPMode;
@@ -3607,23 +3617,21 @@ struct BSS_DESC *scanSearchBssDescByPolicy(
 			if ((eOPMode == NET_TYPE_IBSS || eOPMode == NET_TYPE_DEDICATED_IBSS) && eBSSType != BSS_TYPE_IBSS)
 				continue;
 			
-			/* BSSID Matching Logic */
+			/* BSSID Matching Logic - NO FALLBACKS */
 			if (prConnSettings->fgIsConnByBssidIssued && eBSSType == BSS_TYPE_INFRASTRUCTURE) {
-				if (UNEQUAL_MAC_ADDR(prConnSettings->aucBSSID, prBssDesc->aucBSSID)) {
-					
-					/* H-FIX: If MAC fails, check if SSID name matches */
-					if (prBssDesc->ucSSIDLen == prConnSettings->ucSSIDLen &&
-					    kalMemCmp(prBssDesc->aucSSID, prConnSettings->aucSSID, prBssDesc->ucSSIDLen) == 0) {
-						log_dbg(SCN, WARN, "SEARCH: H-Fix: BSSID mismatch but SSID matches! Allowing " MACSTR "\n",
-							MAC2STR(prBssDesc->aucBSSID));
-						/* Fall through to primary selection */
-					} else {
-						continue;
-					}
+				/* If specific BSSID requested (not wildcard), require EXACT match */
+				if (!fgIsWildcardBssid && UNEQUAL_MAC_ADDR(prConnSettings->aucBSSID, prBssDesc->aucBSSID)) {
+					log_dbg(SCN, TRACE, "SEARCH: [%d] REJECT: BSSID mismatch (wanted " MACSTR ", got " MACSTR ")\n",
+						u4BssCount, 
+						MAC2STR(prConnSettings->aucBSSID),
+						MAC2STR(prBssDesc->aucBSSID));
+					continue;
 				}
+				/* Wildcard BSSID: match on SSID only (filtered by primary selection) */
 			}
+			
 #if CFG_SUPPORT_ADHOC
-			/* Re-inserting call to prevent 'unused-function' error */
+			/* ADHOC validation */
 			if (eBSSType == BSS_TYPE_IBSS) {
 				if (!validateAdhocBss(prAdapter, prBssDesc, prBssInfo, ucBssIndex, rCurrentTime)) {
 					log_dbg(SCN, INFO, "SEARCH: [%d] REJECT: ADHOC validation fail\n", u4BssCount);
@@ -3671,8 +3679,6 @@ struct BSS_DESC *scanSearchBssDescByPolicy(
 	
 	return prCandidateBssDesc;
 }
-
-
 
 
 

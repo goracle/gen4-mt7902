@@ -3393,35 +3393,56 @@ kalOidComplete(IN struct GLUE_INFO *prGlueInfo,
                IN uint32_t rOidStatus)
 {
     ASSERT(prGlueInfo);
-    
-    /* remove timeout check timer */
+
+    /* clear timeout check timer for this OID */
     wlanoidClearTimeoutCheck(prGlueInfo->prAdapter);
-    
+
+    /* store OID result for whoever needs it */
     prGlueInfo->rPendStatus = rOidStatus;
     prGlueInfo->u4OidCompleteFlag = 1;
-    
-    /* FIX: Don't signal completion - kalIoctlByBssIdx uses busy-wait, not completion API
-     * Signaling here causes "SKIP multiple OID complete" warnings because the completion
-     * object stays signaled across multiple IOCTLs.
-     */
-    #if 0
-    /* complete ONLY if there are waiters */
-    if (!completion_done(&prGlueInfo->rPendComp)) {
-        complete(&prGlueInfo->rPendComp);
-    } else {
-        DBGLOG(INIT, WARN, "SKIP multiple OID complete!\n");
-        /* WARN_ON(TRUE); */
-    }
-    #endif
-    
-    if (rOidStatus == WLAN_STATUS_SUCCESS)
-        DBGLOG(INIT, TRACE, "Complete OID, status:success\n");
-    else
-        DBGLOG(INIT, WARN, "Complete OID, status:0x%08x\n",
-               rOidStatus);
-    /* else let it timeout on kalIoctl entry */
-}
 
+    /*
+     * Two execution flows exist:
+     *  - OID was issued synchronously (wlanSetInformation / wlanQueryInformation
+     *    returned non-PENDING): main_thread expects to handle completion (it
+     *    calls complete() itself after invoking the handler). In that case we
+     *    should NOT call complete() here — instead wake the main thread so it
+     *    can finish its path.
+     *
+     *  - OID was issued asynchronously (handler returned PENDING): the waiting
+     *    context is blocked on rPendComp and expects kalOidComplete to call
+     *    complete(). In that case we must call complete() but only if there is
+     *    indeed a waiter (avoid double-complete).
+     */
+
+    /* If the OID entry indicates we are still PENDING, the waiting context expects completion */
+    if (prGlueInfo->OidEntry.rStatus == WLAN_STATUS_PENDING) {
+        /* complete only if not already signalled to avoid double-complete warnings */
+        if (!completion_done(&prGlueInfo->rPendComp)) {
+            complete(&prGlueInfo->rPendComp);
+            DBGLOG(INIT, TRACE, "kalOidComplete: completed pend comp, status=0x%08x\n", rOidStatus);
+        } else {
+            DBGLOG(INIT, WARN, "kalOidComplete: completion already done, skipping (status=0x%08x)\n", rOidStatus);
+        }
+    } else {
+        /*
+         * The OID was handled synchronously earlier (handler returned non-PENDING)
+         * so main_thread will expect to finalize/complete it. Make sure the main
+         * thread wakes up and sees the OID completion flag.
+         */
+        set_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag);
+
+        /* Ensure main_thread wakes up to process the OID completion path. */
+        kalSetEvent(prGlueInfo);
+
+        DBGLOG(INIT, TRACE, "kalOidComplete: notified main thread to finish OID (status=0x%08x)\n", rOidStatus);
+    }
+
+    if (rOidStatus == WLAN_STATUS_SUCCESS)
+        DBGLOG(INIT, TRACE, "Complete OID, status: success\n");
+    else
+        DBGLOG(INIT, WARN, "Complete OID, status: 0x%08x\n", rOidStatus);
+}
 
 void kalOidClearance(IN struct GLUE_INFO *prGlueInfo)
 {

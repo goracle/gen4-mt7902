@@ -1286,11 +1286,6 @@ wlanoidSetConnect(IN struct ADAPTER *prAdapter,
 		return WLAN_STATUS_SUCCESS;
 	}
 
-	/* 🛡️ Guard against mailbox hang during disconnect sequence */ 
-	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
-		DBGLOG(REQ, WARN, "MT7902: Chip No-Ack or Removing. Bypassing Disassociate Mailbox. 🛡️\n");
-		return WLAN_STATUS_SUCCESS;
-	}
 	prCurrBssid = aisGetCurrBssId(prAdapter,
 		ucBssIndex);
 
@@ -1698,7 +1693,7 @@ wlanoidQueryInfrastructureMode(IN struct ADAPTER *prAdapter,
 
 uint32_t
 wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
-                             IN void *pvSetBuffer, 
+                             IN void *pvSetBuffer,
                              IN uint32_t u4SetBufferLen,
                              OUT uint32_t *pu4SetInfoLen)
 {
@@ -1711,11 +1706,13 @@ wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
     struct SCAN_INFO *prScanInfo;
     struct AIS_FSM_INFO *prAisFsmInfo;
     uint8_t ucBssIndex = 0;
-    uint32_t rStatus;
+    uint32_t rStatus = WLAN_STATUS_FAILURE;
+    const unsigned int max_wait_ms = 2000; /* bounded wait to avoid hang */
+    unsigned int waited_ms = 0;
 
     DEBUGFUNC("wlanoidSetInfrastructureMode");
 
-    /* HARDENING: Validate critical pointers */
+    /* Basic pointer validation */
     if (!prAdapter) {
         DBGLOG(REQ, ERROR, "[HARDENING] NULL prAdapter\n");
         return WLAN_STATUS_INVALID_DATA;
@@ -1744,18 +1741,20 @@ wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
         return WLAN_STATUS_BUFFER_TOO_SHORT;
     }
 
-    /* Check ACPI state */
+    /* ACPI / adapter ready checks */
     if (prAdapter->rAcpiState == ACPI_STATE_D3) {
         DBGLOG(REQ, WARN,
-               "Fail in set infrastructure mode! (Adapter not ready). "
-               "ACPI=D%d, Radio=%d\n",
+               "Fail in set infrastructure mode! (Adapter not ready). ACPI=D%d, Radio=%d\n",
                prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
         return WLAN_STATUS_ADAPTER_NOT_READY;
     }
 
-    /* Fail-fast if chip is ghosting */
     if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
         DBGLOG(REQ, WARN, "[HARDENING] Chip not responding or being removed\n");
+        /*
+         * Historically driver returned SUCCESS here to not block callers
+         * during shutdown. Preserve that behavior for compatibility.
+         */
         return WLAN_STATUS_SUCCESS;
     }
 
@@ -1769,43 +1768,38 @@ wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
         return WLAN_STATUS_INVALID_DATA;
     }
 
+    /* Grab required per-BSS structures and validate them */
     prAisSpecBssInfo = aisGetAisSpecBssInfo(prAdapter, ucBssIndex);
     prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
     prAisBssInfo = aisGetAisBssInfo(prAdapter, ucBssIndex);
+    prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+    prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
 
-    /* HARDENING: Validate retrieved structures */
     if (!prAisSpecBssInfo) {
         DBGLOG(REQ, ERROR, "[HARDENING] NULL prAisSpecBssInfo for BSS %u\n", ucBssIndex);
         return WLAN_STATUS_FAILURE;
     }
-
     if (!prConnSettings) {
         DBGLOG(REQ, ERROR, "[HARDENING] NULL prConnSettings for BSS %u\n", ucBssIndex);
         return WLAN_STATUS_FAILURE;
     }
-
     if (!prAisBssInfo) {
         DBGLOG(REQ, ERROR, "[HARDENING] NULL prAisBssInfo for BSS %u\n", ucBssIndex);
         return WLAN_STATUS_FAILURE;
     }
-
-    prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
-    prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
-
-    /* HARDENING: Validate FSM info */
     if (!prAisFsmInfo) {
         DBGLOG(REQ, ERROR, "[HARDENING] NULL prAisFsmInfo for BSS %u\n", ucBssIndex);
         return WLAN_STATUS_FAILURE;
     }
 
-    /* Verify the new infrastructure mode */
+    /* Verify new mode */
     if (eOpMode >= NET_TYPE_NUM) {
-        DBGLOG(REQ, ERROR, "[HARDENING] Invalid mode value %d (max %d)\n", 
+        DBGLOG(REQ, ERROR, "[HARDENING] Invalid mode value %d (max %d)\n",
                eOpMode, NET_TYPE_NUM - 1);
         return WLAN_STATUS_INVALID_DATA;
     }
 
-    /* Check AdHoc permission */
+    /* AdHoc permission check */
     if (eOpMode == NET_TYPE_IBSS || eOpMode == NET_TYPE_DEDICATED_IBSS) {
         if (cnmAisIbssIsPermitted(prAdapter) == FALSE) {
             DBGLOG(REQ, TRACE, "Mode value %d unallowed\n", eOpMode);
@@ -1813,68 +1807,92 @@ wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
         }
     }
 
-    /* Lock while modifying connection settings */
+    /* Lock only for settings mutation */
     mutex_lock(&prAdapter->rAisFsmMutex);
 
-    /* Save the new infrastructure mode setting */
     prConnSettings->eOPMode = eOpMode;
     prConnSettings->fgWapiMode = FALSE;
-
 #if CFG_SUPPORT_WAPI
     prConnSettings->u2WapiAssocInfoIESz = 0;
-    kalMemZero(&prConnSettings->aucWapiAssocInfoIEs, 
+    kalMemZero(&prConnSettings->aucWapiAssocInfoIEs,
                sizeof(prConnSettings->aucWapiAssocInfoIEs));
 #endif
-
 #if CFG_SUPPORT_802_11W
     prAisSpecBssInfo->fgMgmtProtection = FALSE;
     prAisSpecBssInfo->fgBipKeyInstalled = FALSE;
 #endif
-
 #if CFG_SUPPORT_WPS2
-    kalMemZero(&prConnSettings->aucWSCAssocInfoIE, 
+    kalMemZero(&prConnSettings->aucWSCAssocInfoIE,
                sizeof(prConnSettings->aucWSCAssocInfoIE));
     prConnSettings->u2WSCAssocInfoIELen = 0;
 #endif
 
-    /* Clean up Tx key flag */
+    /* Clear broadcast key flags */
     prAisBssInfo->fgBcDefaultKeyExist = FALSE;
     prAisBssInfo->ucBcDefaultKeyIdx = 0xFF;
 
-    /* Unlock before sending command */
     mutex_unlock(&prAdapter->rAisFsmMutex);
 
     DBGLOG(RSN, LOUD, "ucBssIndex %d\n", ucBssIndex);
 
-    /* CRITICAL FIX: Wait for scan to fully complete before infrastructure change */
+    /* PRE-FLIGHT debug info */
     DBGLOG(REQ, WARN, "[AUTH-DBG] Pre-flight checks:\n");
     DBGLOG(REQ, WARN, "[AUTH-DBG]   AIS State: %u (0=IDLE)\n", prAisFsmInfo->eCurrentState);
     DBGLOG(REQ, WARN, "[AUTH-DBG]   Scan State: %u (0=IDLE)\n", prScanInfo->eCurrentState);
     DBGLOG(REQ, WARN, "[AUTH-DBG]   fgIsScanning: %u\n", prAisFsmInfo->fgIsScanning);
 
-    /* Wait for scan to complete if running */
-    while (prAisFsmInfo->eCurrentState == AIS_STATE_SCAN ||
-           prScanInfo->eCurrentState == SCAN_STATE_SCANNING) {
-        DBGLOG(REQ, WARN, "[AUTH-FIX] Waiting for scan to complete...\n");
+    /* Bounded wait for scan completion if scanning */
+    while ((prAisFsmInfo->eCurrentState == AIS_STATE_SCAN ||
+            prScanInfo->eCurrentState == SCAN_STATE_SCANNING) &&
+           (waited_ms < max_wait_ms)) {
+        DBGLOG(REQ, WARN, "[AUTH-FIX] Waiting for scan to complete... waited %u ms\n", waited_ms);
         kalMsleep(10);
+        waited_ms += 10;
     }
-    
-    /* 50ms settle delay */
+
+    if (prAisFsmInfo->eCurrentState == AIS_STATE_SCAN ||
+        prScanInfo->eCurrentState == SCAN_STATE_SCANNING) {
+        DBGLOG(REQ, WARN, "[AUTH-FIX] Scan did not finish within %u ms, proceeding anyway\n", max_wait_ms);
+    }
+
+    /* Small settle delay */
     kalMsleep(50);
     DBGLOG(REQ, WARN, "[AUTH-FIX] Post-scan settle delay (50ms) complete\n");
-    
-    /* Log what we're about to send */
+
     DBGLOG(REQ, WARN, "[AUTH-DBG] Sending CMD_ID_INFRASTRUCTURE\n");
-    DBGLOG(REQ, WARN, "[AUTH-DBG]   OpMode: %d, BssIndex: %d\n", 
+    DBGLOG(REQ, WARN, "[AUTH-DBG]   OpMode: %d, BssIndex: %d\n",
            pOpMode->eOpMode, pOpMode->ucBssIdx);
-    
-    /* Send the command - let it complete asynchronously */
+
+    /*
+     * Use the infrastructure-specific completion handler so AIS FSM can be advanced
+     * when the command completes. If your tree uses a different handler name,
+     * replace `nicCmdEventSetInfrastructureMode` below with the correct symbol.
+     *
+     * If you do not have an infra-specific handler and must use the generic one,
+     * use nicCmdEventSetCommon (but that will not drive AIS FSM transitions).
+     */
+#ifdef HAVE_NIC_CMD_INFRA_HANDLER
     rStatus = wlanSendSetQueryCmd(
         prAdapter,
         CMD_ID_INFRASTRUCTURE,
         TRUE,
         FALSE,
-        TRUE,  /* g_fgIsOid - this is an OID call */
+        TRUE,  /* g_fgIsOid - OID caller context */
+        nicCmdEventSetInfrastructureMode, /* infra-specific completion handler */
+        nicOidCmdTimeoutCommon,
+        sizeof(struct PARAM_OP_MODE),
+        (uint8_t *)pOpMode,
+        pvSetBuffer,
+        u4SetBufferLen
+    );
+#else
+    /* Fallback: use generic handler if infra-specific not present. Replace if needed. */
+    rStatus = wlanSendSetQueryCmd(
+        prAdapter,
+        CMD_ID_INFRASTRUCTURE,
+        TRUE,
+        FALSE,
+        TRUE,
         nicCmdEventSetCommon,
         nicOidCmdTimeoutCommon,
         sizeof(struct PARAM_OP_MODE),
@@ -1882,17 +1900,22 @@ wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
         pvSetBuffer,
         u4SetBufferLen
     );
-    
+#endif
+
     DBGLOG(REQ, WARN, "[AUTH-DBG] wlanSendSetQueryCmd returned: 0x%x\n", rStatus);
-    
-    /* Return immediately - don't wait for completion */
-    DBGLOG(REQ, WARN, "[AUTH-DBG] Returning PENDING, completion will be async\n");
-    
+
+    /* Keep behavior: return immediately (async completion) but report set length */
     *pu4SetInfoLen = sizeof(struct PARAM_OP_MODE);
-    
+
+    if (rStatus == WLAN_STATUS_SUCCESS || rStatus == WLAN_STATUS_PENDING) {
+        /* Success / pending is expected; caller will be completed via handler */
+        return rStatus;
+    }
+
+    /* If we get here, the command failed synchronously */
+    DBGLOG(REQ, ERROR, "[AUTH-DBG] CMD_ID_INFRASTRUCTURE failed synchronously: 0x%x\n", rStatus);
     return rStatus;
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*!

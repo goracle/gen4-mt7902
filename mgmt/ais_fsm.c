@@ -655,6 +655,7 @@ bool aisFsmIsInProcessBeaconTimeout(IN struct ADAPTER *prAdapter,
  * @return (none)
  */
 /*----------------------------------------------------------------------------*/
+/* --- mgmt/ais_fsm.c --- replacement for aisFsmStateInit_JOIN() --- */
 void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 		struct BSS_DESC *prBssDesc, uint8_t ucBssIndex)
 {
@@ -685,6 +686,20 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	/* 4 <1> We are going to connect to this BSS. */
 	prBssDesc->fgIsConnecting = TRUE;
+
+	/* --- IMPORTANT FIX: set BSSID early so firmware has valid BSS context
+	 *     before AUTH/ASSOC packets are sent. Previously this was only
+	 *     set after association response handling, which is too late.
+	 */
+	COPY_MAC_ADDR(prAisBssInfo->aucBSSID, prBssDesc->aucBSSID);
+
+#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
+	/* If conn settings contains a BSSID field, keep it in sync too. */
+	COPY_MAC_ADDR(prConnSettings->aucBSSID, prBssDesc->aucBSSID);
+#endif
+
+	DBGLOG(AIS, INFO, "JOIN INIT: Set target BSSID=" MACSTR "\n",
+	       MAC2STR(prAisBssInfo->aucBSSID));
 
 	/* 4 <2> Setup corresponding STA_RECORD_T */
 	prStaRec = bssCreateStaRecFromBssDesc(prAdapter,
@@ -893,6 +908,10 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	nicRxClearFrag(prAdapter, prStaRec);
 
+	/* Own the connection now — FSM is committed to JOIN */
+	prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
+	DBGLOG(AIS, INFO, "[AIS%d] cfg80211 ownership set at JOIN entry\n", ucBssIndex);
+
 #if CFG_SUPPORT_802_11K
 	rlmSetMaxTxPwrLimit(prAdapter,
 			    (prBssDesc->cPowerLimit != RLM_INVALID_POWER_LIMIT)
@@ -903,8 +922,7 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 #endif
 	mboxSendMsg(prAdapter, MBOX_ID_0, (struct MSG_HDR *)prJoinReqMsg,
 		    MSG_SEND_METHOD_BUF);
-}				/* end of aisFsmInit_JOIN() */
-
+} /* end of aisFsmStateInit_JOIN() */
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief Retry JOIN for AUTH_MODE_AUTO_SWITCH
@@ -1368,22 +1386,19 @@ static const char *ais_state_names[] = {
 /* ============================================================
  * STATE HANDLER: IDLE
  * ============================================================ */
-/* ============================================================
- * STATE HANDLER: IDLE
- * ============================================================ */
 static enum ENUM_AIS_STATE
 aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 {
-	struct AIS_FSM_INFO        *prAisFsmInfo    = aisGetAisFsmInfo(prAdapter, ucBssIndex);
-	struct BSS_INFO            *prAisBssInfo    = aisGetAisBssInfo(prAdapter, ucBssIndex);
-	struct CONNECTION_SETTINGS *prConnSettings  = aisGetConnSettings(prAdapter, ucBssIndex);
-	struct AIS_REQ_HDR         *prAisReq;
-	enum ENUM_AIS_STATE         eNextState      = AIS_STATE_IDLE;
-	u_int8_t                    fgIsTransition  = FALSE;
-	uint32_t                    u4CurrentTime   = kalGetTimeTick();
+	struct AIS_FSM_INFO        *prAisFsmInfo   = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+	struct BSS_INFO            *prAisBssInfo   = aisGetAisBssInfo(prAdapter, ucBssIndex);
+	struct CONNECTION_SETTINGS *prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
+	struct AIS_REQ_HDR         *prAisReq       = NULL;
+	enum ENUM_AIS_STATE         eNextState     = AIS_STATE_IDLE;
+	uint32_t                    u4Now          = kalGetTimeTick();
+	u_int8_t                    fgTransition   = FALSE;
 
 	DBGLOG(AIS, LOUD,
-	       "[AIS%d] STATE_IDLE ENTRY: PrevState=%s fgIsConnReqIssued=%d fgIsDisconnByNonReq=%d reporting=%d\n",
+	       "[AIS%d] STATE_IDLE ENTRY: Prev=%s ConnReq=%d DisByNonReq=%d Reporting=%d\n",
 	       ucBssIndex,
 	       AIS_STATE_NAME(prAisFsmInfo->ePreviousState),
 	       prConnSettings->fgIsConnReqIssued,
@@ -1391,137 +1406,130 @@ aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	       prAisFsmInfo->fgIsScanReporting);
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-	if (prAisFsmInfo->ePreviousState != prAisFsmInfo->eCurrentState) {
-		DBGLOG(AIS, INFO, "Reset AIS init flag when change back to IDLE\n");
+	if (prAisFsmInfo->ePreviousState != prAisFsmInfo->eCurrentState)
 		prConnSettings->fgIsConnInitialized = FALSE;
-	}
 #endif
 
 	prAisReq = aisFsmGetNextRequest(prAdapter, ucBssIndex);
 
-	/* If a scan req is pending, don't stop the timer; wait for scan done/timeout. */
-	if (aisFsmIsRequestPending(prAdapter, AIS_REQUEST_SCAN, FALSE, ucBssIndex) == FALSE)
+	/* Stop scan timer if no scan request is pending */
+	if (!aisFsmIsRequestPending(prAdapter, AIS_REQUEST_SCAN, FALSE, ucBssIndex))
 		cnmTimerStopTimer(prAdapter, &prAisFsmInfo->rScanDoneTimer);
 
 	if (prAisFsmInfo->ePreviousState == AIS_STATE_OFF_CHNL_TX)
-		aisFunClearAllTxReq(prAdapter, &(prAisFsmInfo->rMgmtTxInfo));
+		aisFunClearAllTxReq(prAdapter, &prAisFsmInfo->rMgmtTxInfo);
 
-	if (prAisReq)
+	if (prAisReq) {
 		DBGLOG(AIS, INFO,
-		       "eReqType=%d, fgIsConnReqIssued=%d, DisByNonRequest=%d\n",
+		       "Req=%d ConnReq=%d DisByNonReq=%d\n",
 		       prAisReq->eReqType,
 		       prConnSettings->fgIsConnReqIssued,
 		       prConnSettings->fgIsDisconnectedByNonRequest);
+	}
 
-	if (prAisReq == NULL || prAisReq->eReqType == AIS_REQUEST_RECONNECT) {
+	/* ============================================================
+	 * Handle default / reconnect path
+	 * ============================================================ */
+	if (!prAisReq || prAisReq->eReqType == AIS_REQUEST_RECONNECT) {
 
-		/* ====================================================================
-		 * H-FIX: Scan reporting ownership guard with safety timeout.
-		 *
-		 * In high-density environments (many BSSes), the glue layer can take
-		 * a long time to report scan results to the OS. We hold the network
-		 * active during this window. If reporting exceeds 3 seconds, we assume
-		 * the glue layer is saturated and force-release the guard.
-		 * ==================================================================== */
+		/* ---- Scan reporting ownership guard ---- */
 		if (prAisFsmInfo->fgIsScanReporting) {
-			if (u4CurrentTime - prAisFsmInfo->u4ScanReportStartTime > 3000) {
+			if (u4Now - prAisFsmInfo->u4ScanReportStartTime > 3000) {
 				DBGLOG(AIS, WARN,
-				       "[AIS%d] H-FIX: Scan reporting timeout! Forcing guard release.\n",
+				       "[AIS%d] Scan report timeout — force release\n",
 				       ucBssIndex);
 				prAisFsmInfo->fgIsScanReporting = FALSE;
 			} else {
-				DBGLOG(AIS, INFO,
-				       "[AIS%d] H-FIX: OS still reporting. Maintaining active state.\n",
-				       ucBssIndex);
 				SET_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
 				nicActivateNetwork(prAdapter, prAisBssInfo->ucBssIndex);
 				SET_NET_PWR_STATE_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
 			}
 		}
 
-		/* ====================================================================
-		 * Deactivate the network only when:
-		 *   1. The scan reporting guard is clear, AND
-		 *   2. No connection request is pending.
-		 *
-		 * The fgIsConnReqIssued guard is the critical fix: without it, a
-		 * wlanoidSetConnect that fired just before this FSM entry will cause
-		 * nicDeactivateNetwork to tear down the BSS context immediately before
-		 * the SEARCH transition re-activates it. That deactivate/activate
-		 * thrash destroys the firmware BSS state and silently drops the auth.
-		 * ==================================================================== */
+		/* ---- Safe deactivation guard ---- */
 		if (!prAisFsmInfo->fgIsScanReporting &&
 		    !prConnSettings->fgIsConnReqIssued &&
 		    IS_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex)) {
-			DBGLOG(AIS, LOUD, "[AIS%d] IDLE: Deactivating network\n", ucBssIndex);
+
+			DBGLOG(AIS, LOUD,
+			       "[AIS%d] IDLE: Deactivate network\n",
+			       ucBssIndex);
+
 			UNSET_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
 			nicDeactivateNetwork(prAdapter, prAisBssInfo->ucBssIndex);
 		}
 
-		/* ====================================================================
-		 * Transition to SEARCH if a connection was requested.
-		 * This path activates the network cleanly without a prior deactivation.
-		 * ==================================================================== */
-		if (prConnSettings->fgIsConnReqIssued == TRUE &&
-		    prConnSettings->fgIsDisconnectedByNonRequest == FALSE) {
+		/* ---- Connection request transition ---- */
+		if (prConnSettings->fgIsConnReqIssued &&
+		    !prConnSettings->fgIsDisconnectedByNonRequest) {
 
 			DBGLOG(AIS, INFO,
-			       "[AIS%d] IDLE: Connection requested. Transitioning to SEARCH.\n",
+			       "[AIS%d] IDLE → SEARCH (ConnReq)\n",
 			       ucBssIndex);
 
 			prAisFsmInfo->fgTryScan = TRUE;
+			prAisFsmInfo->ucConnTrialCount = 0;
+
 			SET_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
 			nicActivateNetwork(prAdapter, prAisBssInfo->ucBssIndex);
 			SET_NET_PWR_STATE_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
-			prAisFsmInfo->ucConnTrialCount = 0;
 
-			eNextState = AIS_STATE_SEARCH;
-			fgIsTransition = TRUE;
-		} else {
-			/* Steady-state power management */
-			if (prAisFsmInfo->fgIsScanReporting) {
-				SET_NET_PWR_STATE_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
-			} else {
-				SET_NET_PWR_STATE_IDLE(prAdapter, prAisBssInfo->ucBssIndex);
-			}
-
-			if (prAdapter->rWifiVar.rScanInfo.fgSchedScanning) {
-				SET_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
-				nicActivateNetwork(prAdapter, prAisBssInfo->ucBssIndex);
-			}
-
-			if (prAisReq &&
-			    aisFsmIsRequestPending(prAdapter, AIS_REQUEST_SCAN, TRUE, ucBssIndex) == TRUE) {
-				DBGLOG(AIS, LOUD,
-				       "[AIS%d] IDLE: Scan request pending, transitioning to SCAN\n",
-				       ucBssIndex);
-				wlanClearScanningResult(prAdapter, ucBssIndex);
-				eNextState = AIS_STATE_SCAN;
-				fgIsTransition = TRUE;
-			}
+			eNextState   = AIS_STATE_SEARCH;
+			fgTransition = TRUE;
+			goto done;
 		}
 
-		if (prAisReq)
-			cnmMemFree(prAdapter, prAisReq);
+		/* ---- Scheduled scan handling ---- */
+		if (prAdapter->rWifiVar.rScanInfo.fgSchedScanning) {
+			SET_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
+			nicActivateNetwork(prAdapter, prAisBssInfo->ucBssIndex);
+		}
 
-	} else if (prAisReq->eReqType == AIS_REQUEST_SCAN) {
-		wlanClearScanningResult(prAdapter, ucBssIndex);
-		eNextState = AIS_STATE_SCAN;
-		fgIsTransition = TRUE;
-		cnmMemFree(prAdapter, prAisReq);
+		/* ---- Pending scan request ---- */
+		if (prAisReq &&
+		    aisFsmIsRequestPending(prAdapter, AIS_REQUEST_SCAN, TRUE, ucBssIndex)) {
 
-	} else if (prAisReq->eReqType == AIS_REQUEST_REMAIN_ON_CHANNEL) {
-		eNextState = AIS_STATE_REQ_REMAIN_ON_CHANNEL;
-		fgIsTransition = TRUE;
-		cnmMemFree(prAdapter, prAisReq);
+			DBGLOG(AIS, LOUD,
+			       "[AIS%d] IDLE → SCAN (PendingReq)\n",
+			       ucBssIndex);
 
-	} else {
-		cnmMemFree(prAdapter, prAisReq);
+			wlanClearScanningResult(prAdapter, ucBssIndex);
+			eNextState   = AIS_STATE_SCAN;
+			fgTransition = TRUE;
+		}
+
+		goto done;
 	}
 
+	/* ============================================================
+	 * Explicit request types
+	 * ============================================================ */
+	switch (prAisReq->eReqType) {
+
+	case AIS_REQUEST_SCAN:
+		wlanClearScanningResult(prAdapter, ucBssIndex);
+		eNextState   = AIS_STATE_SCAN;
+		fgTransition = TRUE;
+		break;
+
+	case AIS_REQUEST_REMAIN_ON_CHANNEL:
+		eNextState   = AIS_STATE_REQ_REMAIN_ON_CHANNEL;
+		fgTransition = TRUE;
+		break;
+
+	default:
+		break;
+	}
+
+done:
+	if (prAisReq)
+		cnmMemFree(prAdapter, prAisReq);
+
 	prAisFsmInfo->u4SleepInterval = AIS_BG_SCAN_INTERVAL_MIN_SEC;
-	return fgIsTransition ? eNextState : AIS_STATE_IDLE;
+
+	return fgTransition ? eNextState : AIS_STATE_IDLE;
 }
+
 
 
 /* ============================================================
@@ -1629,6 +1637,18 @@ aisHandleState_SEARCH(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 				prAisBssInfo->eCurrentOPMode  = OP_MODE_INFRASTRUCTURE;
 				prAisFsmInfo->prTargetBssDesc  = prBssDesc;
 				prAisFsmInfo->ucConnTrialCount++;
+				
+				/* Check if cfg80211 owns the connection */
+				if (prAisFsmInfo->fgIsCfg80211Connecting) {
+					DBGLOG(AIS, INFO,
+					       "[AIS%d] cfg80211 owns connection - skip autonomous join\n",
+					       ucBssIndex);
+					DBGLOG(AIS, INFO,
+					       "[AIS%d] Staying in IDLE, waiting for cfg80211 auth/assoc\n",
+					       ucBssIndex);
+					return AIS_STATE_IDLE;
+				}
+				
 				return AIS_STATE_REQ_CHANNEL_JOIN;
 			}
 #if CFG_SUPPORT_ADHOC
@@ -1747,11 +1767,18 @@ aisHandleState_SEARCH(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 					   &prAisBssInfo->ucOpRxNss,
 					   &prAisBssInfo->ucOpTxNss);
 
+			/* Check if cfg80211 owns the connection */
+			if (prAisFsmInfo->fgIsCfg80211Connecting) {
+				DBGLOG(AIS, INFO,
+				       "[AIS%d] cfg80211 owns connection - skip autonomous roaming join\n",
+				       ucBssIndex);
+				return AIS_STATE_IDLE;
+			}
+
 			return AIS_STATE_REQ_CHANNEL_JOIN;
 		}
 	}
 }
-
 
 /* ============================================================
  * STATE HANDLER: WAIT_FOR_NEXT_SCAN
@@ -3115,7 +3142,13 @@ void aisFsmRunEventAbort(IN struct ADAPTER *prAdapter,
 	/* 4. Only Reconnect if the hardware is actually responsive!
 	 * If g_halt_sem is stuck, inserting a Reconnect request just causes a loop. */
 	if (g_u4HaltFlag == FALSE) {
-		aisFsmInsertRequest(prAdapter, AIS_REQUEST_RECONNECT, ucBssIndex);
+		/* Check if cfg80211 owns the connection */
+		if (prAisFsmInfo->fgIsCfg80211Connecting) {
+			DBGLOG(AIS, INFO, "[AIS%d] cfg80211 owns active join, skip reconnect in abort\n", ucBssIndex);
+			prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+		} else {
+			aisFsmInsertRequest(prAdapter, AIS_REQUEST_RECONNECT, ucBssIndex);
+		}
 	} else {
 		DBGLOG(AIS, ERROR, "Hardware is HALTED. Skipping reconnect. Reset required.\n");
 	}
@@ -3134,19 +3167,19 @@ void aisFsmRunEventAbort(IN struct ADAPTER *prAdapter,
  * \return none
  */
 /*----------------------------------------------------------------------------*/
-void aisFsmStateAbort(IN struct ADAPTER *prAdapter,
-		uint8_t ucReasonOfDisconnect, 
-		u_int8_t fgDelayIndication,
-		uint8_t ucBssIndex)
+
+void aisFsmStateAbort(struct ADAPTER *prAdapter,
+		      uint8_t ucReasonOfDisconnect,
+		      u_int8_t fgDelayIndication,
+		      uint8_t ucBssIndex)
 {
 	static OS_SYSTIME last_abort_time[KAL_AIS_NUM] = {0};
-	OS_SYSTIME current_time = kalGetTimeTick();
+	OS_SYSTIME current_time;
 	struct AIS_FSM_INFO *prAisFsmInfo;
 	struct BSS_INFO *prAisBssInfo;
 	struct CONNECTION_SETTINGS *prConnSettings;
 	u_int8_t fgIsCheckConnected = FALSE;
 
-	/* 1. Critical Sanity & Rate Limiting */
 	if (!prAdapter)
 		return;
 
@@ -3154,50 +3187,69 @@ void aisFsmStateAbort(IN struct ADAPTER *prAdapter,
 	if (!prAisBssInfo)
 		return;
 
-	/* Allow first abort, then enforce 100ms gap to prevent FSM thrashing */
+	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
+
+	current_time = kalGetTimeTick();
+
+	/* --- Rate limiting --- */
 	if (last_abort_time[ucBssIndex] != 0 &&
-		!CHECK_FOR_TIMEOUT(current_time, last_abort_time[ucBssIndex], MSEC_TO_SYSTIME(100))) {
-		DBGLOG(AIS, WARN, "BSS[%u] Rate-limiting abort request\n", ucBssIndex);
+	    !CHECK_FOR_TIMEOUT(current_time,
+			       last_abort_time[ucBssIndex],
+			       MSEC_TO_SYSTIME(100))) {
+		DBGLOG(AIS, WARN,
+		       "BSS[%u] Abort rate-limited\n",
+		       ucBssIndex);
 		return;
 	}
 	last_abort_time[ucBssIndex] = current_time;
 
-	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
-	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
+	DBGLOG(AIS, STATE,
+	       "[%d] Abort Start: Reason[%d], State[%s], ConnState[%d]\n",
+	       ucBssIndex,
+	       ucReasonOfDisconnect,
+	       aisGetFsmState(prAisFsmInfo->eCurrentState),
+	       prAisBssInfo->eConnectionState);
 
-	DBGLOG(AIS, STATE, "[%d] Abort Start: Reason[%d], State[%s]\n",
-		ucBssIndex, ucReasonOfDisconnect, aisGetFsmState(prAisFsmInfo->eCurrentState));
+	/* ===================================================== */
+	/* 🔒 CRITICAL FIX: Don't destroy context if already idle */
+	/* ===================================================== */
+	if (prAisFsmInfo->eCurrentState == AIS_STATE_IDLE &&
+	    prAisBssInfo->eConnectionState == MEDIA_STATE_DISCONNECTED) {
 
-	/* 2. Pre-Abort Notifications */
+		DBGLOG(AIS, WARN,
+		       "[%d] Skip abort: already IDLE & DISCONNECTED\n",
+		       ucBssIndex);
+		return;
+	}
+
+	/* --- Record reason --- */
 	prAisBssInfo->ucReasonOfDisconnect = ucReasonOfDisconnect;
-	
+
+	/* --- Notify WMM only if truly connected --- */
 	if (prAisBssInfo->eConnectionState == MEDIA_STATE_CONNECTED &&
 	    prAisFsmInfo->eCurrentState != AIS_STATE_DISCONNECTING &&
 	    ucReasonOfDisconnect != DISCONNECT_REASON_CODE_REASSOCIATION &&
 	    ucReasonOfDisconnect != DISCONNECT_REASON_CODE_ROAMING) {
+
 		wmmNotifyDisconnected(prAdapter, ucBssIndex);
 	}
 
-	/* 3. The "Stuck Hardware" Escape Hatch
-	 * If the adapter is already halting or deadlocked, don't call blocking HAL functions.
-	 * This prevents the 'g_halt_sem' from hanging the entire kernel thread. */
+	/* --- Hardware halted? Skip HAL operations --- */
 	if (g_u4HaltFlag) {
-		DBGLOG(AIS, ERROR, "[%d] HW Halted! Forcing state reset without HAL calls.\n", ucBssIndex);
+		DBGLOG(AIS, ERROR,
+		       "[%d] HW halted, forcing FSM reset\n",
+		       ucBssIndex);
 		goto force_reset;
 	}
 
-	/* 4. State-Specific Teardown */
+	/* --- State specific handling --- */
 	switch (prAisFsmInfo->eCurrentState) {
+
 	case AIS_STATE_SCAN:
 	case AIS_STATE_LOOKING_FOR:
 	case AIS_STATE_ONLINE_SCAN:
 		aisFsmStateAbort_SCAN(prAdapter, ucBssIndex);
-		/* Re-queue scan only if this wasn't a fatal deauth */
-		if (ucReasonOfDisconnect != DISCONNECT_REASON_CODE_DEAUTHENTICATED) {
-			if (aisFsmIsRequestPending(prAdapter, AIS_REQUEST_SCAN, FALSE, ucBssIndex) == FALSE)
-				aisFsmInsertRequest(prAdapter, AIS_REQUEST_SCAN, ucBssIndex);
-		}
-		fgIsCheckConnected = (prAisFsmInfo->eCurrentState != AIS_STATE_SCAN);
 		break;
 
 	case AIS_STATE_REQ_CHANNEL_JOIN:
@@ -3205,7 +3257,8 @@ void aisFsmStateAbort(IN struct ADAPTER *prAdapter,
 	case AIS_STATE_REMAIN_ON_CHANNEL:
 	case AIS_STATE_OFF_CHNL_TX:
 		aisFsmReleaseCh(prAdapter, ucBssIndex);
-		cnmTimerStopTimer(prAdapter, &prAisFsmInfo->rChannelTimeoutTimer);
+		cnmTimerStopTimer(prAdapter,
+				  &prAisFsmInfo->rChannelTimeoutTimer);
 		fgIsCheckConnected = TRUE;
 		break;
 
@@ -3223,31 +3276,41 @@ void aisFsmStateAbort(IN struct ADAPTER *prAdapter,
 		break;
 
 	case AIS_STATE_WAIT_FOR_NEXT_SCAN:
-		cnmTimerStopTimer(prAdapter, &prAisFsmInfo->rBGScanTimer);
-		fgIsCheckConnected = TRUE;
+		cnmTimerStopTimer(prAdapter,
+				  &prAisFsmInfo->rBGScanTimer);
 		break;
 
 	default:
 		break;
 	}
 
-	/* 5. Final State Re-normalization */
-	if (fgIsCheckConnected && (prAisBssInfo->eConnectionState == MEDIA_STATE_CONNECTED)) {
-		/* If we have an active STA record, move to DISCONNECTING to send final frames if possible */
-		if (prAisBssInfo->prStaRecOfAP && prAisBssInfo->prStaRecOfAP->fgIsInUse) {
-			aisFsmSteps(prAdapter, AIS_STATE_DISCONNECTING, ucBssIndex);
+	/* --- Connected cleanup path --- */
+	if (fgIsCheckConnected &&
+	    prAisBssInfo->eConnectionState == MEDIA_STATE_CONNECTED) {
+
+		if (prAisBssInfo->prStaRecOfAP &&
+		    prAisBssInfo->prStaRecOfAP->fgIsInUse) {
+
+			aisFsmSteps(prAdapter,
+				    AIS_STATE_DISCONNECTING,
+				    ucBssIndex);
 			return;
 		}
+
 		aisFsmStateAbort_NORMAL_TR(prAdapter, ucBssIndex);
 	}
 
 force_reset:
-	/* Ensure measurement resources are freed regardless of HW state */
+
 	rrmFreeMeasurementResources(prAdapter, ucBssIndex);
-	
-	/* Final cleanup and transition to IDLE */
-	aisFsmDisconnect(prAdapter, fgDelayIndication, ucBssIndex);
+
+	/* Final teardown only if not already idle */
+	if (prAisFsmInfo->eCurrentState != AIS_STATE_IDLE)
+		aisFsmDisconnect(prAdapter,
+				 fgDelayIndication,
+				 ucBssIndex);
 }
+
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief This function will handle the Join Complete Event from SAA FSM
@@ -3457,9 +3520,10 @@ enum ENUM_AIS_STATE aisFsmJoinCompleteAction(IN struct ADAPTER *prAdapter,
 
 			/* Support AP Selection */
 		/* Clear cfg80211 connecting flag on successful join */
-		prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
 
+			prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
 			prAisFsmInfo->prTargetBssDesc->fgDeauthLastTime = FALSE;
+			/* Clear cfg80211 connecting flag on successful join */
 			prAisFsmInfo->ucJoinFailCntAfterScan = 0;
 			/* end Support AP Selection */
 
@@ -3543,7 +3607,6 @@ enum ENUM_AIS_STATE aisFsmJoinCompleteAction(IN struct ADAPTER *prAdapter,
 					DBGLOG(AIS, WARN,
 					
 					/* Clear cfg80211 connecting flag on unrecoverable failure */
-					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
 					
 					"prBssDesc == NULL ->JOIN FAIL");
 					/* Free STA-REC */
@@ -3562,9 +3625,10 @@ enum ENUM_AIS_STATE aisFsmJoinCompleteAction(IN struct ADAPTER *prAdapter,
 						"no bss find, Join failure\n");
 #endif
 					/* Clear cfg80211 connecting flag on join failure */
-					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
 
-					eNextState = AIS_STATE_JOIN_FAILURE;
+					/* Clear cfg80211 connecting flag on join failure */
+				prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+				eNextState = AIS_STATE_JOIN_FAILURE;
 
 					break;
 				}
@@ -3675,24 +3739,25 @@ enum ENUM_AIS_STATE aisFsmJoinCompleteAction(IN struct ADAPTER *prAdapter,
 						(AIS_JOIN_TIMEOUT))) {
 					/* 4.a temrminate join operation */
 					/* Clear cfg80211 connecting flag on join failure */
-					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
 
-					eNextState = AIS_STATE_JOIN_FAILURE;
+					/* Clear cfg80211 connecting flag on join failure */
+				prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+				eNextState = AIS_STATE_JOIN_FAILURE;
 				} else if (prAisFsmInfo->rJoinReqTime != 0
 					   && prBssDesc->ucJoinFailureCount >=
 					   SCN_BSS_JOIN_FAIL_THRESOLD
 					   && prBssDesc->u2JoinStatus) {
 					/* Clear cfg80211 connecting flag before giving up */
-					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
 					
 					/* AP reject STA for
 					 * STATUS_CODE_ASSOC_DENIED_AP_OVERLOAD
 					 * , or AP block STA
 					 */
 					/* Clear cfg80211 connecting flag on join failure */
-					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
 
-					eNextState = AIS_STATE_JOIN_FAILURE;
+					/* Clear cfg80211 connecting flag on join failure */
+				prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+				eNextState = AIS_STATE_JOIN_FAILURE;
 				} else {
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 					/* join fail, return join failure status
@@ -3700,14 +3765,14 @@ enum ENUM_AIS_STATE aisFsmJoinCompleteAction(IN struct ADAPTER *prAdapter,
 					 */
 					prAdapter->rWifiVar.
 					
-					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
 					
 						rConnSettings[ucBssIndex].
 						bss = NULL;
 					/* Clear cfg80211 connecting flag on join failure */
-					prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
 
-					eNextState = AIS_STATE_JOIN_FAILURE;
+					/* Clear cfg80211 connecting flag on join failure */
+				prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+				eNextState = AIS_STATE_JOIN_FAILURE;
 					DBGLOG(AIS, WARN,
 						"Join fail, disconnect\n");
 #else
@@ -5083,7 +5148,6 @@ void aisFsmRunEventJoinTimeout(IN struct ADAPTER *prAdapter,
 		/* join fail, return disconnect
 		* not to try driver reconnect
 		*/
-		prAdapter->rWifiVar.rConnSettings[ucBssIndex].bss = NULL;
 		eNextState = AIS_STATE_DISCONNECTING;
 		DBGLOG(AIS, WARN, "set rConnSetting.bss = NULL\n");
 #else
@@ -5111,9 +5175,10 @@ void aisFsmRunEventJoinTimeout(IN struct ADAPTER *prAdapter,
 			 * terminate join operation
 			 */
 			/* Clear cfg80211 connecting flag on join failure */
-			prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
 
-			eNextState = AIS_STATE_JOIN_FAILURE;
+			/* Clear cfg80211 connecting flag on join failure */
+				prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+				eNextState = AIS_STATE_JOIN_FAILURE;
 		}
 #endif
 		break;

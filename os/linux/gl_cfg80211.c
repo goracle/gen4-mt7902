@@ -1135,6 +1135,7 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	struct net_device *ndev, struct cfg80211_auth_request *req)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
+	struct AIS_FSM_INFO *prAisFsmInfo = NULL;
 	uint32_t rStatus;
 	uint32_t u4BufLen;
 	uint8_t ucBssIndex = 0;
@@ -1162,6 +1163,8 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	ucBssIndex = wlanGetBssIdx(ndev);
 	if (!IS_BSS_INDEX_AIS(prGlueInfo->prAdapter, ucBssIndex))
 		return -EINVAL;
+
+
 	rOpMode.ucBssIdx = ucBssIndex;
 
 	DBGLOG(REQ, INFO, "auth to BSS [" MACSTR "]\n",
@@ -1186,11 +1189,9 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	{
 		struct AIS_SPECIFIC_BSS_INFO *prAisSpecBssInfo = NULL;
 		struct SCAN_INFO *prScanInfo = NULL;
-		struct AIS_FSM_INFO *prAisFsmInfo = NULL;
 
 		prAisSpecBssInfo = aisGetAisSpecBssInfo(prGlueInfo->prAdapter, ucBssIndex);
 		prScanInfo = &prGlueInfo->prAdapter->rWifiVar.rScanInfo;
-		prAisFsmInfo = aisGetAisFsmInfo(prGlueInfo->prAdapter, ucBssIndex);
 
 		if (!prAisSpecBssInfo || !prAisFsmInfo || !prScanInfo) {
 			DBGLOG(REQ, WARN, "Scan/ais structures missing, skipping bounded wait\n");
@@ -1221,18 +1222,53 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 
 	/* Send OP mode set as an OID (async) and accept pending as success-in-progress */
 	rStatus = kalIoctl(prGlueInfo,
-			   wlanoidSetInfrastructureMode,
-			   &rOpMode, sizeof(rOpMode),
-			   FALSE, FALSE, TRUE, &u4BufLen);
+		wlanoidSetInfrastructureMode,
+		&rOpMode, sizeof(rOpMode),
+		FALSE, FALSE, TRUE, &u4BufLen);
 
 	DBGLOG(INIT, INFO, "wlanoidSetInfrastructureMode returned: 0x%x\n", rStatus);
 
 	if (rStatus != WLAN_STATUS_SUCCESS && rStatus != WLAN_STATUS_PENDING) {
-		DBGLOG(INIT, ERROR, "wlanoidSetInfrastructureMode failed: 0x%x\n", rStatus);
-		return -EIO;
+	    DBGLOG(INIT, ERROR, "wlanoidSetInfrastructureMode failed: 0x%x\n", rStatus);
+	    return -EIO;
 	}
-	/* note: treat PENDING as success-in-progress; completion should be signalled via OID event path */
 
+	/*
+	* IMPORTANT: If the infrastructure-mode OID returned PENDING, wait (bounded)
+	* for its completion before proceeding to the connect OID. Otherwise we
+	* issue overlapping OIDs and hit "SKIP multiple OID complete!" / abort paths.
+	*/
+	if (rStatus == WLAN_STATUS_PENDING) {
+	    unsigned long wait_j = msecs_to_jiffies(2000); /* 2s timeout, tune as needed */
+	    long wait_ret;
+
+	    /* ensure completion object is in a clean state before waiting */
+	    reinit_completion(&prGlueInfo->rPendComp);
+	    prGlueInfo->u4OidCompleteFlag = 0;
+	    prGlueInfo->rPendStatus = WLAN_STATUS_FAILURE;
+
+	    DBGLOG(REQ, INFO, "Waiting for INFRA OID completion (%lu ms)...\n",
+		jiffies_to_msecs(wait_j));
+
+	    wait_ret = wait_for_completion_timeout(&prGlueInfo->rPendComp, wait_j);
+
+	    if (wait_ret == 0) {
+		DBGLOG(REQ, WARN, "INFRA OID timed out after %u ms\n", 2000);
+		/* try to recover: treat as failure */
+		return -ETIMEDOUT;
+	    }
+
+	    /* completion arrived, check status set by kalOidComplete() */
+	    rStatus = prGlueInfo->rPendStatus;
+	    prGlueInfo->u4OidCompleteFlag = 0; /* clear for future use */
+
+	    DBGLOG(REQ, INFO, "INFRA OID completion status: 0x%x\n", rStatus);
+
+	    if (rStatus != WLAN_STATUS_SUCCESS) {
+		DBGLOG(REQ, ERROR, "INFRA OID failed: 0x%x\n", rStatus);
+		return -EIO;
+	    }
+	}
 	/* ====================================================================
 	 * <2> Set Auth data (for SAE, etc.)
 	 * ==================================================================== */
@@ -1551,22 +1587,8 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		}
 	}
 
-	/* Return 0 to indicate the operation was started (cfg80211 semantics).
-	 * Final success/failure must be sent asynchronously via cfg80211_* result APIs.
-	 */
-	/* Mark that cfg80211/userspace is driving this connection */
-	{
-		struct AIS_FSM_INFO *prAisFsmInfo = aisGetAisFsmInfo(prGlueInfo->prAdapter, ucBssIndex);
-		if (prAisFsmInfo) {
-			prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
-			DBGLOG(REQ, INFO, "[CFG80211] Marked cfg80211-connecting for BSS %u\n", ucBssIndex);
-		}
-	}
-
 	return 0;
 }
-
-
 
 
 
@@ -2267,6 +2289,7 @@ int mtk_cfg80211_disconnect(struct wiphy *wiphy,
 			    struct net_device *ndev, u16 reason_code)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
+	struct AIS_FSM_INFO *prAisFsmInfo = NULL;
 	uint32_t rStatus;
 	uint32_t u4BufLen;
 	uint8_t ucBssIndex = 0;
@@ -2277,6 +2300,13 @@ int mtk_cfg80211_disconnect(struct wiphy *wiphy,
 	ucBssIndex = wlanGetBssIdx(ndev);
 	if (!IS_BSS_INDEX_VALID(ucBssIndex))
 		return -EINVAL;
+	
+	/* Clear cfg80211 ownership flag */
+	prAisFsmInfo = aisGetAisFsmInfo(prGlueInfo->prAdapter, ucBssIndex);
+	if (prAisFsmInfo) {
+		prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+		DBGLOG(REQ, INFO, "[CFG80211] Cleared cfg80211-connecting on disconnect\n");
+	}
 
 	DBGLOG(REQ, INFO, "ucBssIndex = %d\n", ucBssIndex);
 	rStatus = kalIoctlByBssIdx(prGlueInfo, wlanoidSetDisassociate, NULL,
@@ -2290,6 +2320,8 @@ int mtk_cfg80211_disconnect(struct wiphy *wiphy,
 
 	return 0;
 }
+
+
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief This routine is responsible for requesting to deauth from
