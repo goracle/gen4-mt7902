@@ -6402,6 +6402,21 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 			RST_MODULE_STATE_PROBE_START, NULL);
 #endif
 		DBGLOG(INIT, INFO, "enter wlanProbe\n");
+
+		/* HARDENING: Verify pvData is a valid PCI device pointer before glBusInit */
+		if (!pvData || (unsigned long)pvData < 0x1000) {
+			DBGLOG(INIT, ERROR, "wlanProbe: Invalid pvData pointer (%p). Suspected NVRAM/Glue failure.\n", pvData);
+			i4Status = -ENODEV;
+			eFailReason = BUS_INIT_FAIL;
+			break;
+		}
+
+		/* Ensure DMA mask has a sane default if NVRAM hasn't set it */
+		if (g_u4DmaMask == 0) {
+			g_u4DmaMask = 32; 
+			DBGLOG(INIT, WARN, "wlanProbe: g_u4DmaMask was 0, defaulting to 32-bit\n");
+		}
+
 		bRet = glBusInit(pvData);
 
 #if (CFG_SUPPORT_TRACE_TC4 == 1)
@@ -6425,6 +6440,15 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 
 		/* 3. Glue/Adapter Setup */
 		prGlueInfo = (struct GLUE_INFO *) wiphy_priv(prWdev->wiphy);
+		
+		/* HARDENING: Ensure Glue Info was actually allocated */
+		if (!prGlueInfo) {
+			DBGLOG(INIT, ERROR, "wlanProbe: Glue Info is NULL! Missing NVRAM?\n");
+			i4Status = -ENODEV;
+			eFailReason = NET_CREATE_FAIL;
+			break;
+		}
+
 		gPrDev = prGlueInfo->prDevHandler;
 		prWlandevInfo = &arWlanDevInfo[i4DevIdx];
 
@@ -6436,28 +6460,35 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 		}
 		prGlueInfo->i4DevIdx = i4DevIdx;
 		prAdapter = prGlueInfo->prAdapter;
+
+		if (!prAdapter) {
+			DBGLOG(INIT, ERROR, "wlanProbe: Adapter is NULL!\n");
+			i4Status = -ENODEV;
+			eFailReason = ADAPTER_START_FAIL;
+			break;
+		}
+
 		prWifiVar = &prAdapter->rWifiVar;
 
 		wlanOnPreAdapterStart(prGlueInfo, prAdapter, &prRegInfo, &prChipInfo);
 
 		/* 4. Boot MCU */
-		/* Note: mt79xx_wfsys_cold_boot_and_wait handles the power-on sequence */
 		if (mt79xx_wfsys_cold_boot_and_wait(prAdapter) != 0) {
 			DBGLOG(INIT, ERROR, "WFSYS init failed: MCU did not come alive\n");
-			return -ENODEV;
+			i4Status = -ENODEV;
+			eFailReason = ADAPTER_START_FAIL;
+			break;
 		}
 		DBGLOG(INIT, INFO, "WFSYS MCU is alive, continuing adapter start\n");
 
 		/* 5. Adapter Start (FW Download, HW Init) */
-		if (wlanAdapterStart(prAdapter, prRegInfo, FALSE) != WLAN_STATUS_SUCCESS)
+		if (wlanAdapterStart(prAdapter, prRegInfo, FALSE) != WLAN_STATUS_SUCCESS) {
 			i4Status = -EIO;
-
-		wlanOnPostAdapterStart(prAdapter, prGlueInfo);
-
-		if (i4Status < 0) {
 			eFailReason = ADAPTER_START_FAIL;
 			break;
 		}
+
+		wlanOnPostAdapterStart(prAdapter, prGlueInfo);
 
 		/* Initialize internal state before bands are set */
 		if (wlanOnPreNetRegister(prGlueInfo, prAdapter, prChipInfo, prWifiVar, FALSE)) {
@@ -6590,22 +6621,23 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 			kal_fallthrough;
 #endif
 		case PROC_INIT_FAIL:
-			/* If we failed AFTER register, we must unregister */
 			if (i4DevIdx >= 0) wlanNetUnregister(prWdev);
 			kal_fallthrough;
 		case NET_REGISTER_FAIL:
-			/* If we marked ready (Success flow) but failed later, we must stop */
-			set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
-			wake_up_interruptible(&prGlueInfo->waitq);
-			wait_for_completion_interruptible(&prGlueInfo->rHaltComp);
-			wlanAdapterStop(prAdapter);
+			if (prGlueInfo) {
+				set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
+				wake_up_interruptible(&prGlueInfo->waitq);
+				wait_for_completion_interruptible(&prGlueInfo->rHaltComp);
+			}
+			if (prAdapter) wlanAdapterStart(prAdapter, prRegInfo, FALSE);
 			kal_fallthrough;
 		case ADAPTER_START_FAIL:
-			glBusFreeIrq(prWdev->netdev, *((struct GLUE_INFO **)netdev_priv(prWdev->netdev)));
+			if (prWdev && prWdev->netdev)
+				glBusFreeIrq(prWdev->netdev, prGlueInfo);
 			kal_fallthrough;
 		case BUS_SET_IRQ_FAIL:
-			wlanWakeLockUninit(prGlueInfo);
-			wlanNetDestroy(prWdev);
+			if (prGlueInfo) wlanWakeLockUninit(prGlueInfo);
+			if (prWdev) wlanNetDestroy(prWdev);
 			break;
 		case NET_CREATE_FAIL:
 		case BUS_INIT_FAIL:
