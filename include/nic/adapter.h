@@ -193,6 +193,9 @@ struct CONNECTION_SETTINGS {
 
 	uint8_t aucMacAddress[MAC_ADDR_LEN];
 
+enum ENUM_BAND eBand;              /* Required by ais_fsm.c:1476 */
+u_int8_t fgIsBssidSpecified;       /* Required by ais_fsm.c:1491 */
+
 	uint8_t ucDelayTimeOfDisconnectEvent;
 
 	u_int8_t fgIsConnByBssidIssued;
@@ -1563,6 +1566,7 @@ struct ADAPTER {
 	struct mt66xx_chip_info *chip_info;
 	uint8_t ucRevID;
 	u_int8_t fgIsReadRevID;
+struct HAL_OPS *prHalOps;  /* Add this line */
 
     /* Protects AIS FSM state variables ONLY - not held during handlers */
     struct mutex rAisFsmMutex;

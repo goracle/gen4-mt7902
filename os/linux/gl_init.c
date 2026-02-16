@@ -13,7 +13,6 @@
  * it under the terms of version 2 of the GNU General Public License as
  * published by the Free Software Foundation.
  *
-
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -146,7 +145,6 @@ struct WLANDEV_INFO {
  *                            P U B L I C   D A T A
  *******************************************************************************
  */
-
 
 static const struct ieee80211_regdomain mt79xx_regdom_us = {
 	.n_reg_rules = 1,
@@ -3282,6 +3280,9 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 		}
 	}
 
+
+
+
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
 	/* XXX: ref from cfg80211_regd_set_wiphy().
 	 * The error case: Sometimes after unplug/plug usb, the wlan0 STA can't
@@ -3309,6 +3310,14 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 	/* 4 <2.1> Create Adapter structure */
 	prAdapter = (struct ADAPTER *) wlanAdapterCreate(
 			    prGlueInfo);
+
+	/* RIGHT HERE is where you plug in the PCIe logic */
+/* ONLY link here if prAdapter is valid */
+    if (prAdapter) {
+        prAdapter->prHalOps = mtk_pcie_get_ops();
+        DBGLOG(INIT, INFO, "HAL operations linked to Adapter\n");
+    }
+
 
 /* After: prAdapter = (struct ADAPTER *) wlanAdapterCreate(prGlueInfo); */
 if (prAdapter) {
@@ -4354,11 +4363,19 @@ label_exit:
  * \retval WLAN_STATUS_FAILURE Failed
  */
 /*----------------------------------------------------------------------------*/
+
 uint32_t wlanConnac2XDownloadBufferBin(struct ADAPTER *prAdapter)
 {
-/* --- THE "I DON'T HAVE THE DATA" BYPASS --- */
+    /* --- THE INNOVATIVE CLEAN BYPASS --- */
     DBGLOG(INIT, WARN, "MT7902-FIX: Bypassing Efuse Buffer Mode (No NVRAM/6G FW)\n");
+    
+    /* Force the adapter into a safe state where it doesn't expect external BIN files */
+    prAdapter->rWifiVar.ucEfuseBufferModeCal = LOAD_EFUSE; 
+    
+    /* Instead of naked return, we return success but skip the IOCTL loop */
     return WLAN_STATUS_SUCCESS;
+
+
 
 	struct mt66xx_chip_info *prChipInfo = NULL;
 	uint32_t chip_id = 0;

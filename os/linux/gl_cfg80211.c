@@ -1165,6 +1165,10 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		return -EINVAL;
 
 
+	prAisFsmInfo = aisGetAisFsmInfo(prGlueInfo->prAdapter, ucBssIndex);
+	prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
+
+
 	rOpMode.ucBssIdx = ucBssIndex;
 
 	DBGLOG(REQ, INFO, "auth to BSS [" MACSTR "]\n",
@@ -2213,6 +2217,13 @@ int mtk_cfg80211_connect(struct wiphy *wiphy,
 				rStatus);
 			return -EFAULT;
 		}
+	}
+
+	{
+		struct AIS_FSM_INFO *prAisFsmInfo = aisGetAisFsmInfo(prGlueInfo->prAdapter, ucBssIndex);
+		prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
+		if (sme->channel) prConnSettings->ucChannelNum = sme->channel->hw_value;
+		if (sme->bssid) COPY_MAC_ADDR(prConnSettings->aucBSSID, sme->bssid);
 	}
 
 	/* Avoid dangling pointer, set defatul all zero */
@@ -4419,6 +4430,7 @@ int mtk_cfg80211_assoc(struct wiphy *wiphy,
 	uint32_t rStatus;
 	uint32_t u4BufLen;
 	uint8_t ucBssIndex = 0;
+	struct AIS_FSM_INFO *prAisFsmInfo = NULL;
 
 	enum ENUM_WEP_STATUS eEncStatus;
 	enum ENUM_PARAM_AUTH_MODE eAuthMode;
@@ -4451,6 +4463,9 @@ int mtk_cfg80211_assoc(struct wiphy *wiphy,
 	ucBssIndex = wlanGetBssIdx(ndev);
 	if (!IS_BSS_INDEX_AIS(prGlueInfo->prAdapter, ucBssIndex))
 		return -EINVAL;
+
+	prAisFsmInfo = aisGetAisFsmInfo(prGlueInfo->prAdapter, ucBssIndex);
+	if (!prAisFsmInfo->fgIsCfg80211Connecting) return -EINVAL;
 
 	prConnSettings = aisGetConnSettings(prGlueInfo->prAdapter, ucBssIndex);
 

@@ -98,6 +98,8 @@
 /*******************************************************************************
  *                             D A T A   T Y P E S
  *******************************************************************************
+
+
  */
 enum ERR_RECOVERY_STATE {
 	ERR_RECOV_STOP_IDLE = 0,
@@ -1214,6 +1216,8 @@ do { \
  *******************************************************************************
  */
 
+
+
 /*******************************************************************************
  *                              F U N C T I O N S
  *******************************************************************************
@@ -1313,5 +1317,18 @@ uint8_t halRingDataSelectByWmmIndex(
 	IN struct ADAPTER *prAdapter,
 	IN uint8_t ucWmmIndex);
 #endif /* defined(_HIF_PCIE) || defined(_HIF_AXI) */
+
+/* The Switchboard: Each bus type (PCIe, SDIO) will fill this out differently */
+struct HAL_OPS {
+    void (*pfnDisableInterrupt)(struct ADAPTER *prAdapter);
+    void (*pfnEnableInterrupt)(struct ADAPTER *prAdapter);
+    bool (*pfnIsHifDown)(struct GLUE_INFO *prGlueInfo);
+
+};
+
+/* Global prototype to fetch the PCIe operations struct */
+struct HAL_OPS *mtk_pcie_get_ops(void);
+
+
 
 #endif /* _HAL_H */
