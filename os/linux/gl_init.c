@@ -6927,7 +6927,9 @@ static int initWlan(void)
 	pvData = (void *)prChipInfo->pdev;
 #endif
 
-	wlanProbe(pvData, pvDriverData);
+/* Manual probe disabled for Arch branch */
+/* Removed manual probe for Arch/PCIe */
+// // 	wlanProbe(pvData, pvDriverData);
 #endif
 
 #if CFG_POWER_OFF_CTRL_SUPPORT
