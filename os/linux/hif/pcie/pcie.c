@@ -185,6 +185,145 @@ static inline u_int8_t mt7902_mmio_dead(struct GL_HIF_INFO *prHifInfo)
 	return (u4Val == 0xFFFFFFFF);
 }
 
+
+
+
+#define MT7902_PCIE_HOST_INT_STATUS    0x18
+#define MT7902_PCIE_HOST_INT_ENA_SET   0x104
+#define MT7902_PCIE_INT_ALL_MASK       0xFFFFFFFF
+
+static void pcieDisableInterrupt(struct ADAPTER *prAdapter)
+{
+	struct GLUE_INFO *prGlueInfo;
+	void __iomem *base;
+
+	if (unlikely(!prAdapter || !prAdapter->prGlueInfo))
+		return;
+
+	prGlueInfo = prAdapter->prGlueInfo;
+	base = prGlueInfo->rHifInfo.CSRBaseAddress;
+
+	if (likely(base)) {
+		/* 1. Mask further interrupts */
+		writel(0, base + MT7902_PCIE_HOST_INT_ENA_SET);
+		
+		/* 2. Clear pending status bits */
+		writel(MT7902_PCIE_INT_ALL_MASK, base + MT7902_PCIE_HOST_INT_STATUS);
+		
+		/* 3. Flush write buffer to silicon */
+		(void)readl(base + MT7902_PCIE_HOST_INT_STATUS); 
+	}
+
+	prAdapter->fgIsIntEnable = FALSE;
+}
+
+static bool pcieIsHifDown(struct GLUE_INFO *prGlueInfo)
+{
+	uint32_t u4Val;
+
+	if (unlikely(!prGlueInfo || !prGlueInfo->rHifInfo.CSRBaseAddress))
+		return TRUE;
+
+	u4Val = readl(prGlueInfo->rHifInfo.CSRBaseAddress + MT7902_PCIE_HOST_INT_STATUS);
+	
+	/* 0xFFFFFFFF indicates the PCI link is down or the device is gone */
+	return (u4Val == 0xFFFFFFFF);
+}
+
+/* This is the variable the compiler complained about. 
+   Keeping it here ensures the functions above are linked. */
+static struct HAL_OPS pcieHalOps = {
+	.pfnDisableInterrupt = pcieDisableInterrupt,
+	.pfnIsHifDown = pcieIsHifDown,
+};
+
+struct HAL_OPS *mtk_pcie_get_ops(void)
+{
+	return &pcieHalOps;
+}
+
+
+static irqreturn_t mtk_pci_interrupt(int irq, void *dev_instance)
+{
+	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *) dev_instance;
+	struct ADAPTER *prAdapter;
+
+	if (unlikely(!prGlueInfo))
+		return IRQ_NONE;
+
+	prAdapter = prGlueInfo->prAdapter;
+
+	/* Check if the adapter or HAL ops are NULL before dereferencing */
+	if (unlikely(!prAdapter || !prAdapter->prHalOps))
+		return IRQ_NONE;
+
+	/* If the bus is down, just claim the IRQ and exit to prevent hang */
+	if (prAdapter->prHalOps->pfnIsHifDown && 
+	    prAdapter->prHalOps->pfnIsHifDown(prGlueInfo))
+		return IRQ_HANDLED;
+
+	/* Acknowledge and mask hardware interrupts */
+	if (prAdapter->prHalOps->pfnDisableInterrupt)
+		prAdapter->prHalOps->pfnDisableInterrupt(prAdapter);
+
+	/* Schedule the bottom half / tasklet */
+	kalSetIntEvent(prGlueInfo);
+
+	return IRQ_HANDLED;
+}
+
+static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+{
+	int ret;
+	struct GLUE_INFO *prGlueInfo;
+
+	/* * If the driver is dying at dma_set_mask, it's because it needs 
+	 * the pdev associated with the glue layer immediately.
+	 */
+	ret = pci_enable_device(pdev);
+	if (ret) return ret;
+	pci_set_master(pdev);
+
+	/* Call probe - let the platform handle the NULL glue */
+	ret = pfWlanProbe(NULL, pdev);
+
+	/* After probe, we MUST ensure the HAL ops are linked for the remove fix */
+	prGlueInfo = pci_get_drvdata(pdev);
+	if (prGlueInfo && prGlueInfo->prAdapter) {
+		prGlueInfo->prAdapter->prHalOps = mtk_pcie_get_ops();
+	}
+
+	return ret;
+}
+
+static void mtk_pci_remove(struct pci_dev *pdev)
+{
+	struct GLUE_INFO *prGlueInfo = pci_get_drvdata(pdev);
+	struct ADAPTER *prAdapter;
+
+	if (!prGlueInfo)
+		return;
+
+	prAdapter = prGlueInfo->prAdapter;
+
+	/* 1. Silence hardware IRQs */
+	if (prAdapter && prAdapter->prHalOps && prAdapter->prHalOps->pfnDisableInterrupt)
+		prAdapter->prHalOps->pfnDisableInterrupt(prAdapter);
+
+	/* 2. Sync point: ensures any running ISR finishes before code is unmapped */
+	synchronize_irq(pdev->irq);
+
+	/* 3. Drop IRQ line */
+	devm_free_irq(&pdev->dev, pdev->irq, prGlueInfo);
+
+	/* 4. Invalidate the VTable pointer */
+	if (prAdapter)
+		prAdapter->prHalOps = NULL;
+
+	/* 5. Cleanup - pfWlanRemove takes 0 arguments in this tree */
+	pfWlanRemove();
+}
+
 /*----------------------------------------------------------------------------*/
 /*! \brief Mark IRQs as dead - call before any PCI teardown
  *
@@ -303,38 +442,6 @@ static void mt7902_recovery_work(struct work_struct *work)
 
 static void *CSRBaseAddress;
 
-static irqreturn_t mtk_pci_interrupt(int irq, void *dev_instance)
-{
-	struct GLUE_INFO *prGlueInfo = NULL;
-    struct GL_HIF_INFO *prHifInfo = NULL;
-
-	prGlueInfo = (struct GLUE_INFO *) dev_instance;
-	if (!prGlueInfo) {
-		DBGLOG(HAL, INFO, "No glue info in mtk_pci_interrupt()\n");
-		return IRQ_NONE;
-	}
-    
-    prHifInfo = &prGlueInfo->rHifInfo;
-
-    /* CRITICAL: Check MMIO before touching hardware (V2 Fix) */
-    if (mt7902_mmio_dead(prHifInfo)) {
-        DBGLOG(HAL, ERROR, "MMIO dead in ISR - scheduling recovery\n");
-        mt7902_schedule_recovery_from_atomic(prGlueInfo);
-        return IRQ_HANDLED;
-    }
-
-	halDisableInterrupt(prGlueInfo->prAdapter);
-
-	if (prGlueInfo->ulFlag & GLUE_FLAG_HALT) {
-		DBGLOG(HAL, INFO, "GLUE_FLAG_HALT skip INT\n");
-		return IRQ_NONE;
-	}
-
-	kalSetIntEvent(prGlueInfo);
-
-	return IRQ_HANDLED;
-}
-
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief This function is a PCIE probe function
@@ -345,78 +452,6 @@ static irqreturn_t mtk_pci_interrupt(int irq, void *dev_instance)
  * \return void
  */
 /*----------------------------------------------------------------------------*/
-static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
-{
-	int ret = 0;
-	struct mt66xx_chip_info *prChipInfo;
-	
-	ASSERT(pdev);
-	ASSERT(id);
-	
-	ret = pci_enable_device(pdev);
-	if (ret) {
-		DBGLOG(INIT, INFO, "pci_enable_device failed!\n");
-		goto out;
-	}
-	
-	/* Manual ASPM Disable because we are an out-of-tree module */
-	pr_info("MT7902: Disabling ASPM L1/L1.1/L1.2 manually in probe\n");
-	pci_disable_link_state(pdev, PCIE_LINK_STATE_L1 | 
-	                             PCIE_LINK_STATE_L1_1 | 
-	                             PCIE_LINK_STATE_L1_2);
-	
-#if defined(SOC3_0)
-	if ((void *)&mt66xx_driver_data_soc3_0 == (void *)id->driver_data)
-		DBGLOG(INIT, INFO,
-			"[MJ]&mt66xx_driver_data_soc3_0 == id->driver_data\n");
-#endif
-	
-	DBGLOG(INIT, INFO, "pci_enable_device done!\n");
-	
-	prChipInfo = ((struct mt66xx_hif_driver_data *)
-				id->driver_data)->chip_info;
-	prChipInfo->pdev = (void *)pdev;
-	
-	/* Always call the probe path and set global 'probed' only on success */
-	if (pfWlanProbe((void *) pdev, (void *) id->driver_data) != WLAN_STATUS_SUCCESS) {
-		DBGLOG(INIT, INFO, "pfWlanProbe fail!call pfWlanRemove()\n");
-		pfWlanRemove();
-		ret = -1;
-	} else {
-		g_fgDriverProbed = TRUE;
-		g_u4DmaMask = prChipInfo->bus_info->u4DmaMask;
-		/* Clear initial cold boot flag - probe completed successfully */
-		g_fgInInitialColdBoot = FALSE;
-		DBGLOG(INIT, INFO, "Initial cold boot complete, WFDMA polling now enabled\n");
-	}
-	
-out:
-	DBGLOG(INIT, INFO, "mtk_pci_probe() done(%d)\n", ret);
-	return ret;
-}
-
-
-static void mtk_pci_remove(struct pci_dev *pdev)
-{
-	ASSERT(pdev);
-
-	if (g_fgDriverProbed)
-		pfWlanRemove();
-	DBGLOG(INIT, INFO, "pfWlanRemove done\n");
-	
-	/* Reset the flag in case module is reloaded */
-	g_fgInInitialColdBoot = TRUE;
-
-	/* Unmap CSR base address */
-	iounmap(CSRBaseAddress);
-
-	/* release memory region */
-	pci_release_regions(pdev);
-
-	pci_disable_device(pdev);
-	pci_disable_msi(pdev);
-	DBGLOG(INIT, INFO, "mtk_pci_remove() done\n");
-}
 
 
 static int mtk_pci_suspend(struct pci_dev *pdev, pm_message_t state)
