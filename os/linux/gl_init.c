@@ -1,3 +1,5 @@
+#include <linux/pci.h>
+#include <linux/pci.h>
 /********************************************************************************
  *
  * This file is provided under a dual license.  When you use or
@@ -6411,12 +6413,10 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 			break;
 		}
 
-		/* Ensure DMA mask has a sane default if NVRAM hasn't set it */
-		if (g_u4DmaMask == 0) {
-			g_u4DmaMask = 32; 
-			DBGLOG(INIT, WARN, "wlanProbe: g_u4DmaMask was 0, defaulting to 32-bit\n");
+		if (pvData) {
+			struct pci_dev *pdev = (struct pci_dev *)pvData;
+			dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 		}
-
 		bRet = glBusInit(pvData);
 
 #if (CFG_SUPPORT_TRACE_TC4 == 1)

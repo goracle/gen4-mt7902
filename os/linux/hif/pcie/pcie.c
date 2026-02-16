@@ -285,7 +285,7 @@ static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	pci_set_master(pdev);
 
 	/* Call probe - let the platform handle the NULL glue */
-	ret = pfWlanProbe(NULL, pdev);
+	ret = pfWlanProbe(pdev, (void *)id->driver_data);
 
 	/* After probe, we MUST ensure the HAL ops are linked for the remove fix */
 	prGlueInfo = pci_get_drvdata(pdev);
