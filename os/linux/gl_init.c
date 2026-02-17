@@ -2695,20 +2695,15 @@ void wlanUpdateDfsChannelTable(struct GLUE_INFO *prGlueInfo,
 static int32_t wlanNetRegister(struct wireless_dev *prWdev)
 {
 	struct GLUE_INFO *prGlueInfo;
-	int32_t i4DevIdx = -1;
-	struct NETDEV_PRIVATE_GLUE_INFO *prNetDevPrivate = NULL;
-	struct ADAPTER *prAdapter = NULL;
-	uint32_t u4Idx = 0;
-	bool registered[KAL_AIS_NUM] = { false };
-	int registered_count = 0;
+	struct NETDEV_PRIVATE_GLUE_INFO *prNetDevPrivate;
+	struct net_device *prNetdev;
+	int32_t i4DevIdx;
 	int ret;
 
-	/* Validate input quickly */
 	if (!prWdev) {
 		DBGLOG(INIT, ERROR, "wlanNetRegister: prWdev == NULL\n");
 		return -1;
 	}
-
 
 	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(prWdev->wiphy);
 	if (!prGlueInfo) {
@@ -2716,172 +2711,76 @@ static int32_t wlanNetRegister(struct wireless_dev *prWdev)
 		return -1;
 	}
 
-	prAdapter = prGlueInfo->prAdapter;
-
-	/* Get the device index for this wireless_dev early and validate */
-	i4DevIdx = wlanGetDevIdx(prWdev->netdev);
-	if (i4DevIdx < 0) {
-		DBGLOG(INIT, ERROR, "wlanNetRegister: net_device number exceeds or invalid\n");
+	if (!gprWdev[0] || !gprWdev[0]->netdev) {
+		DBGLOG(INIT, ERROR, "wlanNetRegister: gprWdev[0] or netdev is NULL\n");
 		return -1;
 	}
 
-	/* Optional: init device wakeup only when adapter indicates WOW */
-	if (prAdapter && prAdapter->rWifiVar.ucWow)
-		kalInitDevWakeup(prGlueInfo->prAdapter,
-				 wiphy_dev(prWdev->wiphy));
+	prNetdev = gprWdev[0]->netdev;
 
-	/* Try to register all KAL_AIS_NUM virtual interfaces.
-	 * Track which ones succeed so we can cleanly unwind on failure.
-	 */
-	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
-		struct wireless_dev *cur_wdev;
-		struct net_device *cur_netdev;
-
-/* SHIELD: If already registered, do not re-register! */
-		struct net_device *dev = gprWdev[u4Idx]->netdev;
-		DBGLOG(INIT, ERROR, "SHIELD: wlan%u reg_state=%d\n", u4Idx, dev ? dev->reg_state : -1);
-		if (dev->reg_state != NETREG_UNREGISTERED) {
-			continue;
-		}
-
-		/* Defensive checks for globals the driver relies on */
-		if (!gprWdev[u4Idx]) {
-			DBGLOG(INIT, WARN, "wlanNetRegister: gprWdev[%u] == NULL, skipping\n", u4Idx);
-			continue;
-		}
-		cur_wdev = gprWdev[u4Idx];
-		cur_netdev = cur_wdev->netdev;
-		if (!cur_netdev) {
-			DBGLOG(INIT, WARN, "wlanNetRegister: gprWdev[%u]->netdev == NULL, skipping\n", u4Idx);
-			continue;
-		}
-
-		/* netdev_priv may be important; guard against NULL */
-		prNetDevPrivate = (struct NETDEV_PRIVATE_GLUE_INFO *)netdev_priv(cur_netdev);
-		if (!prNetDevPrivate) {
-			DBGLOG(INIT, ERROR, "wlanNetRegister: netdev_priv NULL for %s\n", cur_netdev->name);
-			/* This is unexpected: better to fail rather than continue with bad state */
-			goto err_unwind;
-		}
-
-		/* Ensure private glue points to the correct glueinfo, fix if necessary */
-		if (prNetDevPrivate->prGlueInfo != prGlueInfo) {
-			DBGLOG(INIT, ERROR, "wlanNetRegister: correcting prGlueInfo for %s\n", cur_netdev->name);
-			prNetDevPrivate->prGlueInfo = prGlueInfo;
-		}
-
-		/* Bind BSS index and initialize per-netdev fields */
-		prNetDevPrivate->ucBssIdx = u4Idx;
-
-	#if CFG_ENABLE_UNIFY_WIPHY
-		prNetDevPrivate->ucIsP2p = FALSE;
-	#endif
-
-		wlanBindBssIdxToNetInterface(prGlueInfo,
-					    u4Idx,
-					    (void *)cur_netdev);
-
-	#if CFG_SUPPORT_PERSIST_NETDEV
-		/* If this netdev was already registered and persistent, don't re-register.
-		 * Treat it as already registered for bookkeeping.
-		 */
-		if (gprNetdev[u4Idx] && gprNetdev[u4Idx]->reg_state == NETREG_REGISTERED) {
-			registered[u4Idx] = true;
-			registered_count++;
-			DBGLOG(INIT, INFO, "wlanNetRegister: %s already registered (persist), skipping registration\n",
-			       cur_netdev->name);
-			continue;
-		}
-
-		/* Ensure carrier is off and queues stopped before registration to avoid races */
-		netif_carrier_off(cur_netdev);
-		netif_tx_stop_all_queues(cur_netdev);
-	#endif /* CFG_SUPPORT_PERSIST_NETDEV */
-
-		/* iwd/cfg80211 compatibility: populate wireless_dev/wiphy fields on this interface struct,
-		 * but do it on the per-index wireless_dev (cur_wdev) rather than the caller-supplied prWdev
-		 * to avoid accidental cross-wiring.
-		 */
-		cur_wdev->iftype = NL80211_IFTYPE_STATION;
-
-		if (cur_wdev->wiphy) {
-			cur_wdev->wiphy->interface_modes =
-				BIT(NL80211_IFTYPE_STATION) |
-				BIT(NL80211_IFTYPE_AP) |
-				BIT(NL80211_IFTYPE_P2P_CLIENT);
-
-			/* Reasonable safe defaults for MT7902 firmware */
-			cur_wdev->wiphy->max_scan_ssids = max(4, cur_wdev->wiphy->max_scan_ssids);
-			cur_wdev->wiphy->max_scan_ie_len = max(1024, cur_wdev->wiphy->max_scan_ie_len);
-
-			//cur_wdev->wiphy->regulatory_flags |= REGULATORY_WIPHY_SELF_MANAGED; //KERNEL SOV; ALL HAIL THE KERNEL
-		} else {
-			/* Warn but continue: some flows use wiphy from another place */
-			DBGLOG(INIT, ERROR, "wlanNetRegister: cur_wdev->wiphy == NULL for idx %u\n", u4Idx);
-		}
-
-		/* Perform the actual registration and track success */
-		ret = register_netdev(cur_netdev);
-		DBGLOG(INIT, ERROR, "register_netdev returned %d for %s\n", ret, cur_netdev->name);
-		if (ret < 0) {
-			DBGLOG(INIT, ERROR,
-			       "wlanNetRegister: register_netdev failed for idx %u (%s): %d\n",
-			       u4Idx, cur_netdev->name, ret);
-
-			/* Clear any dev-idx the helper previously set to avoid stale mapping */
-			wlanClearDevIdx(cur_netdev);
-			i4DevIdx = -1;
-			/* unwind previously-registered interfaces */
-			goto err_unwind;
-		}
-
-		registered[u4Idx] = true;
-		registered_count++;
-		DBGLOG(INIT, ERROR, "wlanNetRegister: Registered netdev %s as STATION (idx %u)\n",
-		       cur_netdev->name, u4Idx);
-
-		if (u4Idx == 0) {
-			DBGLOG(INIT, INFO, "MT7902-FIX: Forcing primary slot for wlan0\n");
-			i4DevIdx = 0; // Claim the first slot
-			break;         // Skip the remaining logic and exit the loop
-		}
-
-
-	}
-
-	/* Only mark the glue as registered if we actually registered something */
-	if (registered_count > 0)
+	if (prNetdev->reg_state == NETREG_REGISTERED) {
+		DBGLOG(INIT, INFO, "wlanNetRegister: %s already registered, skipping\n",
+		       prNetdev->name);
 		prGlueInfo->fgIsRegistered = TRUE;
-
-	return i4DevIdx;
-
-/* Clean, deterministic unwind: unregister any interfaces we already registered
- * in reverse order so we leave the system in the same state as before calling.
- */
-err_unwind:
-	for (int j = (int)u4Idx - 1; j >= 0; j--) {
-		if (!registered[j])
-			continue;
-
-		if (gprWdev[j] && gprWdev[j]->netdev) {
-			DBGLOG(INIT, INFO, "wlanNetRegister: unwinding - unregistering %s (idx %d)\n",
-			       gprWdev[j]->netdev->name, j);
-
-			/* unregister_netdev will wait for rtnl context as required by kernel APIs */
-			unregister_netdev(gprWdev[j]->netdev);
-			/* clear any driver bookkeeping for this netdev */
-			wlanClearDevIdx(gprWdev[j]->netdev);
-		}
-		registered[j] = false;
+		return 0;
 	}
 
-	/* Ensure glueflag reset on failure */
-	prGlueInfo->fgIsRegistered = FALSE;
+	i4DevIdx = wlanGetDevIdx(prNetdev);
+	if (i4DevIdx < 0) {
+		DBGLOG(INIT, ERROR, "wlanNetRegister: wlanGetDevIdx failed\n");
+		return -1;
+	}
 
-	return -1;
+	prNetDevPrivate = (struct NETDEV_PRIVATE_GLUE_INFO *) netdev_priv(prNetdev);
+	if (!prNetDevPrivate) {
+		DBGLOG(INIT, ERROR, "wlanNetRegister: netdev_priv NULL\n");
+		return -1;
+	}
+
+	if (prNetDevPrivate->prGlueInfo != prGlueInfo) {
+		DBGLOG(INIT, WARN, "wlanNetRegister: correcting prGlueInfo for %s\n",
+		       prNetdev->name);
+		prNetDevPrivate->prGlueInfo = prGlueInfo;
+	}
+
+	prNetDevPrivate->ucBssIdx = 0;
+
+#if CFG_ENABLE_UNIFY_WIPHY
+	prNetDevPrivate->ucIsP2p = FALSE;
+#endif
+
+	wlanBindBssIdxToNetInterface(prGlueInfo, 0, (void *) prNetdev);
+
+	if (prGlueInfo->prAdapter && prGlueInfo->prAdapter->rWifiVar.ucWow)
+		kalInitDevWakeup(prGlueInfo->prAdapter, wiphy_dev(prWdev->wiphy));
+
+	gprWdev[0]->iftype = NL80211_IFTYPE_STATION;
+
+	if (gprWdev[0]->wiphy) {
+		gprWdev[0]->wiphy->interface_modes =
+			BIT(NL80211_IFTYPE_STATION) |
+			BIT(NL80211_IFTYPE_AP) |
+			BIT(NL80211_IFTYPE_P2P_CLIENT);
+		gprWdev[0]->wiphy->max_scan_ssids =
+			max(4, gprWdev[0]->wiphy->max_scan_ssids);
+		gprWdev[0]->wiphy->max_scan_ie_len =
+			max(1024, gprWdev[0]->wiphy->max_scan_ie_len);
+	}
+
+	netif_carrier_off(prNetdev);
+	netif_tx_stop_all_queues(prNetdev);
+
+	ret = register_netdev(prNetdev);
+	if (ret < 0) {
+		DBGLOG(INIT, ERROR, "wlanNetRegister: register_netdev failed: %d\n", ret);
+		wlanClearDevIdx(prNetdev);
+		return -1;
+	}
+
+	DBGLOG(INIT, INFO, "wlanNetRegister: registered %s\n", prNetdev->name);
+	prGlueInfo->fgIsRegistered = TRUE;
+	return i4DevIdx;
 }
-
-
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -2906,12 +2805,15 @@ static void wlanNetUnregister(struct wireless_dev *prWdev)
 #if !CFG_SUPPORT_PERSIST_NETDEV
 	{
 		uint32_t u4Idx = 0;
+
 		for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
-			if (gprWdev[u4Idx] && gprWdev[u4Idx]->netdev) {
-				dev_close(gprWdev[u4Idx]->netdev);
-				wlanClearDevIdx(gprWdev[u4Idx]->netdev);
-				unregister_netdev(gprWdev[u4Idx]->netdev);
-			}
+			if (!gprWdev[u4Idx] || !gprWdev[u4Idx]->netdev)
+				continue;
+			if (gprWdev[u4Idx]->netdev->reg_state != NETREG_REGISTERED)
+				continue;
+			dev_close(gprWdev[u4Idx]->netdev);
+			wlanClearDevIdx(gprWdev[u4Idx]->netdev);
+			unregister_netdev(gprWdev[u4Idx]->netdev);
 		}
 
 		prGlueInfo->fgIsRegistered = FALSE;
@@ -2919,6 +2821,8 @@ static void wlanNetUnregister(struct wireless_dev *prWdev)
 #endif
 
 }				/* end of wlanNetUnregister() */
+
+
 
 static const struct net_device_ops wlan_netdev_ops = {
 	.ndo_open = wlanOpen,
