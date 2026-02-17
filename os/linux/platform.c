@@ -661,16 +661,26 @@ static int wlan_netdev_notifier_call(struct notifier_block *nb,
 	return NOTIFY_DONE;
 }
 
-static struct notifier_block wlan_netdev_notifier = {
+struct notifier_block wlan_netdev_notifier = {
 	.notifier_call = wlan_netdev_notifier_call,
 };
+EXPORT_SYMBOL(wlan_netdev_notifier);
+
+
+static bool wlan_notifier_registered = false;
 
 void wlanRegisterNetdevNotifier(void)
 {
-	register_netdevice_notifier(&wlan_netdev_notifier);
+    if (!wlan_notifier_registered) {
+        register_netdevice_notifier(&wlan_netdev_notifier);
+        wlan_notifier_registered = true;
+    }
 }
 
 void wlanUnregisterNetdevNotifier(void)
 {
-	unregister_netdevice_notifier(&wlan_netdev_notifier);
+    if (wlan_notifier_registered) {
+        unregister_netdevice_notifier(&wlan_netdev_notifier);
+        wlan_notifier_registered = false;
+    }
 }

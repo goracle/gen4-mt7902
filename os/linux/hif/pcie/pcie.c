@@ -279,118 +279,87 @@ static irqreturn_t mtk_pci_interrupt(int irq, void *dev_instance)
 	return IRQ_HANDLED;
 }
 
-static int mtk_pci_probe(struct pci_dev *pdev,
-                         const struct pci_device_id *id)
+/* pcie.c */
+extern void mt7902_hard_cleanup(struct GLUE_INFO *prGlueInfo, struct ADAPTER *prAdapter);
+
+
+static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
     int ret;
     struct GLUE_INFO *prGlueInfo = NULL;
-    bool irq_disabled = false;
 
     ret = pci_enable_device(pdev);
-    if (ret)
+    if (ret) {
+        DBGLOG(INIT, ERROR, "pci_enable_device failed (%d)\n", ret);
         return ret;
-
-    pci_set_master(pdev);
-
-    DBGLOG(INIT, WARN,
-           "MT7902-FIX: Quiescing bus before WLAN probe\n");
-
-    /*
-     * HARD QUIESCE STEP
-     * Mask Linux-side IRQ handling before the device
-     * potentially asserts garbage during WFSYS reset.
-     */
-    if (pdev->irq) {
-        disable_irq(pdev->irq);
-        irq_disabled = true;
-        DBGLOG(INIT, INFO,
-               "MT7902-FIX: PCI IRQ masked before pfWlanProbe\n");
     }
 
-    /* Save PCI config in case link drops */
+    /*
+     * Do NOT call pci_request_regions here. BAR ownership lives in
+     * glBusInit, which is called from pfWlanProbe. Having both claim
+     * the BAR causes the double-request that was producing the
+     * "Resource busy, forcing release/retry" noise and corrupting
+     * the resource tree on partial failures.
+     *
+     * pci_set_master and pci_save_state are safe to call before
+     * pfWlanProbe — they don't touch BAR reservations.
+     */
+    pci_set_master(pdev);
     pci_save_state(pdev);
 
-    /*
-     * Call main WLAN probe (this may:
-     *  - reset WFSYS
-     *  - toggle link
-     *  - temporarily kill the fabric
-     */
     ret = pfWlanProbe(pdev, (void *)id->driver_data);
-
-    if (ret == -EIO) {
-        DBGLOG(INIT, WARN,
-               "MT7902-FIX: Link lost during reset, restoring state...\n");
-
-        pci_restore_state(pdev);
-        msleep(500);
-
-        /*
-         * IMPORTANT:
-         * We do NOT automatically re-run pfWlanProbe here.
-         * Let upper layers decide.
-         */
-    }
-
-    /*
-     * Only re-enable IRQ if probe succeeded.
-     * If probe failed, leave it disabled so remove()
-     * or retry path handles cleanly.
-     */
-    if (irq_disabled && ret == 0) {
-        enable_irq(pdev->irq);
-        DBGLOG(INIT, INFO,
-               "MT7902-FIX: PCI IRQ unmasked after successful probe\n");
+    if (ret) {
+        DBGLOG(INIT, ERROR, "pfWlanProbe failed (%d)\n", ret);
+        goto err_release_regions;
     }
 
     prGlueInfo = pci_get_drvdata(pdev);
-    if (prGlueInfo && prGlueInfo->prAdapter) {
+    if (prGlueInfo && prGlueInfo->prAdapter)
         prGlueInfo->prAdapter->prHalOps = mtk_pcie_get_ops();
-    }
 
+    return 0;
+
+err_release_regions:
+    /*
+     * glBusInit may have successfully claimed the BARs before failing
+     * at ioremap, or pfWlanProbe may have failed after glBusInit
+     * succeeded. Either way, release whatever was claimed. If glBusInit
+     * never got far enough to call pci_request_regions, this is a no-op.
+     */
+    pci_release_regions(pdev);
+    prGlueInfo = pci_get_drvdata(pdev);
+    if (prGlueInfo) {
+        disable_irq(pdev->irq);
+        mt7902_hard_cleanup(prGlueInfo, prGlueInfo->prAdapter);
+    }
+    pci_disable_device(pdev);
     return ret;
 }
 
 
 static void mtk_pci_remove(struct pci_dev *pdev)
 {
-    struct GLUE_INFO *prGlueInfo = pci_get_drvdata(pdev);
-    struct ADAPTER *prAdapter;
+	struct GLUE_INFO *prGlueInfo = pci_get_drvdata(pdev);
 
-    /* SAFETY CHECK: If probe failed, drvdata is NULL. 
-     * We must simply exit; touching registers here will panic. 
-     */
-    if (!prGlueInfo) {
-        DBGLOG(HAL, WARN, "mtk_pci_remove: NULL glue info (Probe failed?), skipping cleanup\n");
-        return;
-    }
+	DBGLOG(INIT, INFO, "MT7902-FIX: Removing PCI device and releasing resources\n");
 
-    prAdapter = prGlueInfo->prAdapter;
+	/* If we have glue info, it means pfWlanProbe at least started.
+	 * pfWlanRemove will clean up netdev, procfs, and threads.
+	 */
+	if (prGlueInfo) {
+		pfWlanRemove();
+	}
 
-    /* 1. Silence hardware IRQs - ONLY if adapter exists */
-    if (prAdapter && prAdapter->prHalOps && prAdapter->prHalOps->pfnDisableInterrupt) {
-        prAdapter->prHalOps->pfnDisableInterrupt(prAdapter);
-    }
-
-    /* 2. Sync point */
-    if (pdev->irq) {
-        synchronize_irq(pdev->irq);
-        /* 3. Drop IRQ line */
-        devm_free_irq(&pdev->dev, pdev->irq, prGlueInfo);
-    }
-
-    /* 4. Invalidate VTable */
-    if (prAdapter)
-        prAdapter->prHalOps = NULL;
-
-    /* 5. Cleanup - Check if pfWlanRemove is valid before calling */
-    if (pfWlanRemove)
-        pfWlanRemove();
-        
-    /* Clear driver data so subsequent calls don't crash */
-    pci_set_drvdata(pdev, NULL);
+	/* ALWAYS release these if they were claimed, even if prGlueInfo is NULL.
+	 * This prevents the "EBUSY" error on the next driver load.
+	 */
+	if (pci_is_enabled(pdev)) {
+		pci_release_regions(pdev);
+		pci_disable_device(pdev);
+	}
+	
+	pci_set_drvdata(pdev, NULL);
 }
-
 /*----------------------------------------------------------------------------*/
 /*! \brief Mark IRQs as dead - call before any PCI teardown
  *
@@ -1526,69 +1495,92 @@ recovery_failed:
 /*----------------------------------------------------------------------------*/
 u_int8_t glBusInit(void *pvData)
 {
-	int ret = 0;
-	struct pci_dev *pdev = NULL;
+    int ret = 0;
+    struct pci_dev *pdev = NULL;
 
-	ASSERT(pvData);
-
-	pdev = (struct pci_dev *)pvData;
+    ASSERT(pvData);
+    pdev = (struct pci_dev *)pvData;
 
 #if CFG80211_VERSION_CODE >= KERNEL_VERSION(5, 18, 0)
-	ret = dma_set_mask(&pdev->dev, DMA_BIT_MASK(g_u4DmaMask));
+    ret = dma_set_mask(&pdev->dev, DMA_BIT_MASK(g_u4DmaMask));
 #else
-	ret = pci_set_dma_mask(pdev, DMA_BIT_MASK(g_u4DmaMask));
+    ret = pci_set_dma_mask(pdev, DMA_BIT_MASK(g_u4DmaMask));
 #endif
-	if (ret != 0) {
-		DBGLOG(INIT, INFO, "set DMA mask failed!errno=%d\n", ret);
-		return FALSE;
-	}
+    if (ret != 0) {
+        DBGLOG(INIT, INFO, "set DMA mask failed! errno=%d\n", ret);
+        return FALSE;
+    }
 
-	ret = pci_request_regions(pdev, pci_name(pdev));
-	if (ret != 0) {
-		DBGLOG(INIT, INFO,
-			"Request PCI resource failed, errno=%d!\n", ret);
-	}
+    /*
+     * Request BARs here. This is the single correct place for BAR
+     * ownership — glBusInit is the one that maps CSRBaseAddress via
+     * ioremap, so it must own the resource claim to back that mapping.
+     *
+     * mtk_pci_probe must NOT also call pci_request_regions. Doing so
+     * causes a double-claim: mtk_pci_probe claims the BAR, then
+     * glBusInit (called from pfWlanProbe) hits -EBUSY on its own
+     * device, releases the BAR that mtk_pci_probe legitimately holds,
+     * and re-requests it. This is the source of the "Resource busy,
+     * forcing release/retry" message and the BAR ownership confusion.
+     *
+     * If this fails with -EBUSY on first load it means a previous
+     * driver instance leaked the reservation (or hardware latchup —
+     * see README). There is no safe software retry: we cannot release
+     * a BAR we don't own. Surface the error cleanly.
+     */
+    ret = pci_request_regions(pdev, DRV_NAME);
+    if (ret) {
+        DBGLOG(INIT, ERROR,
+               "pci_request_regions failed (%d) - BAR 0 at 0x%llx busy. "
+               "If this persists, hardware latchup likely (power drain "
+               "required). Check /proc/iomem.\n",
+               ret, (u64)pci_resource_start(pdev, 0));
+        return FALSE;
+    }
 
-	/* map physical address to virtual address for accessing register */
-	CSRBaseAddress = ioremap(pci_resource_start(pdev, 0),
-		pci_resource_len(pdev, 0));
-	DBGLOG(INIT, INFO, "ioremap for device %s, region 0x%lX @ 0x%lX\n",
-		pci_name(pdev), (unsigned long) pci_resource_len(pdev, 0),
-		(unsigned long) pci_resource_start(pdev, 0));
-	if (!CSRBaseAddress) {
-		DBGLOG(INIT, INFO,
-			"ioremap failed for device %s, region 0x%lX @ 0x%lX\n",
-			pci_name(pdev),
-			(unsigned long) pci_resource_len(pdev, 0),
-			(unsigned long) pci_resource_start(pdev, 0));
-		goto err_out_free_res;
-	}
+    CSRBaseAddress = ioremap(pci_resource_start(pdev, 0),
+                             pci_resource_len(pdev, 0));
+
+    DBGLOG(INIT, INFO, "ioremap for device %s, region 0x%lX @ 0x%lX\n",
+           pci_name(pdev),
+           (unsigned long)pci_resource_len(pdev, 0),
+           (unsigned long)pci_resource_start(pdev, 0));
+
+    if (!CSRBaseAddress) {
+        DBGLOG(INIT, ERROR,
+               "ioremap failed for device %s, BAR 0 0x%llx len 0x%llx\n",
+               pci_name(pdev),
+               (u64)pci_resource_start(pdev, 0),
+               (u64)pci_resource_len(pdev, 0));
+        goto err_out_free_res;
+    }
 
 #if CFG_CONTROL_ASPM_BY_FW
 #if CFG_SUPPORT_PCIE_ASPM
-	glBusConfigASPM(pdev,
-			DISABLE_ASPM_L1);
-	glBusConfigASPML1SS(pdev,
-		PCI_L1PM_CTR1_ASPM_L12_EN |
-		PCI_L1PM_CTR1_ASPM_L11_EN);
-	glBusConfigASPM(pdev,
-			ENABLE_ASPM_L1);
+    glBusConfigASPM(pdev, DISABLE_ASPM_L1);
+    glBusConfigASPML1SS(pdev,
+                        PCI_L1PM_CTR1_ASPM_L12_EN |
+                        PCI_L1PM_CTR1_ASPM_L11_EN);
+    glBusConfigASPM(pdev, ENABLE_ASPM_L1);
 #endif
 #endif
 
-	/* Set DMA master */
-	pci_set_master(pdev);
-
-	return TRUE;
+    pci_set_master(pdev);
+    return TRUE;
 
 err_out_free_res:
-	pci_release_regions(pdev);
-
-	pci_disable_device(pdev);
-    pci_disable_msi(pdev);
-
-	return FALSE;
+    pci_release_regions(pdev);
+    /*
+     * Do not call pci_disable_device or pci_disable_msi here.
+     * glBusInit does not own device enable — mtk_pci_probe called
+     * pci_enable_device before pfWlanProbe, so it owns the matching
+     * pci_disable_device on the error path. Calling it here would
+     * disable a device that mtk_pci_probe still thinks is enabled,
+     * leaving the two layers out of sync.
+     */
+    return FALSE;
 }
+
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -1669,40 +1661,61 @@ int32_t glBusSetIrq(void *pvData, void *pfnIsr, void *pvCookie)
  *
  * \return (none)
  */
+
 /*----------------------------------------------------------------------------*/
+
+
+
+
+
 void glBusFreeIrq(void *pvData, void *pvCookie)
 {
-	struct net_device *prNetDevice = NULL;
-	struct GLUE_INFO *prGlueInfo = NULL;
-	struct GL_HIF_INFO *prHifInfo = NULL;
-	struct pci_dev *pdev = NULL;
+    struct net_device *prNetDevice = NULL;
+    struct GLUE_INFO *prGlueInfo = NULL;
+    struct GL_HIF_INFO *prHifInfo = NULL;
+    struct pci_dev *pdev = NULL;
 
-	ASSERT(pvData);
-	if (!pvData) {
-		DBGLOG(INIT, INFO, "%s null pvData\n", __func__);
-		return;
-	}
-	prNetDevice = (struct net_device *)pvData;
-	prGlueInfo = (struct GLUE_INFO *) pvCookie;
-	ASSERT(prGlueInfo);
-	if (!prGlueInfo) {
-		DBGLOG(INIT, INFO, "%s no glue info\n", __func__);
-		return;
-	}
+    ASSERT(pvData);
+    if (!pvData) {
+        DBGLOG(INIT, INFO, "%s null pvData\n", __func__);
+        return;
+    }
 
-	prHifInfo = &prGlueInfo->rHifInfo;
-	pdev = prHifInfo->pdev;
+    prNetDevice = (struct net_device *)pvData;
+    prGlueInfo = (struct GLUE_INFO *)pvCookie;
 
-    /* V2 FIX: Mark IRQ dead before freeing */
+    ASSERT(prGlueInfo);
+    if (!prGlueInfo) {
+        DBGLOG(INIT, INFO, "%s no glue info\n", __func__);
+        return;
+    }
+
+    prHifInfo = &prGlueInfo->rHifInfo;
+    pdev = prHifInfo->pdev;
+
     mt7902_mark_irq_dead(prHifInfo);
+    synchronize_irq(pdev->irq);
+    free_irq(pdev->irq, prGlueInfo);
 
-	synchronize_irq(pdev->irq);
-	free_irq(pdev->irq, prGlueInfo);
-    
-    /* V2 FIX: Clean up recovery infrastructure */
     cancel_work_sync(&prHifInfo->recovery_work);
     mutex_destroy(&prHifInfo->recovery_lock);
+
+    /*
+     * Only release BAR resources if glBusInit successfully claimed them.
+     * CSRBaseAddress being non-NULL is the indicator that pci_request_regions
+     * and ioremap both succeeded. On wedged hardware glBusInit may have
+     * failed before claiming anything, in which case calling
+     * pci_release_regions would splat "trying to free nonexistent resource".
+     */
+    if (CSRBaseAddress) {
+        iounmap(CSRBaseAddress);
+        CSRBaseAddress = NULL;
+        pci_release_regions(pdev);
+        pci_clear_master(pdev);
+    }
 }
+
+
 
 u_int8_t glIsReadClearReg(uint32_t u4Address)
 {

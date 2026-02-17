@@ -7716,51 +7716,34 @@ DEFINE_PROC_OPS_STRUCT(rMetProcPortFops) = {
 	DEFINE_PROC_OPS_WRITE(kalMetPortWriteProcfs)
 };
 
+
+
 int kalMetInitProcfs(IN struct GLUE_INFO *prGlueInfo)
 {
-	/* struct proc_dir_entry *pMetProcDir; */
-	if (init_net.proc_net == (struct proc_dir_entry *)NULL) {
-		DBGLOG(INIT, INFO, "init proc fs fail: proc_net == NULL\n");
-		return -ENOENT;
-	}
-	/*
-	 * Directory: Root (/proc/net/wlan0)
-	 */
-	pMetProcDir = proc_mkdir("wlan0", init_net.proc_net);
-	if (pMetProcDir == NULL)
-		return -ENOENT;
-	/*
-	 *  /proc/net/wlan0
-	 *  |-- met_ctrl         (PROC_MET_PROF_CTRL)
-	 */
-	/* proc_create(PROC_MET_PROF_CTRL, 0x0644, pMetProcDir, &rMetProcFops);
-	 */
-	proc_create(PROC_MET_PROF_CTRL, 0000, pMetProcDir,
-		    &rMetProcCtrlFops);
-	proc_create(PROC_MET_PROF_PORT, 0000, pMetProcDir,
-		    &rMetProcPortFops);
+    if (init_net.proc_net == NULL)
+        return -ENOENT;
 
-	pMetGlobalData = (void *)prGlueInfo;
+    kalMetRemoveProcfs();
 
-	return 0;
+    pMetProcDir = proc_mkdir("wlan0", init_net.proc_net);
+    if (pMetProcDir == NULL)
+        return -ENOENT;
+
+    proc_create(PROC_MET_PROF_CTRL, 0000, pMetProcDir, &rMetProcCtrlFops);
+    proc_create(PROC_MET_PROF_PORT, 0000, pMetProcDir, &rMetProcPortFops);
+    pMetGlobalData = (void *)prGlueInfo;
+    return 0;
 }
+
 
 int kalMetRemoveProcfs(void)
 {
-
-	if (init_net.proc_net == (struct proc_dir_entry *)NULL) {
-		DBGLOG(INIT, WARN,
-		       "remove proc fs fail: proc_net == NULL\n");
-		return -ENOENT;
-	}
-	remove_proc_entry(PROC_MET_PROF_CTRL, pMetProcDir);
-	remove_proc_entry(PROC_MET_PROF_PORT, pMetProcDir);
-	/* remove root directory (proc/net/wlan0) */
-	remove_proc_entry("wlan0", init_net.proc_net);
-	/* clear MetGlobalData */
-	pMetGlobalData = NULL;
-
-	return 0;
+    if (init_net.proc_net == NULL)
+        return -ENOENT;
+    remove_proc_subtree("wlan0", init_net.proc_net);
+    pMetProcDir = NULL;
+    pMetGlobalData = NULL;
+    return 0;
 }
 
 #endif

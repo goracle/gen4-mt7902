@@ -132,6 +132,17 @@ struct net_device *gprNetdev[KAL_AIS_NUM] = {};
 struct sock *nl_sk;
 #endif/* CFG_AP_80211KVR_INTERFACE */
 
+/* File-scope so wlanProbe and wlanProbe_Cleanup can both reference it. */
+enum ENUM_PROBE_FAIL_REASON {
+    BUS_INIT_FAIL,
+    NET_CREATE_FAIL,
+    BUS_SET_IRQ_FAIL,
+    ADAPTER_START_FAIL,
+    NET_REGISTER_FAIL,
+    PROC_INIT_FAIL,
+    FAIL_MET_INIT_PROCFS,
+    FAIL_REASON_NUM
+};
 /*******************************************************************************
  *                             D A T A   T Y P E S
  *******************************************************************************
@@ -206,7 +217,7 @@ u_int8_t	g_fgIsCalDataBackuped = FALSE;
 
 /* Add this near the other 'extern' or 'include' lines at the top of gl_init.c */
 extern const struct ieee80211_regdomain regdom_us;
-
+extern struct notifier_block wlan_netdev_notifier;
 
 
 /* 20150205 added work queue for sched_scan to avoid cfg80211 stop schedule scan
@@ -586,8 +597,8 @@ static struct ieee80211_channel mtk_6ghz_channels[] = {
 };
 
 // --- START FIXED DISASTER AREA ---
+#endif /* CFG_SUPPORT_WIFI_6G */
 // To this (specifically for modern kernels):
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
 
 /* NSS=1 (1 Spatial Stream) supporting MCS 0-11 
  * Fixed casing to standard kernel cpu_to_le16
@@ -692,7 +703,6 @@ static struct ieee80211_channel mtk_6ghz_channels[] = {
 
 
 // end radioactive area
-#endif // #if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
 
 
 
@@ -845,7 +855,6 @@ struct ieee80211_supported_band mtk_band_6ghz = {
 
 
 
-#endif
 
 
 
@@ -2690,90 +2699,189 @@ static int32_t wlanNetRegister(struct wireless_dev *prWdev)
 	struct NETDEV_PRIVATE_GLUE_INFO *prNetDevPrivate = NULL;
 	struct ADAPTER *prAdapter = NULL;
 	uint32_t u4Idx = 0;
+	bool registered[KAL_AIS_NUM] = { false };
+	int registered_count = 0;
+	int ret;
 
-	ASSERT(prWdev);
+	/* Validate input quickly */
+	if (!prWdev) {
+		DBGLOG(INIT, ERROR, "wlanNetRegister: prWdev == NULL\n");
+		return -1;
+	}
 
-	do {
-		if (!prWdev)
-			break;
 
-		prGlueInfo = (struct GLUE_INFO *) wiphy_priv(prWdev->wiphy);
-		prAdapter = prGlueInfo->prAdapter;
-		i4DevIdx = wlanGetDevIdx(prWdev->netdev);
+	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(prWdev->wiphy);
+	if (!prGlueInfo) {
+		DBGLOG(INIT, ERROR, "wlanNetRegister: wiphy_priv returned NULL\n");
+		return -1;
+	}
 
-		if (i4DevIdx < 0) {
-			DBGLOG(INIT, ERROR, "net_device number exceeds!\n");
-			break;
+	prAdapter = prGlueInfo->prAdapter;
+
+	/* Get the device index for this wireless_dev early and validate */
+	i4DevIdx = wlanGetDevIdx(prWdev->netdev);
+	if (i4DevIdx < 0) {
+		DBGLOG(INIT, ERROR, "wlanNetRegister: net_device number exceeds or invalid\n");
+		return -1;
+	}
+
+	/* Optional: init device wakeup only when adapter indicates WOW */
+	if (prAdapter && prAdapter->rWifiVar.ucWow)
+		kalInitDevWakeup(prGlueInfo->prAdapter,
+				 wiphy_dev(prWdev->wiphy));
+
+	/* Try to register all KAL_AIS_NUM virtual interfaces.
+	 * Track which ones succeed so we can cleanly unwind on failure.
+	 */
+	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
+		struct wireless_dev *cur_wdev;
+		struct net_device *cur_netdev;
+
+/* SHIELD: If already registered, do not re-register! */
+		struct net_device *dev = gprWdev[u4Idx]->netdev;
+		DBGLOG(INIT, ERROR, "SHIELD: wlan%u reg_state=%d\n", u4Idx, dev ? dev->reg_state : -1);
+		if (dev->reg_state != NETREG_UNREGISTERED) {
+			continue;
 		}
 
-		if (prAdapter && prAdapter->rWifiVar.ucWow)
-			kalInitDevWakeup(prGlueInfo->prAdapter,
-				wiphy_dev(prWdev->wiphy));
-
-		for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
-			prNetDevPrivate = (struct NETDEV_PRIVATE_GLUE_INFO *)
-				netdev_priv(gprWdev[u4Idx]->netdev);
-			
-			ASSERT(prNetDevPrivate->prGlueInfo == prGlueInfo);
-			prNetDevPrivate->ucBssIdx = u4Idx;
-
-#if CFG_ENABLE_UNIFY_WIPHY
-			prNetDevPrivate->ucIsP2p = FALSE;
-#endif
-
-			wlanBindBssIdxToNetInterface(prGlueInfo,
-				     u4Idx,
-				     (void *)gprWdev[u4Idx]->netdev);
-
-#if CFG_SUPPORT_PERSIST_NETDEV
-			if (gprNetdev[u4Idx]->reg_state == NETREG_REGISTERED)
-				continue;
-
-			/* Ensure carrier is off before registration to prevent race conditions */
-			netif_carrier_off(gprWdev[u4Idx]->netdev);
-			netif_tx_stop_all_queues(gprWdev[u4Idx]->netdev);
-#endif
-
-			/* * iwd/cfg80211 COMPATIBILITY BLOCK
-			 * We initialize these BEFORE register_netdev so the kernel 
-			 * knows exactly what kind of device is appearing.
-			 */
-
-		    /* 1. Set the interface type on the wireless device itself */
-			prWdev->iftype = NL80211_IFTYPE_STATION;
-
-			/* 2. Set the global capabilities on the wiphy */
-			prWdev->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION) | 
-							BIT(NL80211_IFTYPE_AP) |
-							BIT(NL80211_IFTYPE_P2P_CLIENT);
-
-			/* 3. SET THESE - If these are 0, CMD_TRIGGER_SCAN returns -22 */
-			prWdev->wiphy->max_scan_ssids = 4;        /* MTK firmware limit is usually small */
-			prWdev->wiphy->max_scan_ie_len = 1024;    /* Safe limit for MT7902 */
-
-			/* 4. Tell mac80211 we are ready for managed mode */
-			prWdev->wiphy->regulatory_flags |= REGULATORY_WIPHY_SELF_MANAGED;
-
-			/* 4. Finalize the network device registration */
-			if (register_netdev(gprWdev[u4Idx]->netdev) < 0) {
-				DBGLOG(INIT, ERROR,
-					"Register net_device %d failed\n",
-					u4Idx);
-				wlanClearDevIdx(gprWdev[u4Idx]->netdev);
-				i4DevIdx = -1;
-			} else {
-				DBGLOG(INIT, INFO, "Registered netdev %s as STATION\n", 
-					gprWdev[u4Idx]->netdev->name);
-			}
+		/* Defensive checks for globals the driver relies on */
+		if (!gprWdev[u4Idx]) {
+			DBGLOG(INIT, WARN, "wlanNetRegister: gprWdev[%u] == NULL, skipping\n", u4Idx);
+			continue;
+		}
+		cur_wdev = gprWdev[u4Idx];
+		cur_netdev = cur_wdev->netdev;
+		if (!cur_netdev) {
+			DBGLOG(INIT, WARN, "wlanNetRegister: gprWdev[%u]->netdev == NULL, skipping\n", u4Idx);
+			continue;
 		}
 
-		if (i4DevIdx != -1)
-			prGlueInfo->fgIsRegistered = TRUE;
+		/* netdev_priv may be important; guard against NULL */
+		prNetDevPrivate = (struct NETDEV_PRIVATE_GLUE_INFO *)netdev_priv(cur_netdev);
+		if (!prNetDevPrivate) {
+			DBGLOG(INIT, ERROR, "wlanNetRegister: netdev_priv NULL for %s\n", cur_netdev->name);
+			/* This is unexpected: better to fail rather than continue with bad state */
+			goto err_unwind;
+		}
 
-	} while (FALSE);
+		/* Ensure private glue points to the correct glueinfo, fix if necessary */
+		if (prNetDevPrivate->prGlueInfo != prGlueInfo) {
+			DBGLOG(INIT, ERROR, "wlanNetRegister: correcting prGlueInfo for %s\n", cur_netdev->name);
+			prNetDevPrivate->prGlueInfo = prGlueInfo;
+		}
+
+		/* Bind BSS index and initialize per-netdev fields */
+		prNetDevPrivate->ucBssIdx = u4Idx;
+
+	#if CFG_ENABLE_UNIFY_WIPHY
+		prNetDevPrivate->ucIsP2p = FALSE;
+	#endif
+
+		wlanBindBssIdxToNetInterface(prGlueInfo,
+					    u4Idx,
+					    (void *)cur_netdev);
+
+	#if CFG_SUPPORT_PERSIST_NETDEV
+		/* If this netdev was already registered and persistent, don't re-register.
+		 * Treat it as already registered for bookkeeping.
+		 */
+		if (gprNetdev[u4Idx] && gprNetdev[u4Idx]->reg_state == NETREG_REGISTERED) {
+			registered[u4Idx] = true;
+			registered_count++;
+			DBGLOG(INIT, INFO, "wlanNetRegister: %s already registered (persist), skipping registration\n",
+			       cur_netdev->name);
+			continue;
+		}
+
+		/* Ensure carrier is off and queues stopped before registration to avoid races */
+		netif_carrier_off(cur_netdev);
+		netif_tx_stop_all_queues(cur_netdev);
+	#endif /* CFG_SUPPORT_PERSIST_NETDEV */
+
+		/* iwd/cfg80211 compatibility: populate wireless_dev/wiphy fields on this interface struct,
+		 * but do it on the per-index wireless_dev (cur_wdev) rather than the caller-supplied prWdev
+		 * to avoid accidental cross-wiring.
+		 */
+		cur_wdev->iftype = NL80211_IFTYPE_STATION;
+
+		if (cur_wdev->wiphy) {
+			cur_wdev->wiphy->interface_modes =
+				BIT(NL80211_IFTYPE_STATION) |
+				BIT(NL80211_IFTYPE_AP) |
+				BIT(NL80211_IFTYPE_P2P_CLIENT);
+
+			/* Reasonable safe defaults for MT7902 firmware */
+			cur_wdev->wiphy->max_scan_ssids = max(4, cur_wdev->wiphy->max_scan_ssids);
+			cur_wdev->wiphy->max_scan_ie_len = max(1024, cur_wdev->wiphy->max_scan_ie_len);
+
+			//cur_wdev->wiphy->regulatory_flags |= REGULATORY_WIPHY_SELF_MANAGED; //KERNEL SOV; ALL HAIL THE KERNEL
+		} else {
+			/* Warn but continue: some flows use wiphy from another place */
+			DBGLOG(INIT, ERROR, "wlanNetRegister: cur_wdev->wiphy == NULL for idx %u\n", u4Idx);
+		}
+
+		/* Perform the actual registration and track success */
+		ret = register_netdev(cur_netdev);
+		DBGLOG(INIT, ERROR, "register_netdev returned %d for %s\n", ret, cur_netdev->name);
+		if (ret < 0) {
+			DBGLOG(INIT, ERROR,
+			       "wlanNetRegister: register_netdev failed for idx %u (%s): %d\n",
+			       u4Idx, cur_netdev->name, ret);
+
+			/* Clear any dev-idx the helper previously set to avoid stale mapping */
+			wlanClearDevIdx(cur_netdev);
+			i4DevIdx = -1;
+			/* unwind previously-registered interfaces */
+			goto err_unwind;
+		}
+
+		registered[u4Idx] = true;
+		registered_count++;
+		DBGLOG(INIT, ERROR, "wlanNetRegister: Registered netdev %s as STATION (idx %u)\n",
+		       cur_netdev->name, u4Idx);
+
+		if (u4Idx == 0) {
+			DBGLOG(INIT, INFO, "MT7902-FIX: Forcing primary slot for wlan0\n");
+			i4DevIdx = 0; // Claim the first slot
+			break;         // Skip the remaining logic and exit the loop
+		}
+
+
+	}
+
+	/* Only mark the glue as registered if we actually registered something */
+	if (registered_count > 0)
+		prGlueInfo->fgIsRegistered = TRUE;
 
 	return i4DevIdx;
+
+/* Clean, deterministic unwind: unregister any interfaces we already registered
+ * in reverse order so we leave the system in the same state as before calling.
+ */
+err_unwind:
+	for (int j = (int)u4Idx - 1; j >= 0; j--) {
+		if (!registered[j])
+			continue;
+
+		if (gprWdev[j] && gprWdev[j]->netdev) {
+			DBGLOG(INIT, INFO, "wlanNetRegister: unwinding - unregistering %s (idx %d)\n",
+			       gprWdev[j]->netdev->name, j);
+
+			/* unregister_netdev will wait for rtnl context as required by kernel APIs */
+			unregister_netdev(gprWdev[j]->netdev);
+			/* clear any driver bookkeeping for this netdev */
+			wlanClearDevIdx(gprWdev[j]->netdev);
+		}
+		registered[j] = false;
+	}
+
+	/* Ensure glueflag reset on failure */
+	prGlueInfo->fgIsRegistered = FALSE;
+
+	return -1;
 }
+
+
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -2798,9 +2906,9 @@ static void wlanNetUnregister(struct wireless_dev *prWdev)
 #if !CFG_SUPPORT_PERSIST_NETDEV
 	{
 		uint32_t u4Idx = 0;
-
 		for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
 			if (gprWdev[u4Idx] && gprWdev[u4Idx]->netdev) {
+				dev_close(gprWdev[u4Idx]->netdev);
 				wlanClearDevIdx(gprWdev[u4Idx]->netdev);
 				unregister_netdev(gprWdev[u4Idx]->netdev);
 			}
@@ -4646,6 +4754,90 @@ static void consys_log_event_notification(int cmd, int value)
 }
 #endif
 
+
+/*
+ * mt7902_hard_cleanup - Tear down driver state for a given glue/adapter.
+ *
+ * Called either from the probe error path (via mtk_pci_probe's err_release_regions)
+ * or from the remove path. Always called with valid prGlueInfo. prAdapter may be
+ * NULL if probe failed before adapter allocation.
+ *
+ * By the time this is called from the error path, the caller has already called
+ * disable_irq(pdev->irq) to prevent new IRQ delivery. This means no new tasklet
+ * schedules can occur, so tasklet_kill() will not spin indefinitely.
+ *
+ * Ordering:
+ *   1. Signal HALT so any paths that check it before queuing work see it immediately
+ *   2. Kill the tasklet — safe because caller holds disable_irq
+ *   3. Wake waiters so they observe HALT and exit
+ *   4. Unregister netdev (guarded against partial-probe state)
+ *   5. Remove procfs (guarded)
+ *   6. Unregister netdev notifier — must be after netdev unregister so we
+ *      don't miss our own NETDEV_UNREGISTER event
+ */
+void mt7902_hard_cleanup(struct GLUE_INFO *prGlueInfo, struct ADAPTER *prAdapter)
+{
+    /* 1. Signal halt. */
+    set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
+
+    /*
+     * 2. Kill the tasklet.
+     *
+     * Safe to call here because:
+     * - On the probe error path: caller called disable_irq() before us,
+     *   so no new IRQ delivery can schedule the tasklet after this point.
+     * - On the remove path: nicDisableInterrupt was called before remove,
+     *   and the tasklet's own HALT check calls nicDisableInterrupt before
+     *   returning, so the hardware is already silent.
+     *
+     * We do NOT call nicDisableInterrupt here. The tasklet handles that
+     * itself when it observes GLUE_FLAG_HALT, and calling it again from
+     * here would be redundant and potentially racy with the tasklet's own
+     * nicDisableInterrupt call.
+     */
+    tasklet_kill(&prGlueInfo->rRxTask);
+
+    /* 3. Wake any waiters so they observe HALT and exit cleanly. */
+    wake_up_interruptible(&prGlueInfo->waitq);
+
+    /*
+     * 4. Net device unregistration.
+     *
+     * Guard against partial probe: prDevHandler may be allocated but not
+     * yet registered if probe failed early. unregister_netdev on an
+     * unregistered device hits BUG_ON inside the kernel.
+     */
+    if (prGlueInfo->prDevHandler &&
+        prGlueInfo->prDevHandler->reg_state == NETREG_REGISTERED) {
+        unregister_netdev(prGlueInfo->prDevHandler);
+    }
+
+    /*
+     * 5. Procfs cleanup.
+     *
+     * pProcRoot tracks the proc directory created at probe time.
+     * proc_remove() removes it and all children recursively.
+     * Guarded so this is safe to call even if proc setup never completed.
+     */
+#if WLAN_INCLUDE_PROC
+    if (prGlueInfo->pProcRoot) {
+        proc_remove(prGlueInfo->pProcRoot);
+        prGlueInfo->pProcRoot = NULL;
+    }
+#endif
+
+    /*
+     * 6. Notifier unregistration.
+     *
+     * Must come after step 4: the notifier observes net device events,
+     * so it must stay live until after unregister_netdev completes to
+     * catch our own NETDEV_UNREGISTER event.
+     */
+    unregister_netdevice_notifier(&wlan_netdev_notifier);
+}
+
+
+
 static
 void wlanOnPreAdapterStart(struct GLUE_INFO *prGlueInfo,
 	struct ADAPTER *prAdapter,
@@ -5789,6 +5981,9 @@ int32_t wlanOffAtReset(void)
 	/* 4 <x> Stopping handling interrupt and free IRQ */
 	glBusFreeIrq(prDev, prGlueInfo);
 
+
+
+
 #if (CFG_SUPPORT_TRACE_TC4 == 1)
 	wlanDebugTC4Uninit();
 #endif
@@ -5896,6 +6091,7 @@ int32_t wlanOnAtReset(void)
 		 * STEP 6: Start the adapter (FW download, HW init)
 		 * -------------------------------------------------------- */
 		rStatus = wlanAdapterStart(prAdapter, &prGlueInfo->rRegInfo, TRUE);
+		
 		if (rStatus != WLAN_STATUS_SUCCESS) {
 			DBGLOG(INIT, ERROR, 
 			       "Adapter start FAILED (status=0x%x)\n", rStatus);
@@ -6190,312 +6386,417 @@ int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter)
 }
 
 
-static int32_t wlanProbe(void *pvData, void *pvDriverData)
+/* ------------------------------------------------------------------ */
+/* wlanProbe_BusInit                                                    */
+/* Returns 0 on success, negative errno on failure.                    */
+/* ------------------------------------------------------------------ */
+static int wlanProbe_BusInit(void *pvData)
 {
-	struct wireless_dev *prWdev = NULL;
-	enum ENUM_PROBE_FAIL_REASON {
-		BUS_INIT_FAIL,
-		NET_CREATE_FAIL,
-		BUS_SET_IRQ_FAIL,
-		ADAPTER_START_FAIL,
-		NET_REGISTER_FAIL,
-		PROC_INIT_FAIL,
-		FAIL_MET_INIT_PROCFS,
-		FAIL_REASON_NUM
-	} eFailReason;
-	struct WLANDEV_INFO *prWlandevInfo = NULL;
-	int32_t i4DevIdx = -1;
-	struct GLUE_INFO *prGlueInfo = NULL;
-	struct ADAPTER *prAdapter = NULL;
-	int32_t i4Status = 0;
-	u_int8_t bRet = FALSE;
-	u_int8_t i = 0;
-	struct REG_INFO *prRegInfo;
-	struct mt66xx_chip_info *prChipInfo;
-	//struct GL_HIF_INFO *prHifInfo = NULL;
-	struct WIFI_VAR *prWifiVar;
-#if (MTK_WCN_HIF_SDIO && CFG_WMT_WIFI_PATH_SUPPORT)
-	int32_t i4RetVal = 0;
-#endif
-	uint32_t u4Idx = 0;
+    struct pci_dev *pdev = (struct pci_dev *)pvData;
 
-#if CFG_CHIP_RESET_SUPPORT
-	if (fgSimplifyResetFlow)
-		return wlanOnAtReset();
-#endif
+    if (!pvData || (unsigned long)pvData < 0x1000) {
+        DBGLOG(INIT, ERROR,
+               "wlanProbe: invalid pvData (%p)\n", pvData);
+        return -ENODEV;
+    }
 
-	eFailReason = FAIL_REASON_NUM;
-	do {
-		/* 1. Bus Init */
-#ifdef CFG_CHIP_RESET_KO_SUPPORT
-		rstNotifyWholeChipRstStatus(RST_MODULE_WIFI,
-			RST_MODULE_STATE_PROBE_START, NULL);
-#endif
-		DBGLOG(INIT, INFO, "enter wlanProbe\n");
+    /*
+     * Set DMA mask before glBusInit so the BAR claim and ioremap
+     * happen with the correct mask already in place.
+     */
+    dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 
-		/* HARDENING: Verify pvData is a valid PCI device pointer before glBusInit */
-		if (!pvData || (unsigned long)pvData < 0x1000) {
-			DBGLOG(INIT, ERROR, "wlanProbe: Invalid pvData pointer (%p). Suspected NVRAM/Glue failure.\n", pvData);
-			i4Status = -ENODEV;
-			eFailReason = BUS_INIT_FAIL;
-			break;
-		}
+    if (!glBusInit(pvData)) {
+        DBGLOG(INIT, ERROR, "wlanProbe: glBusInit failed\n");
+        return -EIO;
+    }
 
-		if (pvData) {
-			struct pci_dev *pdev = (struct pci_dev *)pvData;
-			dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
-		}
-		bRet = glBusInit(pvData);
+    return 0;
+}
 
-#if (CFG_SUPPORT_TRACE_TC4 == 1)
-		wlanDebugTC4Init();
-#endif
-		if (bRet == FALSE) {
-			DBGLOG(INIT, ERROR, "wlanProbe: glBusInit() fail\n");
-			i4Status = -EIO;
-			eFailReason = BUS_INIT_FAIL;
-			break;
-		}
+/* ------------------------------------------------------------------ */
+/* wlanProbe_AdapterBringup                                             */
+/* Cold-boots MCU, sets IRQ, starts adapter.                           */
+/* Returns 0 on success, negative errno on failure.                    */
+/* ------------------------------------------------------------------ */
+static int wlanProbe_AdapterBringup(struct GLUE_INFO *prGlueInfo,
+                                    struct ADAPTER *prAdapter,
+                                    struct wireless_dev *prWdev,
+                                    struct REG_INFO *prRegInfo)
+{
+    int ret;
 
-		/* 2. Create Net Device (Alloc only, no register yet) */
-		prWdev = wlanNetCreate(pvData, pvDriverData);
-		if (prWdev == NULL) {
-		  //int i4status;
-			DBGLOG(INIT, ERROR, "wlanProbe: No memory for dev\n");
-			i4Status = -ENOMEM;
-			eFailReason = NET_CREATE_FAIL;
-			break;
-		}
+    if (mt79xx_wfsys_cold_boot_and_wait(prAdapter) != 0) {
+        DBGLOG(INIT, ERROR,
+               "wlanProbe: WFSYS cold boot failed - MCU unresponsive\n");
+        return -EIO;
+    }
 
-		/* 3. Glue/Adapter Setup */
-		prGlueInfo = (struct GLUE_INFO *) wiphy_priv(prWdev->wiphy);
-		
-		/* HARDENING: Ensure Glue Info was actually allocated */
-		if (!prGlueInfo) {
-			DBGLOG(INIT, ERROR, "wlanProbe: Glue Info is NULL! Missing NVRAM?\n");
-			i4Status = -ENODEV;
-			eFailReason = NET_CREATE_FAIL;
-			break;
-		}
+    ret = glBusSetIrq(prWdev->netdev, NULL, prGlueInfo);
+    if (ret != WLAN_STATUS_SUCCESS) {
+        DBGLOG(INIT, ERROR, "wlanProbe: glBusSetIrq failed\n");
+        return -EIO;
+    }
 
-		gPrDev = prGlueInfo->prDevHandler;
-		prWlandevInfo = &arWlanDevInfo[i4DevIdx];
+    ret = wlanAdapterStart(prAdapter, prRegInfo, FALSE);
+    if (ret != WLAN_STATUS_SUCCESS) {
+        DBGLOG(INIT, ERROR,
+               "wlanProbe: wlanAdapterStart failed (0x%x)\n", ret);
+        /*
+         * Silence hardware and kill tasklet before returning.
+         * The caller's error path will call glBusFreeIrq which
+         * handles the IRQ and BAR teardown.
+         */
+        nicDisableInterrupt(prAdapter);
+        set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
+        tasklet_kill(&prGlueInfo->rRxTask);
+        return -EIO;
+    }
 
-		/* Get adapter reference - needed for cold boot */
-		prGlueInfo->i4DevIdx = i4DevIdx;
-		prAdapter = prGlueInfo->prAdapter;
+    return 0;
+}
 
-		if (!prAdapter) {
-			DBGLOG(INIT, ERROR, "wlanProbe: Adapter is NULL!\n");
-			i4Status = -ENODEV;
-			eFailReason = ADAPTER_START_FAIL;
-			break;
-		}
+/* ------------------------------------------------------------------ */
+/* wlanProbe_ConfigureBands                                             */
+/* Forces band configuration since we have no NVRAM to auto-detect.   */
+/* ------------------------------------------------------------------ */
+static void wlanProbe_ConfigureBands(struct ADAPTER *prAdapter,
+                                     struct wireless_dev *prWdev)
+{
+    uint8_t i;
 
-		/* --------------------------------------------------------
-		 * STEP 3: Cold boot the WFSYS MCU (our precious baby)
-		 * This MUST happen before we set up IRQs because:
-		 * - IRQ handlers expect a live MCU
-		 * - Dead MCU = spurious/stuck IRQs
-		 * - We need to verify bus health before IRQ registration
-		 * -------------------------------------------------------- */
-		DBGLOG(INIT, INFO, "Attempting WFSYS cold boot...\n");
-		
-		if (mt79xx_wfsys_cold_boot_and_wait(prAdapter) != 0) {
-			DBGLOG(INIT, ERROR, 
-			       "WFSYS cold boot FAILED - MCU did not come alive\n");
-			i4Status = WLAN_STATUS_FAILURE;
-			eFailReason = ADAPTER_START_FAIL;
-			break;
-		}
-		
-		DBGLOG(INIT, INFO, "WFSYS MCU is alive! Proceeding with reset recovery.\n");
+    prAdapter->fgEnable5GBand = TRUE;
+    prWdev->wiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
 
-
-
-		prWifiVar = &prAdapter->rWifiVar;
-
-		wlanOnPreAdapterStart(prGlueInfo, prAdapter, &prRegInfo, &prChipInfo);
-
-		/* 5. Set IRQ - AFTER MCU is confirmed alive */
-		i4Status = glBusSetIrq(prWdev->netdev, NULL, prGlueInfo);
-		if (i4Status != WLAN_STATUS_SUCCESS) {
-			DBGLOG(INIT, ERROR, "wlanProbe: Set IRQ error\n");
-			eFailReason = BUS_SET_IRQ_FAIL;
-			break;
-		}
-
-		/* 6. Adapter Start (FW Download, HW Init) */
-		if (wlanAdapterStart(prAdapter, prRegInfo, FALSE) != WLAN_STATUS_SUCCESS) {
-			i4Status = -EIO;
-			eFailReason = ADAPTER_START_FAIL;
-			break;
-		}
-
-		wlanOnPostAdapterStart(prAdapter, prGlueInfo);
-
-		/* Initialize internal state before bands are set */
-		if (wlanOnPreNetRegister(prGlueInfo, prAdapter, prChipInfo, prWifiVar, FALSE)) {
-			i4Status = -EIO;
-			eFailReason = NET_REGISTER_FAIL;
-			break;
-		}
-
-		/* ---------------------------------------------------------
-		 * CRITICAL FIX: Initialize Bands and Capabilities
-		 * We FORCE 5GHz enablement here because firmware detection
-		 * might be reporting false or default.
-		 * --------------------------------------------------------- */
-		
-		/* FORCE Enable 5GHz Band */
-		prAdapter->fgEnable5GBand = TRUE;
-
-		/* Configure 5G band structure */
-		prWdev->wiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
-
-		/* Apply to P2P interfaces */
-		for (i = 0 ; i < KAL_P2P_NUM; i++) {
-			if (gprP2pRoleWdev[i] == NULL) continue;
-			gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
-		}
+    for (i = 0; i < KAL_P2P_NUM; i++) {
+        if (!gprP2pRoleWdev[i])
+            continue;
+        gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
+    }
 
 #if (CFG_SUPPORT_WIFI_6G == 1)
-		/* Configure 6G band if HW supports it */
-		if (prAdapter->fgIsHwSupport6G) {
-			prWdev->wiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
-			
-			for (i = 0 ; i < KAL_P2P_NUM; i++) {
-				if (gprP2pRoleWdev[i] == NULL) continue;
-				gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
-			}
-		} else {
-			prWdev->wiphy->bands[KAL_BAND_6GHZ] = NULL;
-		}
+    if (prAdapter->fgIsHwSupport6G) {
+        prWdev->wiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
+        for (i = 0; i < KAL_P2P_NUM; i++) {
+            if (!gprP2pRoleWdev[i])
+                continue;
+            gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
+        }
+    } else {
+        prWdev->wiphy->bands[KAL_BAND_6GHZ] = NULL;
+    }
 #endif
+}
 
-		/* Initialize Helper Services */
-#if CFG_MET_PACKET_TRACE_SUPPORT
-		kalMetInit(prGlueInfo);
-#endif
-#if CFG_ENABLE_BT_OVER_WIFI
-		prGlueInfo->rBowInfo.fgIsNetRegistered = FALSE;
-		prGlueInfo->rBowInfo.fgIsRegistered = FALSE;
-		glRegisterAmpc(prGlueInfo);
-#endif
-#if (CONFIG_WLAN_SERVICE == 1)
-		wlanServiceInit(prGlueInfo);
-#endif
-		/* Clear FT IEs */
-		for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
-			struct FT_IES *prFtIEs = aisGetFtIe(prAdapter, u4Idx);
-			kalMemZero(prFtIEs, sizeof(*prFtIEs));
-		}
+/* ------------------------------------------------------------------ */
+/* wlanProbe_PostRegisterInit                                           */
+/* Everything that needs a registered netdev name (proc, sysfs, etc.) */
+/* Returns 0 on success, negative errno on failure.                    */
+/* ------------------------------------------------------------------ */
+static int wlanProbe_PostRegisterInit(struct GLUE_INFO *prGlueInfo,
+                                      struct ADAPTER *prAdapter,
+                                      struct wireless_dev *prWdev)
+{
+    int ret;
 
-		/* ---------------------------------------------------------
-		 * CRITICAL FIX: Mark Driver READY before Register
-		 * This ensures wlanIsDriverReady() returns TRUE when
-		 * NetworkManager/iwd queries capabilities immediately.
-		 * Prevents 0x103 Timeouts on early commands.
-		 * --------------------------------------------------------- */
-		wlanOnWhenProbeSuccess(prGlueInfo, prAdapter, FALSE);
-#if CFG_SUPPORT_TPENHANCE_MODE
-		wlanTpeInit(prGlueInfo);
-#endif
-
-		/* 7. Register Net Device (GO LIVE) */
-		/* Userspace sees the interface HERE. */
-		i4DevIdx = wlanNetRegister(prWdev);
-		if (i4DevIdx < 0) {
-			i4Status = -ENXIO;
-			DBGLOG(INIT, ERROR, "wlanProbe: Net register failed\n");
-			eFailReason = NET_REGISTER_FAIL;
-			break;
-		}
-
-		wlanOnPostNetRegister();
-
-		/* 8. Post-Register Init (Proc/Sysfs need registered name) */
 #if WLAN_INCLUDE_PROC
-		i4Status = procCreateFsEntry(prGlueInfo);
-		if (i4Status < 0) {
-			DBGLOG(INIT, ERROR, "wlanProbe: init procfs failed\n");
-			eFailReason = PROC_INIT_FAIL;
-			break;
-		}
-#endif
-#if WLAN_INCLUDE_SYS
-		i4Status = sysCreateFsEntry(prGlueInfo);
-		if (i4Status < 0) {
-			DBGLOG(INIT, ERROR, "wlanProbe: init sysfs failed\n");
-			break;
-		}
+    /*
+     * Do NOT call remove_proc_entry unconditionally here.
+     * procCreateFsEntry creates under pProcRoot which is tracked
+     * and cleaned up by proc_remove() in mt7902_hard_cleanup.
+     * Unconditional removal here reproduced the WARN-on-nonexistent-
+     * entry bug we already fixed.
+     */
+    ret = procCreateFsEntry(prGlueInfo);
+    if (ret < 0) {
+        DBGLOG(INIT, ERROR, "wlanProbe: procCreateFsEntry failed\n");
+        return ret;
+    }
 #endif
 
-		rlmDomainReplayPendingRegdom(prAdapter);
+#if WLAN_INCLUDE_SYS
+    ret = sysCreateFsEntry(prGlueInfo);
+    if (ret < 0) {
+        DBGLOG(INIT, ERROR, "wlanProbe: sysCreateFsEntry failed\n");
+        return ret;
+    }
+#endif
 
 #if (CFG_SUPPORT_SNIFFER_RADIOTAP == 1)
-		prGlueInfo->fgIsEnableMon = FALSE;
-		sysCreateMonDbgFs(prGlueInfo);
+    prGlueInfo->fgIsEnableMon = FALSE;
+    sysCreateMonDbgFs(prGlueInfo);
 #endif
 
 #if (CFG_MET_PACKET_TRACE_SUPPORT == 1)
-		i4Status = kalMetInitProcfs(prGlueInfo);
-		if (i4Status < 0) {
-			eFailReason = FAIL_MET_INIT_PROCFS;
-			break;
-		}
+    ret = kalMetInitProcfs(prGlueInfo);
+    if (ret < 0) {
+        DBGLOG(INIT, ERROR, "wlanProbe: kalMetInitProcfs failed\n");
+        return ret;
+    }
 #endif
-		
-		/* Register P2P if needed */
-		wlanOnP2pRegistration(prGlueInfo, prAdapter, prWdev);
 
-		DBGLOG(INIT, INFO,
-		       "wlanProbe: probe success, feature set: 0x%llx\n",
-		       wlanGetSupportedFeatureSet(prGlueInfo));
+    rlmDomainReplayPendingRegdom(prAdapter);
+    wlanOnP2pRegistration(prGlueInfo, prAdapter, prWdev);
 
-	} while (FALSE);
+    return 0;
+}
 
-	/* Error Handling / Cleanup */
-	if (i4Status != 0) {
-		DBGLOG(INIT, ERROR, "wlanProbe: probe failed, reason:%d\n", eFailReason);
-		switch (eFailReason) {
+/* ------------------------------------------------------------------ */
+/* wlanProbe_Cleanup                                                    */
+/* Error unwind. Called only when i4Status != 0.                       */
+/* Each case falls through to release everything acquired above it.    */
+/* ------------------------------------------------------------------ */
+static void wlanProbe_Cleanup(enum ENUM_PROBE_FAIL_REASON eFailReason,
+                              struct GLUE_INFO *prGlueInfo,
+                              struct ADAPTER *prAdapter,
+                              struct wireless_dev *prWdev,
+                              int32_t i4DevIdx)
+{
+    /*
+     * Silence hardware interrupts unconditionally before any teardown.
+     * Safe to call even if adapter start never completed — it guards
+     * internally against uninitialized state.
+     */
+    if (prAdapter)
+        nicDisableInterrupt(prAdapter);
+
+    switch (eFailReason) {
 #if CFG_MET_PACKET_TRACE_SUPPORT
-		case FAIL_MET_INIT_PROCFS:
-			kalMetRemoveProcfs();
-			kal_fallthrough;
+    case FAIL_MET_INIT_PROCFS:
+        kalMetRemoveProcfs();
+        kal_fallthrough;
 #endif
-		case PROC_INIT_FAIL:
-			if (i4DevIdx >= 0) wlanNetUnregister(prWdev);
-			kal_fallthrough;
-		case NET_REGISTER_FAIL:
-			if (prGlueInfo) {
-				set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
-				wake_up_interruptible(&prGlueInfo->waitq);
-				wait_for_completion_interruptible(&prGlueInfo->rHaltComp);
-			}
-			if (prAdapter) wlanAdapterStart(prAdapter, prRegInfo, FALSE);
-			kal_fallthrough;
-		case ADAPTER_START_FAIL:
-			if (prWdev && prWdev->netdev)
-				glBusFreeIrq(prWdev->netdev, prGlueInfo);
-			kal_fallthrough;
-		case BUS_SET_IRQ_FAIL:
-			if (prGlueInfo) wlanWakeLockUninit(prGlueInfo);
-			if (prWdev) wlanNetDestroy(prWdev);
-			break;
-		case NET_CREATE_FAIL:
-		case BUS_INIT_FAIL:
-			break;
-		default:
-			break;
-		}
-	}
+    case PROC_INIT_FAIL:
+        /* Proc/sysfs entries are cleaned up by mt7902_hard_cleanup
+         * via proc_remove(pProcRoot). No unconditional remove_proc_entry. */
+        kal_fallthrough;
+
+    case NET_REGISTER_FAIL:
+        wlanUnregisterInetAddrNotifier();
+        if (i4DevIdx >= 0)
+            wlanNetUnregister(prWdev);
+        kal_fallthrough;
+
+    case ADAPTER_START_FAIL:
+        /*
+         * hard_cleanup handles: HALT flag, tasklet_kill, netdev
+         * unregister (guarded), proc removal (guarded).
+         * Must run before glBusFreeIrq since it may
+         * wake threads that are spinning on the tasklet.
+         */
+        if (prGlueInfo)
+            mt7902_hard_cleanup(prGlueInfo, prAdapter);
+        if (prWdev && prWdev->netdev)
+            glBusFreeIrq(prWdev->netdev, prGlueInfo);
+        kal_fallthrough;
+
+    case BUS_SET_IRQ_FAIL:
+        if (prGlueInfo)
+            wlanWakeLockUninit(prGlueInfo);
+        if (prWdev)
+            wlanNetDestroy(prWdev);
+        break;
+
+    case NET_CREATE_FAIL:
+    case BUS_INIT_FAIL:
+        /* glBusInit failed or never ran — nothing to unwind on
+         * the glue/adapter side. glBusFreeIrq guards against
+         * releasing BARs it never claimed via CSRBaseAddress check. */
+        break;
+
+    default:
+        break;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* wlanProbe                                                            */
+/* ------------------------------------------------------------------ */
+static int32_t wlanProbe(void *pvData, void *pvDriverData)
+{
+    struct wireless_dev *prWdev = NULL;
+    struct GLUE_INFO *prGlueInfo = NULL;
+    struct ADAPTER *prAdapter = NULL;
+    struct REG_INFO *prRegInfo = NULL;
+    struct mt66xx_chip_info *prChipInfo = NULL;
+    struct WIFI_VAR *prWifiVar = NULL;
+    int32_t i4DevIdx = -1;
+    int32_t i4Status = 0;
+    uint32_t u4Idx = 0;
+    enum ENUM_PROBE_FAIL_REASON eFailReason = FAIL_REASON_NUM;
+
+#if CFG_CHIP_RESET_SUPPORT
+    if (fgSimplifyResetFlow)
+        return wlanOnAtReset();
+#endif
+
+    wlanDebugInit();
+    aucDebugModule[DBG_INIT_IDX] = DBG_CLASS_ERROR;
+    aucDebugModule[DBG_HAL_IDX]  = DBG_CLASS_ERROR;
+    aucDebugModule[DBG_NIC_IDX]  = DBG_CLASS_ERROR;
+    DBGLOG(INIT, ERROR, "wlanProbe: Starting throttled probe\n");
+
+#if CFG_SUPPORT_TRACE_TC4
+    wlanDebugTC4Init();
+#endif
 
 #ifdef CFG_CHIP_RESET_KO_SUPPORT
-	rstNotifyWholeChipRstStatus(RST_MODULE_WIFI, RST_MODULE_STATE_PROBE_DONE, NULL);
+    rstNotifyWholeChipRstStatus(RST_MODULE_WIFI,
+                                RST_MODULE_STATE_PROBE_START, NULL);
 #endif
 
-	return i4Status;
+    do {
+        /* 1. Bus init */
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> BUS_INIT\n");
+        i4Status = wlanProbe_BusInit(pvData);
+        if (i4Status) {
+            DBGLOG(INIT, ERROR, "wlanProbe: <<< BUS_INIT failed (%d)\n", i4Status);
+            eFailReason = BUS_INIT_FAIL;
+            break;
+        }
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< BUS_INIT ok\n");
+
+        /* 2. Allocate net device and glue. */
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> NET_CREATE\n");
+        prWdev = wlanNetCreate(pvData, pvDriverData);
+        if (!prWdev) {
+            DBGLOG(INIT, ERROR, "wlanProbe: <<< NET_CREATE failed - wlanNetCreate returned NULL\n");
+            i4Status = -ENOMEM;
+            eFailReason = NET_CREATE_FAIL;
+            break;
+        }
+        prGlueInfo = (struct GLUE_INFO *)wiphy_priv(prWdev->wiphy);
+        if (!prGlueInfo) {
+            DBGLOG(INIT, ERROR, "wlanProbe: <<< NET_CREATE failed - glue is NULL\n");
+            i4Status = -ENODEV;
+            eFailReason = NET_CREATE_FAIL;
+            break;
+        }
+        prAdapter = prGlueInfo->prAdapter;
+        if (!prAdapter) {
+            DBGLOG(INIT, ERROR, "wlanProbe: <<< NET_CREATE failed - adapter is NULL\n");
+            i4Status = -ENODEV;
+            eFailReason = NET_CREATE_FAIL;
+            break;
+        }
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< NET_CREATE ok\n");
+
+        gPrDev    = prGlueInfo->prDevHandler;
+        prWifiVar = &prAdapter->rWifiVar;
+
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> PRE_ADAPTER_START\n");
+        wlanOnPreAdapterStart(prGlueInfo, prAdapter, &prRegInfo, &prChipInfo);
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< PRE_ADAPTER_START ok\n");
+
+        /* 3. Cold-boot MCU, set IRQ, start adapter. */
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> ADAPTER_BRINGUP\n");
+        i4Status = wlanProbe_AdapterBringup(prGlueInfo, prAdapter,
+                                            prWdev, prRegInfo);
+        if (i4Status) {
+            DBGLOG(INIT, ERROR, "wlanProbe: <<< ADAPTER_BRINGUP failed (%d)\n", i4Status);
+            eFailReason = ADAPTER_START_FAIL;
+            break;
+        }
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< ADAPTER_BRINGUP ok\n");
+
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> POST_ADAPTER_START\n");
+        wlanOnPostAdapterStart(prAdapter, prGlueInfo);
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< POST_ADAPTER_START ok\n");
+
+        /* 4. Pre-registration setup. */
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> PRE_NET_REGISTER\n");
+        if (wlanOnPreNetRegister(prGlueInfo, prAdapter,
+                                 prChipInfo, prWifiVar, FALSE)) {
+            DBGLOG(INIT, ERROR, "wlanProbe: <<< PRE_NET_REGISTER failed\n");
+            i4Status = -EIO;
+            eFailReason = NET_REGISTER_FAIL;
+            break;
+        }
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< PRE_NET_REGISTER ok\n");
+
+        /* 5. Band configuration (no NVRAM, force manually). */
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> CONFIGURE_BANDS\n");
+        wlanProbe_ConfigureBands(prAdapter, prWdev);
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< CONFIGURE_BANDS ok\n");
+
+        /* 6. Miscellaneous pre-registration services. */
+#if CFG_MET_PACKET_TRACE_SUPPORT
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> MET_INIT\n");
+        kalMetInit(prGlueInfo);
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< MET_INIT ok\n");
+#endif
+#if CFG_ENABLE_BT_OVER_WIFI
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> BOW_INIT\n");
+        prGlueInfo->rBowInfo.fgIsNetRegistered = FALSE;
+        prGlueInfo->rBowInfo.fgIsRegistered    = FALSE;
+        glRegisterAmpc(prGlueInfo);
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< BOW_INIT ok\n");
+#endif
+#if (CONFIG_WLAN_SERVICE == 1)
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> SERVICE_INIT\n");
+        wlanServiceInit(prGlueInfo);
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< SERVICE_INIT ok\n");
+#endif
+
+        for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
+            struct FT_IES *prFtIEs = aisGetFtIe(prAdapter, u4Idx);
+            kalMemZero(prFtIEs, sizeof(*prFtIEs));
+        }
+
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> PROBE_SUCCESS_MARK\n");
+        wlanOnWhenProbeSuccess(prGlueInfo, prAdapter, FALSE);
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< PROBE_SUCCESS_MARK ok\n");
+
+#if CFG_SUPPORT_TPENHANCE_MODE
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> TPE_INIT\n");
+        wlanTpeInit(prGlueInfo);
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< TPE_INIT ok\n");
+#endif
+
+        /* 7. Register net device — userspace sees the interface here. */
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> NET_REGISTER\n");
+        i4DevIdx = wlanNetRegister(prWdev);
+        if (i4DevIdx < 0) {
+            DBGLOG(INIT, ERROR, "wlanProbe: <<< NET_REGISTER failed (idx=%d)\n", i4DevIdx);
+            i4Status = -ENXIO;
+            eFailReason = NET_REGISTER_FAIL;
+            break;
+        }
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< NET_REGISTER ok (idx=%d)\n", i4DevIdx);
+
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> POST_NET_REGISTER\n");
+        wlanOnPostNetRegister();
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< POST_NET_REGISTER ok\n");
+
+        /* 8. Post-registration: proc, sysfs, P2P. */
+        DBGLOG(INIT, ERROR, "wlanProbe: >>> POST_REGISTER_INIT\n");
+        i4Status = wlanProbe_PostRegisterInit(prGlueInfo, prAdapter, prWdev);
+        if (i4Status) {
+            DBGLOG(INIT, ERROR, "wlanProbe: <<< POST_REGISTER_INIT failed (%d)\n", i4Status);
+            eFailReason = PROC_INIT_FAIL;
+            break;
+        }
+        DBGLOG(INIT, ERROR, "wlanProbe: <<< POST_REGISTER_INIT ok\n");
+
+        DBGLOG(INIT, INFO,
+               "wlanProbe: success, feature set: 0x%llx\n",
+               wlanGetSupportedFeatureSet(prGlueInfo));
+
+    } while (FALSE);
+
+    if (i4Status != 0) {
+        DBGLOG(INIT, ERROR,
+               "wlanProbe: probe failed, reason:%d\n", eFailReason);
+        wlanProbe_Cleanup(eFailReason, prGlueInfo,
+                          prAdapter, prWdev, i4DevIdx);
+    }
+
+#ifdef CFG_CHIP_RESET_KO_SUPPORT
+    rstNotifyWholeChipRstStatus(RST_MODULE_WIFI,
+                                RST_MODULE_STATE_PROBE_DONE, NULL);
+#endif
+
+    return i4Status;
 }
 
 
@@ -6541,66 +6842,112 @@ wlanOffNotifyCfg80211Disconnect(IN struct GLUE_INFO *prGlueInfo)
 /*----------------------------------------------------------------------------*/
 static void wlanRemove(void)
 {
-	struct net_device *prDev = NULL;
-	struct GLUE_INFO *prGlueInfo = NULL;
-	struct ADAPTER *prAdapter = NULL;
+    struct net_device *prDev = NULL;
+    struct GLUE_INFO *prGlueInfo = NULL;
+    struct ADAPTER *prAdapter = NULL;
 
-	DBGLOG(INIT, INFO, "Remove wlan!\n");
+    DBGLOG(INIT, INFO, "Remove wlan!\n");
 
-	/* 1. Prevent Re-entry */
-	if (atomic_read(&g_wlanRemoving)) {
-		DBGLOG(INIT, ERROR, "wlanRemove already in progress\n");
-		return;
-	}
-	atomic_set(&g_wlanRemoving, 1);
+    if (atomic_read(&g_wlanRemoving)) {
+        DBGLOG(INIT, ERROR, "wlanRemove already in progress\n");
+        return;
+    }
+    atomic_set(&g_wlanRemoving, 1);
 
-	if (g_NvramFsm == NVRAM_STATE_SEND_TO_FW)
-		g_NvramFsm = NVRAM_STATE_READY;
+    if (g_NvramFsm == NVRAM_STATE_SEND_TO_FW)
+        g_NvramFsm = NVRAM_STATE_READY;
 
 #if CFG_CHIP_RESET_SUPPORT
-	if (fgSimplifyResetFlow) {
-		if (wlanOffAtReset() == WLAN_STATUS_SUCCESS) {
-			atomic_set(&g_wlanRemoving, 0);
-			return;
-		}
-	}
+    if (fgSimplifyResetFlow) {
+        if (wlanOffAtReset() == WLAN_STATUS_SUCCESS) {
+            atomic_set(&g_wlanRemoving, 0);
+            return;
+        }
+    }
 #endif
 
-	/* 2. Fast-track the Halted State */
-	kalSetHalted(TRUE);
-	
-	/* ⚡ INNOVATION: Atomic set of the halt flag. 
-	 * We no longer use down/up on g_halt_sem. This prevents wlanRemove 
-	 * from hanging if a background thread is stuck in an IOCTL. */
-	g_u4HaltFlag = 1;
-	smp_wmb(); /* Memory barrier to ensure all CPUs see the halt immediately */
+    /* 1. Signal halt to all paths immediately. */
+    kalSetHalted(TRUE);
+    g_u4HaltFlag = 1;
+    smp_wmb();
 
-	/* 3. Cleanup Net Devices */
-	if (u4WlanDevNum > 0 && u4WlanDevNum <= CFG_MAX_WLAN_DEVICES) {
-		prDev = arWlanDevInfo[u4WlanDevNum - 1].prDev;
-	}
+    if (u4WlanDevNum > 0 && u4WlanDevNum <= CFG_MAX_WLAN_DEVICES)
+        prDev = arWlanDevInfo[u4WlanDevNum - 1].prDev;
 
-	if (prDev == NULL) {
-		DBGLOG(INIT, ERROR, "prDev is NULL\n");
-		goto exit_removing;
-	}
+    if (!prDev) {
+        DBGLOG(INIT, ERROR, "prDev is NULL\n");
+        goto exit_removing;
+    }
 
-	prGlueInfo = *((struct GLUE_INFO **) netdev_priv(prDev));
-	if (prGlueInfo == NULL) {
-		wlanFreeNetDev();
-		goto exit_removing;
-	}
+    prGlueInfo = *((struct GLUE_INFO **)netdev_priv(prDev));
+    if (!prGlueInfo) {
+        wlanFreeNetDev();
+        goto exit_removing;
+    }
 
-	prAdapter = prGlueInfo->prAdapter;
-	prGlueInfo->u4ReadyFlag = 0;
-	/*Unregister and Destroy */
-	wlanNetUnregister(prDev->ieee80211_ptr);
-	wlanNetDestroy(prDev->ieee80211_ptr);
+    prAdapter = prGlueInfo->prAdapter;
+    prGlueInfo->u4ReadyFlag = 0;
 
-	wlanUnregisterInetAddrNotifier();
-	glTaskletUninit(prGlueInfo); // Add this back in
+    /*
+     * 2. Disable hardware interrupts before stopping threads.
+     * This prevents the IRQ handler from firing against state
+     * that is about to be torn down.
+     */
+    if (prAdapter)
+        nicDisableInterrupt(prAdapter);
+
+    /*
+     * 3. Set HALT and stop all kernel threads.
+     * Must happen before glBusFreeIrq — threads may be waiting on
+     * completions that need to be unblocked before we can proceed.
+     */
+    set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
+    wlanOffStopWlanThreads(prGlueInfo);
+
+    /*
+     * 4. Free the IRQ.
+     *
+     * This MUST happen before wlanNetUnregister/wlanNetDestroy.
+     * glBusFreeIrq takes the netdev as its first argument — if the
+     * netdev is destroyed first, the pointer passed here is dangling.
+     *
+     * free_irq() also calls synchronize_irq() internally (via our
+     * glBusFreeIrq wrapper) to wait for any in-flight handler to
+     * complete. After this returns, no more IRQ handlers will fire
+     * against module code.
+     */
+    glBusFreeIrq(prDev, prGlueInfo);
+
+    /*
+     * 5. Now safe to unregister and destroy the netdev — IRQ is gone,
+     * no more callbacks into driver code can occur.
+     */
+    wlanNetUnregister(prDev->ieee80211_ptr);
+    wlanNetDestroy(prDev->ieee80211_ptr);
+
+    wlanUnregisterInetAddrNotifier();
+    glTaskletUninit(prGlueInfo);
+
+#if CFG_MET_PACKET_TRACE_SUPPORT
+    kalMetRemoveProcfs();
+#endif
+
+
 exit_removing:
-	atomic_set(&g_wlanRemoving, 0);
+    atomic_set(&g_wlanRemoving, 0);
+}
+
+
+
+static void wlanGlobalReset(void)
+{
+    uint32_t i;
+
+    gPrDev = NULL;
+
+    for (i = 0; i < KAL_AIS_NUM; i++) {
+        gprWdev[i] = NULL;
+    }
 }
 
 
@@ -6618,7 +6965,11 @@ static int initWlan(void)
 {
 	int ret = 0;
 	struct GLUE_INFO *prGlueInfo = NULL;
-	
+	pr_info("initWlan entered\n");
+
+	/* 0. GLOBAL RESET: Prevent the driver from using stale pointers 
+       from a previous failed insmod attempt. */
+	wlanGlobalReset();
 
 #if (CFG_POWER_ON_DOWNLOAD_EMI_ROM_PATCH == 1)
 #if defined(SOC3_0)
@@ -6823,6 +7174,7 @@ static void exitWlan(void)
 
 	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
 		if (gprNetdev[u4Idx]) {
+				dev_close(gprWdev[u4Idx]->netdev);
 			wlanClearDevIdx(gprWdev[u4Idx]->netdev);
 			DBGLOG(INIT, INFO, "Unregister wlan%d netdev start.\n",
 					u4Idx);
@@ -6934,6 +7286,7 @@ static int wf_pdwnc_notify(struct notifier_block *nb,
 
 		for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
 			if (gprNetdev[u4Idx]) {
+				dev_close(gprWdev[u4Idx]->netdev);
 				wlanClearDevIdx(gprWdev[u4Idx]->netdev);
 				DBGLOG(INIT, INFO,
 					"Unregister wlan%d netdev start.\n",

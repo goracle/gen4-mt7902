@@ -2672,7 +2672,6 @@ struct BSS_DESC *scanAddToBssDesc(IN struct ADAPTER *prAdapter, IN struct SW_RFB
                        (uint8_t *)prSwRfb->pvHeader,
                        (uint32_t)prSwRfb->u2PacketLen,
                        prBssDesc->ucChannelNum,
-                       prBssDesc->eBand,
                        RCPI_TO_dBm(prBssDesc->ucRCPI));
 
     return prBssDesc;
@@ -2930,7 +2929,6 @@ uint32_t scanAddScanResult(IN struct ADAPTER *prAdapter,
 			   prBssDesc->u2RawLength,
 			   prBssDesc->ucChannelNum,
 #if (CFG_SUPPORT_WIFI_6G == 1)
-			   prBssDesc->eBand,
 #endif
 			   RCPI_TO_dBm(prBssDesc->ucRCPI));
 	}
@@ -4352,6 +4350,7 @@ void scanParseHEOpIE(IN uint8_t *pucIE, IN struct BSS_DESC *prBssDesc,
 }
 
 
+#endif /* CFG_SUPPORT_WIFI_6G */
 void scanUpdateEssResult(struct ADAPTER *prAdapter)
 {
 	struct SCAN_INFO *prScanInfo;
@@ -4400,4 +4399,3 @@ void scanUpdateEssResult(struct ADAPTER *prAdapter)
 	prAdapter->rWlanInfo.u4ScanResultNum = u4Count;
 }
 
-#endif

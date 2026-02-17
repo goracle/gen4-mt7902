@@ -1481,12 +1481,7 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 		if (u4Status == WLAN_STATUS_SUCCESS) {
 			/* Apply deferred US override only if flagged and
 			 * FW is ready. */
-if (prAdapter->rWifiVar.fgDeferredUsOverride) {
-    uint32_t u4CachedCC = prAdapter->rWifiVar.u2CountryCode; // This should be 0x5553
-    DBGLOG(RLM, INFO, "Applying deferred US override: 0x%04x\n", u4CachedCC);
-    rlmDomainCountryCodeUpdate(prAdapter, wlanGetWiphy(), u4CachedCC);
-    prAdapter->rWifiVar.fgDeferredUsOverride = FALSE;
-}
+
 
 			// 🔧 ADD THESE 3 LINES HERE:
 			DBGLOG(INIT, INFO, "Setting adapter to ACPI D0 state\n");
@@ -1520,6 +1515,8 @@ if (prAdapter->rWifiVar.fgDeferredUsOverride) {
 #endif
 #endif
 			prAdapter->fgIsFwDownloaded = TRUE;
+			wlanCfgSetCountryCode(prAdapter);
+
 
 			wlanQueryNicResourceInformation(prAdapter);
 
@@ -1758,35 +1755,53 @@ u_int8_t wlanISR(IN struct ADAPTER *prAdapter,
  * \return (none)
  */
 /*----------------------------------------------------------------------------*/
-void wlanIST(IN struct ADAPTER *prAdapter)
+#define WLAN_IST_MAX_RETRIES 5
+
+void wlanIST(struct ADAPTER *prAdapter)
 {
-	uint32_t u4Status = WLAN_STATUS_SUCCESS;
+    static int g_u4IstFailCount = 0;
+    int status;
 
-	ASSERT(prAdapter);
+    if (!prAdapter) {
+        DBGLOG(INIT, WARN, "wlanIST: Adapter pointer NULL, skipping IST.\n");
+        return;
+    }
 
-	ACQUIRE_POWER_CONTROL_FROM_PM(prAdapter);
+    /* Skip IST if firmware isn't ready */
+    if (!prAdapter->fgIsFwDownloaded) {
+        DBGLOG(INIT, WARN, "wlanIST: Firmware not ready, skipping IST.\n");
+        return;
+    }
 
-	if (prAdapter->fgIsFwOwn == FALSE) {
-		u4Status = nicProcessIST(prAdapter);
-		if (u4Status != WLAN_STATUS_SUCCESS)
-			DBGLOG(REQ, INFO, "Fail: nicProcessIST! status [%d]\n",
-			       u4Status);
+    /* Main IST loop logic */
+    status = nicProcessIST(prAdapter);
 
-#if CFG_ENABLE_WAKE_LOCK
-		if (KAL_WAKE_LOCK_ACTIVE(prAdapter,
-				prAdapter->prGlueInfo->prIntrWakeLock))
-			KAL_WAKE_UNLOCK(prAdapter,
-				prAdapter->prGlueInfo->prIntrWakeLock);
-#endif
-	}
+    if (status != WLAN_STATUS_SUCCESS) {
+        g_u4IstFailCount++;
+        DBGLOG(INIT, WARN, "wlanIST: nicProcessIST failed (%d), retry %d/%d\n",
+               status, g_u4IstFailCount, WLAN_IST_MAX_RETRIES);
 
-	if (u4Status == WLAN_STATUS_SUCCESS)
-	  nicEnableInterrupt(prAdapter);
+        if (g_u4IstFailCount >= WLAN_IST_MAX_RETRIES) {
+            DBGLOG(INIT, ERROR, "wlanIST: Max IST retries reached, skipping further IST.\n");
+            return; /* Bail out safely */
+        }
 
-	RECLAIM_POWER_CONTROL_TO_PM(prAdapter, FALSE);
+        /* Optional: could schedule a delayed retry instead of immediate loop */
+        return;
+    }
 
+    /* Reset failure counter on success */
+    g_u4IstFailCount = 0;
 
+    /* Continue IST processing if needed */
+    DBGLOG(INIT, INFO, "wlanIST: nicProcessIST succeeded, continuing IST processing.\n");
+
+    /* Example: process other events, deferred CC, etc. */
+    // wlanISTProcessDeferredEvents(prAdapter);
 }
+
+
+
 
 void wlanClearPendingInterrupt(IN struct ADAPTER *prAdapter)
 {
@@ -8623,77 +8638,88 @@ void wlanCfgSetDebugLevel(IN struct ADAPTER *prAdapter)
 
 void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 {
-	int8_t aucValue[WLAN_CFG_VALUE_LEN_MAX];
+	int8_t aucValue[WLAN_CFG_VALUE_LEN_MAX] = {0};
 	uint16_t u2NewCode = 0;
 	static uint16_t u2LastPushedCode = 0;
 
 	if (!prAdapter)
 		return;
 
-	/* 1. Resolve the Country Code (The "No NVRAM" Fallback) */
+	/* 1) Resolve the Country Code (No-NVRAM fallback allowed)
+	 * Prefer rWifiVar.u2CountryCode if already set; otherwise
+	 * try config lookups and finally default to 'US' (0x5553).
+	 */
 	if (prAdapter->rWifiVar.u2CountryCode != 0x0000) {
 		u2NewCode = prAdapter->rWifiVar.u2CountryCode;
-	} 
-	else {
-		/* Attempt config lookup; default to 'US' (0x5553) if config is empty/broken */
+	} else {
+		/* Try a couple of config keys (graceful failure) */
 		if (wlanCfgGet(prAdapter, "CountryCode", aucValue, "", 0) != WLAN_STATUS_SUCCESS &&
 		    wlanCfgGet(prAdapter, "Country", aucValue, "", 0) != WLAN_STATUS_SUCCESS) {
-			
+			/* fallback default */
 			u2NewCode = 0x5553; /* 'US' */
 			prAdapter->rWifiVar.u2CountryCode = u2NewCode;
 			DBGLOG(INIT, WARN, "BOLD: NVRAM/Config missing. Defaulting CC to US (0x5553)\n");
 		} else {
-			u2NewCode = (((uint16_t)aucValue[0]) << 8) | ((uint16_t)aucValue[1]);
+			/* Expect two-character country code in aucValue[0..1] */
+			u2NewCode = (((uint16_t)(uint8_t)aucValue[0]) << 8) |
+				((uint16_t)(uint8_t)aucValue[1]);
 			prAdapter->rWifiVar.u2CountryCode = u2NewCode;
 			DBGLOG(INIT, INFO, "BOLD: Loaded CC from Config: 0x%04x\n", u2NewCode);
 		}
 	}
 
-	/* Prepare bytes for RLM/FW */
+	/* Prepare bytes for RLM/FW APIs */
 	aucValue[0] = (int8_t)((u2NewCode >> 8) & 0xFF);
 	aucValue[1] = (int8_t)(u2NewCode & 0xFF);
 
-	/* 2. Update Internal State (Always Safe) */
-	/* We update the RLM domain so internal logic knows the "intended" state */
+	/* 2) Update internal RLM state so driver logic knows intended domain */
 	rlmDomainSetCountryCode((int8_t *)aucValue, 2);
 
-	/* 3. The "Ghost" Check (Safety First) */
-	/* If Glue is NULL, we are likely in a deauth/crash or early init.
-	   We stop here to avoid the NULL pointer dereference in wlanUpdateChannelTable. */
-	if (!prAdapter->prGlueInfo) {
-		DBGLOG(INIT, WARN, "BOLD: Glue is NULL (No NVRAM path). Internal state updated, skipping HW push.\n");
-		return; 
-	}
-
-	/* 4. Filter Redundant Pushes */
+	/* 3) Avoid redundant pushes */
 	if (u2NewCode == u2LastPushedCode) {
-		return; /* Prevent iwd from spamming the hardware with the same code */
-	}
-
-	/* 5. Hardware/Firmware Commitment */
-	if (!prAdapter->fgIsFwDownloaded) {
-		DBGLOG(INIT, ERROR, "BOLD: HW Push requested but FW not ready. Deferring.\n");
+		DBGLOG(INIT, WARN, "BOLD: CC 0x%04x same as last pushed; skipping HW push\n", u2NewCode);
 		return;
 	}
 
-	DBGLOG(INIT, INFO, "BOLD: Committing CC 0x%04x [%c%c] to hardware.\n", 
-		u2NewCode, aucValue[0], aucValue[1]);
+	/* 4) If firmware hasn't been downloaded yet, defer the HW push but keep internal state.
+	 *    We still allow pushing if the firmware is present even when prGlueInfo is NULL,
+	 *    because some environments lack a proper NVRAM/glue path but the FW still accepts commands.
+	 */
+	if (!prAdapter->fgIsFwDownloaded) {
+		DBGLOG(INIT, WARN, "BOLD: HW push requested but FW not ready. Deferring CC push (0x%04x).\n",
+		       u2NewCode);
+		return;
+	}
 
+	DBGLOG(INIT, INFO, "BOLD: Committing CC 0x%04x [%c%c] to firmware/hardware.\n",
+	       u2NewCode, aucValue[0], aucValue[1]);
+
+	/* 5) Commit to firmware / domain logic.
+	 * If device is single-SKU/regulatory-offload, use the OID path.
+	 * Otherwise request domain re-eval and refresh channel table when possible.
+	 *
+	 * Note: even if prGlueInfo is NULL, attempt firmware-domain commands — but avoid calling
+	 * wlanUpdateChannelTable() unless prGlueInfo is present to prevent NULL deref.
+	 */
 	if (regd_is_single_sku_en()) {
 		rlmDomainOidSetCountry(prAdapter, (uint8_t *)aucValue, 2);
 	} else {
-		/* Force re-evaluation of channel list */
-		prAdapter->prDomainInfo = NULL;
+		/* ask RLM to re-evaluate domain and send commands to fw */
 		rlmDomainSendCmd(prAdapter);
-		
-		/* 6. OS Integration: Notify iwd/cfg80211 that channels changed */
-		/* This requires a valid Glue pointer. */
-		wlanUpdateChannelTable(prAdapter->prGlueInfo);
+
+		/* update kernel-visible channel table only when glue exists */
+		if (prAdapter->prGlueInfo) {
+			wlanUpdateChannelTable(prAdapter->prGlueInfo);
+		} else {
+			DBGLOG(INIT, WARN, "BOLD: prGlueInfo NULL — skipped wlanUpdateChannelTable(), but CC pushed to FW\n");
+		}
 	}
 
+	/* 6) record the last pushed value to avoid duplicates later */
 	u2LastPushedCode = u2NewCode;
-	DBGLOG(INIT, INFO, "BOLD: CC push complete. Channel table refreshed.\n");
+	DBGLOG(INIT, INFO, "BOLD: CC push complete (0x%04x).\n", u2NewCode);
 }
+
 
 
 

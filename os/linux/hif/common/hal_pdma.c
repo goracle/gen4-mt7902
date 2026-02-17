@@ -3434,41 +3434,51 @@ void halDeAggRxPktWorker(struct work_struct *work)
 
 void halRxTasklet(unsigned long data)
 {
-	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *)data;
+    struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *)data;
 
-	if (!HAL_IS_RX_DIRECT(prGlueInfo->prAdapter)) {
-		DBGLOG(INIT, ERROR,
-		       "Valid in RX-direct mode only\n");
-		return;
-	}
+    /*
+     * Guard against tasklet firing during probe failure or before
+     * prAdapter is assigned. Both pointers must be valid before we
+     * touch any hardware state.
+     *
+     * This can happen legitimately on the first probe attempt if the
+     * IRQ fires before wlanProbe completes or after it fails, because
+     * the tasklet was initialized with the glue address but the adapter
+     * may not be fully set up yet.
+     */
+    if (!prGlueInfo || !prGlueInfo->prAdapter) {
+        DBGLOG(INIT, WARN,
+               "halRxTasklet: fired with NULL glue or adapter, "
+               "discarding (probe in progress or failed)\n");
+        return;
+    }
 
-	/* the Wi-Fi interrupt is already disabled in mmc
-	 * thread, so we set the flag only to enable the
-	 * interrupt later
-	 */
-	prGlueInfo->prAdapter->fgIsIntEnable = FALSE;
-	if (prGlueInfo->ulFlag & GLUE_FLAG_HALT
-		|| kalIsResetting()
-		) {
+    if (!HAL_IS_RX_DIRECT(prGlueInfo->prAdapter)) {
+        DBGLOG(INIT, ERROR, "Valid in RX-direct mode only\n");
+        return;
+    }
 
+    prGlueInfo->prAdapter->fgIsIntEnable = FALSE;
 
-static bool has_fired = false; // Persistent across calls
-if (!has_fired) {
-    dump_stack();
+    if (prGlueInfo->ulFlag & GLUE_FLAG_HALT || kalIsResetting()) {
+        /*
+         * Driver is halting. The hardware interrupt source needs to be
+         * silenced here, otherwise the hardware keeps asserting the IRQ
+         * line and we get an interrupt storm: IRQ fires -> tasklet runs
+         * -> sees HALT -> returns without ACKing hardware -> IRQ fires
+         * again immediately.
+         *
+         * nicDisableInterrupt masks the hardware side. The IRQ line
+         * itself will be freed when the driver tears down.
+         */
+        nicDisableInterrupt(prGlueInfo->prAdapter);
+        DBGLOG(INIT, INFO, "halRxTasklet: HALT set, interrupts disabled\n");
+    } else {
+        prGlueInfo->TaskIsrCnt++;
+        wlanIST(prGlueInfo->prAdapter);
+    }
 }
 
-		/* Should stop now... skip pending interrupt */
-if (!has_fired) {
-		DBGLOG(INIT, INFO,
-		       "ignore pending interrupt\n");
- }
-    has_fired = true;
-	} else {
-		/* DBGLOG(INIT, INFO, ("HIF Interrupt!\n")); */
-		prGlueInfo->TaskIsrCnt++;
-		wlanIST(prGlueInfo->prAdapter);
-	}
-}
 
 void halTxCompleteTasklet(unsigned long data)
 {
