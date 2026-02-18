@@ -237,6 +237,8 @@ enum FAIL_SCENARIO {
 };
 
 #if (CFG_SUPPORT_CONNAC3X == 1)
+#ifndef _WFDMA_GROUP_INFO_DEFINED_
+#define _WFDMA_GROUP_INFO_DEFINED_
 struct wfdma_group_info {
 	char name[20];
 	u_int32_t hw_desc_base;
@@ -247,11 +249,15 @@ struct wfdma_group_info {
 	uint32_t didx;
 };
 
+#endif
+#ifndef _PSE_GROUP_INFO_DEFINED_
+#define _PSE_GROUP_INFO_DEFINED_
 struct pse_group_info {
 	char name[20];
 	u_int32_t quota_addr;
 	u_int32_t pg_info_addr;
 };
+#endif
 
 struct CODA_CR_INFO {
 	uint32_t u4Addr;

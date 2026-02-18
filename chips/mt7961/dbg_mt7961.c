@@ -113,11 +113,14 @@
  *                             D A T A   T Y P E S
  *******************************************************************************
  */
+#ifndef _PSE_GROUP_INFO_DEFINED_
+#define _PSE_GROUP_INFO_DEFINED_
 struct pse_group_info {
 	char name[8];
 	u_int32_t quota_addr;
 	u_int32_t pg_info_addr;
 };
+#endif
 
 #if (CFG_SUPPORT_DEBUG_SOP == 1)
 struct MT7961_DEBUG_SOP_INFO {

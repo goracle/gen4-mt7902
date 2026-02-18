@@ -209,12 +209,16 @@
 
 #define RTMP_IO_READ32(_A, _R, _pV) \
 { \
-	(*(_pV) = readl((void *)((_A)->CSRBaseAddress + (_R)))); \
+	if (likely((_A)->CSRBaseAddress)) \
+		(*(_pV) = readl((void *)((_A)->CSRBaseAddress + (_R)))); \
+	else \
+		*(_pV) = 0xDEADFEED; \
 }
 
 #define RTMP_IO_WRITE32(_A, _R, _V) \
 { \
-	writel(_V, (void *)((_A)->CSRBaseAddress + (_R))); \
+	if (likely((_A)->CSRBaseAddress)) \
+		writel(_V, (void *)((_A)->CSRBaseAddress + (_R))); \
 }
 
 /*******************************************************************************
@@ -249,6 +253,14 @@ enum ENUM_RX_RING_IDX {
 	RX_RING_TXDONE2_IDX_6,
 	RX_RING_WAEVT0_IDX_5,
 	RX_RING_WAEVT1_IDX_6,
+#endif
+#if (CFG_SUPPORT_CONNAC3X == 1)
+/* Aliases for cmm_asic_connac2x.c compatibility */
+#define WFDMA0_RX_RING_IDX_2  RX_RING_TXDONE0_IDX_3
+#define WFDMA0_RX_RING_IDX_3  RX_RING_TXDONE1_IDX_4
+#define WFDMA1_RX_RING_IDX_0  RX_RING_DATA1_IDX_2
+#define WFDMA1_RX_RING_IDX_1  RX_RING_WAEVT0_IDX_5
+#define WFDMA1_RX_RING_IDX_2  RX_RING_WAEVT1_IDX_6
 #endif
 	RX_RING_MAX,
 };

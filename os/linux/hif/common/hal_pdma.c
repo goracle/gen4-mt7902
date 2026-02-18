@@ -1675,12 +1675,7 @@ void halRxReceiveRFBs(IN struct ADAPTER *prAdapter, uint32_t u4Port,
 
 		prSwRfb->ucPacketType =
 			prRxDescOps->nic_rxd_get_pkt_type(prRxStatus);
-#if DBG
-		DBGLOG_LIMITED(RX, LOUD, "ucPacketType = %u, ucSecMode = %u\n",
-				  prSwRfb->ucPacketType,
-				  prRxDescOps->nic_rxd_get_sec_mode(
-					prRxStatus));
-#endif /* DBG */
+		DBGLOG(RX, WARN, "[PDMA-RX] port=%u pkt_type=%u\n", u4Port, prSwRfb->ucPacketType);
 
 		if (prSwRfb->ucPacketType == RX_PKT_TYPE_MSDU_REPORT) {
 			nicRxProcessMsduReport(prAdapter, prSwRfb);

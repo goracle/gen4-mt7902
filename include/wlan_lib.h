@@ -1876,6 +1876,7 @@ void wlanCfgSetChip(IN struct ADAPTER *prAdapter);
 
 void wlanCfgSetDebugLevel(IN struct ADAPTER *prAdapter);
 
+void wlanCfgResetLastPushedCC(void);
 void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter);
 
 struct WLAN_CFG_ENTRY *wlanCfgGetEntry(IN struct ADAPTER *prAdapter,

@@ -1598,7 +1598,8 @@ aisConfigureScanSsid(IN struct ADAPTER *prAdapter,
 		     struct AIS_FSM_INFO *prAisFsmInfo,
 		     struct CONNECTION_SETTINGS *prConnSettings,
 		     struct PARAM_SCAN_REQUEST_ADV *prScanRequest,
-		     struct MSG_SCN_SCAN_REQ_V2 *prScanReqMsg)
+		     struct MSG_SCN_SCAN_REQ_V2 *prScanReqMsg,
+		     struct BSS_INFO *prAisBssInfo)
 {
 #if CFG_SUPPORT_RDD_TEST_MODE
 	prScanReqMsg->eScanType = SCAN_TYPE_PASSIVE_SCAN;
@@ -1633,9 +1634,16 @@ aisConfigureScanSsid(IN struct ADAPTER *prAdapter,
 		kalMemCopy(prScanReqMsg->aucExtBssid,
 			   prScanRequest->aucBssid,
 			   CFG_SCAN_OOB_MAX_NUM * MAC_ADDR_LEN);
-		kalMemCopy(prScanReqMsg->aucRandomMac,
+		/* MT7902-FIX: Use OwnMac if no random MAC specified (e.g. iwd without RANDOM_ADDR flag).
+		 * FW uses aucRandomMac verbatim in probe requests - zero = broken scans. */
+		if (!is_zero_ether_addr(prScanRequest->aucRandomMac))
+			kalMemCopy(prScanReqMsg->aucRandomMac,
 			   prScanRequest->aucRandomMac,
 			   MAC_ADDR_LEN);
+		else
+			kalMemCopy(prScanReqMsg->aucRandomMac,
+				   prAisBssInfo->aucOwnMacAddr,
+				   MAC_ADDR_LEN);
 		prScanReqMsg->ucScnFuncMask |= prScanRequest->ucScnFuncMask;
 
 	} else {
@@ -1769,7 +1777,8 @@ aisHandleState_SCAN_FAMILY(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	/* Configure SSID / scan type */
 	aisConfigureScanSsid(prAdapter, ucBssIndex,
 			     prAisFsmInfo, prConnSettings,
-			     prScanRequest, prScanReqMsg);
+			     prScanRequest, prScanReqMsg,
+			     prAisBssInfo);
 
 	/* Default timing values */
 	prScanReqMsg->u2ProbeDelay          = 0;

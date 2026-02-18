@@ -638,6 +638,7 @@ struct CONNAC2X_WIFI_UNI_CMD {
 };
 #endif
 
+#if (CFG_SUPPORT_CONNAC3X == 0)
 union WTBL_LMAC_DW0 {
 	struct {
 		uint32_t addr_4:8;
@@ -1241,6 +1242,7 @@ struct fwtbl_umac_struct {
 };
 
 #if defined(_HIF_SDIO)
+#endif /* CFG_SUPPORT_CONNAC3X == 0 */
 struct SDIO_HIF_TX_HEADER {
 	uint16_t     InfoBufLen;
 	uint8_t      Type;

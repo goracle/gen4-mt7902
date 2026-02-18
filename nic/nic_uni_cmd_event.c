@@ -2872,6 +2872,8 @@ void nicRxProcessUniEventPacket(IN struct ADAPTER *prAdapter,
 
 	if (IS_UNI_UNSOLICIT_EVENT(prEvent)) {
 		if (arUniEventTable[GET_UNI_EVENT_ID(prEvent)])
+		else
+			DBGLOG(RX, WARN, "[UNI-DROP] Unhandled uni event ID=0x%02x\n", GET_UNI_EVENT_ID(prEvent));
 			arUniEventTable[GET_UNI_EVENT_ID(prEvent)](
 				prAdapter, prEvent);
 	} else {
@@ -3201,6 +3203,14 @@ void nicUniEventScanDone(struct ADAPTER *ad, struct WIFI_UNI_EVENT *evt)
 		}
 	}
 
+	for (i = 0; i < SCAN_DONE_EVENT_MAX_CHANNEL_NUM; i++) {
+		if (legacy.aucChannelBAndPCnt[i] > 0)
+			DBGLOG(SCN, INFO, "[BNDP] ch=%u BAndP=%u MDRDY=%u
+",
+				legacy.aucChannelNum[i],
+				legacy.aucChannelBAndPCnt[i],
+				legacy.aucChannelMDRDYCnt[i]);
+	}
 	scnEventScanDone(ad, &legacy, TRUE);
 }
 

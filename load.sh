@@ -4,6 +4,8 @@
 
 set -e
 
+sudo iw reg set US
+
 MODULE_NAME="mt7902"
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 MODULE_PATH="$SCRIPT_DIR/${MODULE_NAME}.ko"
@@ -16,12 +18,14 @@ log() {
 log "🗑️  Removing old module..."
 sudo rmmod $MODULE_NAME 2>/dev/null || true
 
+sleep 2
+
 # 2. Verify hardware is visible on PCIe bus
-if ! lspci -d 14c3:7902 >/dev/null 2>&1; then
-    log "❌ ERROR: MT7902 not found on PCIe bus 👻"
-    log "⚡ Need full power cycle (hold power button 40s)"
-    exit 1
-fi
+#if ! lspci -d 14c3:7902 >/dev/null 2>&1; then
+#    log "❌ ERROR: MT7902 not found on PCIe bus 👻"
+#    log "⚡ Need full power cycle (hold power button 40s)"
+#    exit 1
+#fi
 
 # 3. Clear dmesg and load module
 log "🚀 Loading module from $MODULE_PATH..."

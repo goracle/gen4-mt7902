@@ -762,7 +762,7 @@
 #define MAX_6G_BAND_CHN_NUM		59
 #define MAX_PER_BAND_CHN_NUM		25
 #else
-#define MAX_CHN_NUM			39
+#define MAX_CHN_NUM			128
 #define MAX_2G_BAND_CHN_NUM		14
 #define MAX_5G_BAND_CHN_NUM		(MAX_CHN_NUM - MAX_2G_BAND_CHN_NUM)
 #define MAX_6G_BAND_CHN_NUM		0
@@ -887,7 +887,7 @@
  *------------------------------------------------------------------------------
  */
 #ifndef CFG_P2P_SCAN_REPORT_ALL_BSS
-#define CFG_P2P_SCAN_REPORT_ALL_BSS            0
+#define CFG_P2P_SCAN_REPORT_ALL_BSS            1
 #endif
 
 /* Allow connection with no P2P IE device */

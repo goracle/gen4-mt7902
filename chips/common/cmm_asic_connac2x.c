@@ -2142,6 +2142,7 @@ void asicConnac2xRxPerfIndProcessRXV(IN struct ADAPTER *prAdapter,
 #endif
 
 #if (CFG_CHIP_RESET_SUPPORT == 1) && (CFG_WMT_RESET_API_SUPPORT == 0)
+#if (CFG_SUPPORT_CONNAC3X == 0)
 u_int8_t conn2_rst_L0_notify_step2(void)
 {
 	if (glGetRstReason() == RST_BT_TRIGGER) {
@@ -2171,6 +2172,7 @@ u_int8_t conn2_rst_L0_notify_step2(void)
 
 	return TRUE;
 }
+#endif /* CFG_SUPPORT_CONNAC3X == 0 */
 #endif
 
 #endif /* CFG_SUPPORT_CONNAC2X == 1 */

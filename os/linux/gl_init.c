@@ -161,13 +161,21 @@ struct WLANDEV_INFO {
  */
 
 static const struct ieee80211_regdomain mt79xx_regdom_us = {
-	.n_reg_rules = 1,
-	.alpha2 = "US",
-	.reg_rules = {
-        REG_RULE(2402, 7125, 320, 0, 3000, 0),
+    .n_reg_rules = 3,
+    .alpha2 = "US",
+    .reg_rules = {
 
-	},
+        /* 2.4 GHz */
+        REG_RULE(2402, 2472, 40, 0, 3000, 0),
+
+        /* 5 GHz UNII-1 + UNII-3 */
+        REG_RULE(5170, 5250, 80, 0, 2300, 0),
+        REG_RULE(5735, 5850, 80, 0, 3000, 0),
+    },
 };
+
+
+
 
 MODULE_AUTHOR(NIC_AUTHOR);
 MODULE_DESCRIPTION(NIC_DESC);
@@ -2463,13 +2471,26 @@ static int wlanStop(struct net_device *prDev)
 void wlanUpdateChannelTable(struct GLUE_INFO *prGlueInfo)
 {
 	uint8_t i, j;
-	uint8_t ucNumOfChannel;
+	uint8_t ucNumOfChannel = 0;
 	uint32_t u4BandIdx;
+	struct RF_CHANNEL_INFO *pucChannelList = NULL;
 
-	struct RF_CHANNEL_INFO aucChannelList[MAX_PER_BAND_CHN_NUM];
+	if (!prGlueInfo || !prGlueInfo->prAdapter)
+		return;
 
-	kalMemZero(aucChannelList,
-		sizeof(struct RF_CHANNEL_INFO) * MAX_PER_BAND_CHN_NUM);
+	/* Allocate channel buffer dynamically to avoid large stack frame */
+	pucChannelList = kalMemAlloc(
+		sizeof(struct RF_CHANNEL_INFO) * MAX_PER_BAND_CHN_NUM,
+		VIR_MEM_TYPE);
+
+	if (!pucChannelList) {
+		DBGLOG(INIT, ERROR,
+		       "Failed to allocate channel list buffer\n");
+		return;
+	}
+
+	kalMemZero(pucChannelList,
+		   sizeof(struct RF_CHANNEL_INFO) * MAX_PER_BAND_CHN_NUM);
 
 	/* 1. Disable all channels */
 	for (i = 0; i < ARRAY_SIZE(mtk_2ghz_channels); i++) {
@@ -2490,42 +2511,59 @@ void wlanUpdateChannelTable(struct GLUE_INFO *prGlueInfo)
 #endif
 
 	for (u4BandIdx = BAND_2G4; u4BandIdx < BAND_NUM; u4BandIdx++) {
+
+		/* Clear buffer before each band query */
+		kalMemZero(pucChannelList,
+			   sizeof(struct RF_CHANNEL_INFO) *
+			   MAX_PER_BAND_CHN_NUM);
+
 		/* 2. Get current domain channel list */
 		rlmDomainGetChnlList(prGlueInfo->prAdapter,
-				     u4BandIdx, FALSE,
+				     u4BandIdx,
+				     FALSE,
 				     MAX_PER_BAND_CHN_NUM,
-				     &ucNumOfChannel, aucChannelList);
+				     &ucNumOfChannel,
+				     pucChannelList);
 
-		/* 3. Enable specific channel based on domain channel list */
+		/* 3. Enable channels returned by regulatory domain */
 		for (i = 0; i < ucNumOfChannel; i++) {
-			switch (aucChannelList[i].eBand) {
+
+			switch (pucChannelList[i].eBand) {
+
 			case BAND_2G4:
-				for (j = 0; j <
-					ARRAY_SIZE(mtk_2ghz_channels); j++) {
+				for (j = 0;
+				     j < ARRAY_SIZE(mtk_2ghz_channels);
+				     j++) {
+
 					if (mtk_2ghz_channels[j].hw_value ==
-					    aucChannelList[i].ucChannelNum) {
+					    pucChannelList[i].ucChannelNum) {
+
 						mtk_2ghz_channels[j].flags &=
-						~IEEE80211_CHAN_DISABLED;
-						mtk_2ghz_channels[j].orig_flags
-						&= ~IEEE80211_CHAN_DISABLED;
+							~IEEE80211_CHAN_DISABLED;
+						mtk_2ghz_channels[j].orig_flags &=
+							~IEEE80211_CHAN_DISABLED;
 						break;
 					}
 				}
 				break;
 
 			case BAND_5G:
-				for (j = 0; j <
-					ARRAY_SIZE(mtk_5ghz_channels); j++) {
+				for (j = 0;
+				     j < ARRAY_SIZE(mtk_5ghz_channels);
+				     j++) {
+
 					if (mtk_5ghz_channels[j].hw_value ==
-					    aucChannelList[i].ucChannelNum) {
+					    pucChannelList[i].ucChannelNum) {
+
 						mtk_5ghz_channels[j].flags &=
-						~IEEE80211_CHAN_DISABLED;
-						mtk_5ghz_channels[j].orig_flags
-						&= ~IEEE80211_CHAN_DISABLED;
+							~IEEE80211_CHAN_DISABLED;
+						mtk_5ghz_channels[j].orig_flags &=
+							~IEEE80211_CHAN_DISABLED;
+
 						mtk_5ghz_channels[j].dfs_state =
-						(aucChannelList[i].eDFS != 0) ?
-							NL80211_DFS_USABLE :
-							NL80211_DFS_UNAVAILABLE;
+							(pucChannelList[i].eDFS != 0) ?
+								NL80211_DFS_USABLE :
+								NL80211_DFS_UNAVAILABLE;
 						break;
 					}
 				}
@@ -2533,18 +2571,22 @@ void wlanUpdateChannelTable(struct GLUE_INFO *prGlueInfo)
 
 #if (CFG_SUPPORT_WIFI_6G == 1)
 			case BAND_6G:
-				for (j = 0; j <
-					ARRAY_SIZE(mtk_6ghz_channels); j++) {
+				for (j = 0;
+				     j < ARRAY_SIZE(mtk_6ghz_channels);
+				     j++) {
+
 					if (mtk_6ghz_channels[j].hw_value ==
-					aucChannelList[i].ucChannelNum) {
+					    pucChannelList[i].ucChannelNum) {
+
 						mtk_6ghz_channels[j].flags &=
-						~IEEE80211_CHAN_DISABLED;
-						mtk_6ghz_channels[j].orig_flags
-						&= ~IEEE80211_CHAN_DISABLED;
+							~IEEE80211_CHAN_DISABLED;
+						mtk_6ghz_channels[j].orig_flags &=
+							~IEEE80211_CHAN_DISABLED;
+
 						mtk_6ghz_channels[j].dfs_state =
-						(aucChannelList[i].eDFS != 0) ?
-							NL80211_DFS_USABLE :
-							NL80211_DFS_UNAVAILABLE;
+							(pucChannelList[i].eDFS != 0) ?
+								NL80211_DFS_USABLE :
+								NL80211_DFS_UNAVAILABLE;
 						break;
 					}
 				}
@@ -2552,13 +2594,20 @@ void wlanUpdateChannelTable(struct GLUE_INFO *prGlueInfo)
 #endif
 
 			default:
-				DBGLOG(INIT, WARN, "Unknown band %d\n",
-				       aucChannelList[i].eBand);
+				DBGLOG(INIT, WARN,
+				       "Unknown band %d\n",
+				       pucChannelList[i].eBand);
 				break;
 			}
 		}
 	}
+
+	kalMemFree(pucChannelList,
+		   VIR_MEM_TYPE,
+		   sizeof(struct RF_CHANNEL_INFO) *
+		   MAX_PER_BAND_CHN_NUM);
 }
+
 
 #if CFG_SUPPORT_SAP_DFS_CHANNEL
 static u_int8_t wlanIsAdjacentChnl(struct GL_P2P_INFO *prGlueP2pInfo,
@@ -2975,6 +3024,11 @@ static void wlanCreateWirelessDevice(void)
 		goto free_wdev;
 	}
 
+	//mt7902
+	prWiphy->available_antennas_tx = 0x1;
+	prWiphy->available_antennas_rx = 0x1;
+
+
 	/* 3) Retrieve private glue info and set parent device if available */
 	prGlueInfo = (struct GLUE_INFO *)wiphy_priv(prWiphy);
 	if (prGlueInfo && prGlueInfo->prDev)
@@ -3040,6 +3094,7 @@ static void wlanCreateWirelessDevice(void)
 
 	//prWiphy->regulatory_flags |= REGULATORY_IGNORE_STALE_KICKOFF;
 	prWiphy->regulatory_flags |= REGULATORY_CUSTOM_REG;
+	//prWiphy->regulatory_flags = REGULATORY_DISABLE_BEACON_HINTS;
 
 	prWiphy->features |= NL80211_FEATURE_SAE;
 	prWiphy->features |= NL80211_FEATURE_SCAN_RANDOM_MAC_ADDR;
@@ -3078,8 +3133,14 @@ static void wlanCreateWirelessDevice(void)
 
 	/* 10) Conservative regulatory flags: declare driver-managed reg domain but avoid STRICT by default */
 	prWiphy->regulatory_flags = REGULATORY_CUSTOM_REG | REGULATORY_DISABLE_BEACON_HINTS;
+	//prWiphy->regulatory_flags = REGULATORY_DISABLE_BEACON_HINTS;
+
 	/* If you have/declare a custom regdomain object, you may apply it here via wiphy_apply_custom_regulatory().
 	 * NOTE: do not attempt to write into non-existent wiphy fields (eg reg_alpha2) — use helpers. */
+
+	wiphy_apply_custom_regulatory(prWiphy, &regdom_us);
+	//regulatory_hint(prWiphy, "US");
+
 
 	/* 11) Register the wiphy with cfg80211 */
 	if (wiphy_register(prWiphy) < 0) {
@@ -6539,6 +6600,11 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
     aucDebugModule[DBG_HAL_IDX]  = DBG_CLASS_ERROR;
     aucDebugModule[DBG_NIC_IDX]  = DBG_CLASS_ERROR;
     DBGLOG(INIT, ERROR, "wlanProbe: Starting throttled probe\n");
+	/* MT7902-FIX: Clear stale reset flag from previous session.
+	 * fgIsResetting is a global that persists across rmmod/insmod.
+	 * A previous SER/crash/rmmod leaves it TRUE, poisoning
+	 * kalIsResetting() on the next load. */
+	fgIsResetting = FALSE;
 
 #if CFG_SUPPORT_TRACE_TC4
     wlanDebugTC4Init();
@@ -6681,6 +6747,9 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
             break;
         }
         DBGLOG(INIT, ERROR, "wlanProbe: <<< POST_REGISTER_INIT ok\n");
+        /* Push CC to kernel regdom now that wiphy/gprWdev are live */
+        wlanCfgResetLastPushedCC();
+        wlanCfgSetCountryCode(prAdapter);
 
         DBGLOG(INIT, INFO,
                "wlanProbe: success, feature set: 0x%llx\n",

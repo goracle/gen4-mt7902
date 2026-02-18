@@ -8636,11 +8636,14 @@ void wlanCfgSetDebugLevel(IN struct ADAPTER *prAdapter)
 	}
 }
 
+static uint16_t u2LastPushedCode = 0;
+
+void wlanCfgResetLastPushedCC(void) { u2LastPushedCode = 0; }
+
 void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 {
 	int8_t aucValue[WLAN_CFG_VALUE_LEN_MAX] = {0};
 	uint16_t u2NewCode = 0;
-	static uint16_t u2LastPushedCode = 0;
 
 	if (!prAdapter)
 		return;
@@ -8710,8 +8713,12 @@ void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 		/* update kernel-visible channel table only when glue exists */
 		if (prAdapter->prGlueInfo) {
 			wlanUpdateChannelTable(prAdapter->prGlueInfo);
+		} else if (gprWdev[0] && gprWdev[0]->wiphy) {
+			regulatory_hint(gprWdev[0]->wiphy, (const char *)aucValue);
+			DBGLOG(INIT, INFO, "BOLD: prGlueInfo NULL — used regulatory_hint(%c%c) via gprWdev[0]\n",
+				aucValue[0], aucValue[1]);
 		} else {
-			DBGLOG(INIT, WARN, "BOLD: prGlueInfo NULL — skipped wlanUpdateChannelTable(), but CC pushed to FW\n");
+			DBGLOG(INIT, WARN, "BOLD: prGlueInfo AND wiphy NULL — CC stuck at 00\n");
 		}
 	}
 

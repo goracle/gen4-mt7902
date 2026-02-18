@@ -6716,74 +6716,102 @@ uint8_t p2pFunGetAcsBestCh(IN struct ADAPTER *prAdapter,
 		IN uint32_t u4LteSafeChnMask_5G_1,
 		IN uint32_t u4LteSafeChnMask_5G_2)
 {
-	struct RF_CHANNEL_INFO aucChannelList[MAX_PER_BAND_CHN_NUM];
-	uint8_t ucNumOfChannel;
+	struct RF_CHANNEL_INFO *pucChannelList = NULL;
+	uint8_t ucNumOfChannel = 0;
 	struct PARAM_GET_CHN_INFO *prGetChnLoad;
 	uint8_t i;
 	struct PARAM_PREFER_CHN_INFO rPreferChannel;
 
-	/* reset */
+	if (!prAdapter)
+		return 0;
+
+	/* Allocate channel list dynamically */
+	pucChannelList = kalMemAlloc(
+		sizeof(struct RF_CHANNEL_INFO) * MAX_PER_BAND_CHN_NUM,
+		VIR_MEM_TYPE);
+
+	if (!pucChannelList) {
+		DBGLOG(P2P, ERROR,
+		       "ACS: channel list alloc failed\n");
+		return 0;
+	}
+
+	/* reset preferred channel */
 	rPreferChannel.ucChannel = 0;
 	rPreferChannel.u4Dirtiness = 0xFFFFFFFF;
 
-	kalMemZero(aucChannelList,
-			sizeof(struct RF_CHANNEL_INFO) * MAX_PER_BAND_CHN_NUM);
+	kalMemZero(pucChannelList,
+		   sizeof(struct RF_CHANNEL_INFO) *
+		   MAX_PER_BAND_CHN_NUM);
 
-	rlmDomainGetChnlList(prAdapter, eBand, TRUE, MAX_PER_BAND_CHN_NUM,
-			&ucNumOfChannel, aucChannelList);
+	rlmDomainGetChnlList(prAdapter,
+			     eBand,
+			     TRUE,
+			     MAX_PER_BAND_CHN_NUM,
+			     &ucNumOfChannel,
+			     pucChannelList);
 
-	/*
-	 * 2. Calculate each channel's dirty score
-	 */
 	prGetChnLoad = &(prAdapter->rWifiVar.rChnLoadInfo);
 
-	DBGLOG(P2P, INFO, "acs chnl mask=[0x%08x][0x%08x][0x%08x]\n",
-			u4LteSafeChnMask_2G,
-			u4LteSafeChnMask_5G_1,
-			u4LteSafeChnMask_5G_2);
+	DBGLOG(P2P, INFO,
+	       "acs chnl mask=[0x%08x][0x%08x][0x%08x]\n",
+	       u4LteSafeChnMask_2G,
+	       u4LteSafeChnMask_5G_1,
+	       u4LteSafeChnMask_5G_2);
 
 	for (i = 0; i < ucNumOfChannel; i++) {
 		uint8_t ucIdx;
+		uint8_t ucCh = pucChannelList[i].ucChannelNum;
 
-		ucIdx = wlanGetChannelIndex(aucChannelList[i].eBand,
-				aucChannelList[i].ucChannelNum);
+		ucIdx = wlanGetChannelIndex(
+			pucChannelList[i].eBand,
+			ucCh);
+
 		if (ucIdx >= MAX_PER_BAND_CHN_NUM)
 			continue;
 
-		DBGLOG(P2P, TRACE, "idx: %u, ch: %u, d: %d\n",
-				ucIdx,
-				aucChannelList[i].ucChannelNum,
-				prGetChnLoad->rEachChnLoad[ucIdx].u4Dirtiness);
+		DBGLOG(P2P, TRACE,
+		       "idx: %u, ch: %u, d: %u\n",
+		       ucIdx,
+		       ucCh,
+		       prGetChnLoad->rEachChnLoad[ucIdx].u4Dirtiness);
 
-		if (aucChannelList[i].ucChannelNum <= 14) {
-			if (!(u4LteSafeChnMask_2G & BIT(
-					aucChannelList[i].ucChannelNum)))
+		/* LTE safe channel filtering */
+		if (ucCh <= 14) {
+			if (!(u4LteSafeChnMask_2G & BIT(ucCh)))
 				continue;
-		} else if ((aucChannelList[i].ucChannelNum >= 36) &&
-				(aucChannelList[i].ucChannelNum <= 144)) {
-			if (!(u4LteSafeChnMask_5G_1 & BIT(
-				(aucChannelList[i].ucChannelNum - 36) / 4)))
+		} else if (ucCh >= 36 && ucCh <= 144) {
+			if (!(u4LteSafeChnMask_5G_1 &
+			      BIT((ucCh - 36) / 4)))
 				continue;
-		} else if ((aucChannelList[i].ucChannelNum >= 149) &&
-				(aucChannelList[i].ucChannelNum <= 181)) {
-			if (!(u4LteSafeChnMask_5G_2 & BIT(
-				(aucChannelList[i].ucChannelNum - 149) / 4)))
+		} else if (ucCh >= 149 && ucCh <= 181) {
+			if (!(u4LteSafeChnMask_5G_2 &
+			      BIT((ucCh - 149) / 4)))
 				continue;
 		}
 
-		if (eBand == BAND_5G && eChnlBw >= MAX_BW_80MHZ &&
-				nicGetVhtS1(aucChannelList[i].ucChannelNum,
-					VHT_OP_CHANNEL_WIDTH_80) == 0)
+		/* 80MHz capability check */
+		if (eBand == BAND_5G &&
+		    eChnlBw >= MAX_BW_80MHZ &&
+		    nicGetVhtS1(ucCh,
+			       VHT_OP_CHANNEL_WIDTH_80) == 0)
 			continue;
 
 		if (rPreferChannel.u4Dirtiness >
-				prGetChnLoad->rEachChnLoad[ucIdx].u4Dirtiness) {
+		    prGetChnLoad->rEachChnLoad[ucIdx].u4Dirtiness) {
+
 			rPreferChannel.ucChannel =
 				prGetChnLoad->rEachChnLoad[ucIdx].ucChannel;
+
 			rPreferChannel.u4Dirtiness =
 				prGetChnLoad->rEachChnLoad[ucIdx].u4Dirtiness;
 		}
 	}
+
+	kalMemFree(pucChannelList,
+		   VIR_MEM_TYPE,
+		   sizeof(struct RF_CHANNEL_INFO) *
+		   MAX_PER_BAND_CHN_NUM);
 
 	return rPreferChannel.ucChannel;
 }

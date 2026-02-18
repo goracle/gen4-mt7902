@@ -158,6 +158,8 @@ void mt7902EnableInterrupt(
 	IntMask.field_conn2x_single.wfdma0_rx_done_1 = 1;
 	IntMask.field_conn2x_single.wfdma0_rx_done_2 = 1;
 	IntMask.field_conn2x_single.wfdma0_rx_done_3 = 1;
+	IntMask.field_conn2x_single.wfdma0_rx_done_4 = 1;
+	IntMask.field_conn2x_single.wfdma0_rx_done_5 = 1;
 	IntMask.field_conn2x_single.wfdma0_tx_done_0 = 1;
 	IntMask.field_conn2x_single.wfdma0_tx_done_16 = 1;
 	/* MT7902 CMD TX ring is 15, but its interrupt idx is 17 */
@@ -252,13 +254,13 @@ uint8_t mt7902SetRxRingHwAddr(
 	case WFDMA0_RX_RING_IDX_2:   /* Sw Ring 3 -> HW Ring 3 */
 		val = 3;
 		break;
-	case 4:                      /* Sw Ring 4 -> HW Ring 4 (Data 1) */
+	case RX_RING_DATA1_IDX_2:                      /* Sw Ring 4 -> HW Ring 4 (Data 1) */
 		val = 4;
 		break;
-	case 5:                      /* Sw Ring 5 -> HW Ring 5 (WFDMA0 4) */
+	case RX_RING_DATA2_IDX_5:                      /* Sw Ring 5 -> HW Ring 5 (WFDMA0 4) */
 		val = 5;
 		break;
-	case 6:                      /* Sw Ring 6 -> HW Ring 6 (WFDMA0 5) */
+	case RX_RING_TXDONE2_IDX_6:                      /* Sw Ring 6 -> HW Ring 6 (WFDMA0 5) */
 		val = 6;
 		break;
 	default:
@@ -376,6 +378,10 @@ void mt7902Connac2xProcessRxInterrupt(
 
 	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_1)
 		halRxReceiveRFBs(prAdapter, WFDMA0_RX_RING_IDX_3, TRUE);
+	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_4)
+		halRxReceiveRFBs(prAdapter, RX_RING_DATA1_IDX_2, TRUE);
+	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_5)
+		halRxReceiveRFBs(prAdapter, RX_RING_DATA2_IDX_5, TRUE);
 }
 
 void mt7902WfdmaTxRingExtCtrl(
@@ -750,10 +756,10 @@ uint16_t mt7902Connac2xUsbRxByteCount(
 	uint16_t u2RxByteCount;
 	uint8_t ucPacketType;
 
-	ucPacketType = HAL_MAC_CONNAC2X_RX_STATUS_GET_PKT_TYPE(
-		(struct HW_MAC_CONNAC2X_RX_DESC *)pRXD);
-	u2RxByteCount = HAL_MAC_CONNAC2X_RX_STATUS_GET_RX_BYTE_CNT(
-		(struct HW_MAC_CONNAC2X_RX_DESC *)pRXD);
+	ucPacketType = HAL_MAC_CONNAC3X_RX_STATUS_GET_PKT_TYPE(
+		(struct HW_MAC_CONNAC3X_RX_DESC *)pRXD);
+	u2RxByteCount = HAL_MAC_CONNAC3X_RX_STATUS_GET_RX_BYTE_CNT(
+		(struct HW_MAC_CONNAC3X_RX_DESC *)pRXD);
 
 	/* According to Barry's rule, it can be summarized as below formula:
 	 * 1. packets from WFDMA
@@ -769,7 +775,8 @@ uint16_t mt7902Connac2xUsbRxByteCount(
 	 * Need fix this function to meet the mt7902 usage.
 	 */
 
-	u2RxByteCount = ALIGN_8(u2RxByteCount) + LEN_USB_RX_PADDING_CSO;
+	u2RxByteCount = ALIGN_16(u2RxByteCount) + 12;
+	DBGLOG(RX, INFO, "[mt7902 rxbc] pkt_type=%u bytecount=%u\n", ucPacketType, u2RxByteCount);
 
 	return u2RxByteCount;
 }
@@ -1537,7 +1544,22 @@ struct TX_DESC_OPS_T mt7902TxDescOps = {
 	.fillTxByteCount = fillConnac2xTxDescTxByteCount,
 };
 
-struct RX_DESC_OPS_T mt7902RxDescOps = {};
+struct RX_DESC_OPS_T mt7902RxDescOps = {
+	.nic_rxd_get_rx_byte_count = nic_rxd_v3_get_rx_byte_count,
+	.nic_rxd_get_pkt_type = nic_rxd_v3_get_packet_type,
+	.nic_rxd_get_wlan_idx = nic_rxd_v3_get_wlan_idx,
+	.nic_rxd_get_sec_mode = nic_rxd_v3_get_sec_mode,
+	.nic_rxd_get_sw_class_error_bit = nic_rxd_v3_get_sw_class_error_bit,
+	.nic_rxd_get_ch_num = nic_rxd_v3_get_ch_num,
+	.nic_rxd_get_rf_band = nic_rxd_v3_get_rf_band,
+	.nic_rxd_get_tcl = nic_rxd_v3_get_tcl,
+	.nic_rxd_get_ofld = nic_rxd_v3_get_ofld,
+	.nic_rxd_get_HdrTrans = nic_rxd_v3_get_HdrTrans,
+	.nic_rxd_fill_rfb = nic_rxd_v3_fill_rfb,
+	.nic_rxd_sanity_check = nic_rxd_v3_sanity_check,
+	.nic_rxd_check_wakeup_reason = nic_rxd_v3_check_wakeup_reason,
+	.nic_rxd_handle_host_rpt = nic_rxd_v3_handle_host_rpt,
+};
 
 struct CHIP_DBG_OPS mt7902DebugOps = {
 	.showPdmaInfo = mt7902_show_wfdma_info,
@@ -1594,10 +1616,10 @@ u_int8_t mt7902_check_mmio_alive(struct ADAPTER *prAdapter)
     uint32_t u4Val = 0;
     
     /* Using the Connectivity Config Chip ID register for the heartbeat check */
-    HAL_MCR_RD(prAdapter, CONN_CFG_CHIP_ID_ADDR, &u4Val);
+    HAL_MCR_RD(prAdapter, MT7902_SW_SYNC0, &u4Val);
     
     /* If the bus is hanging or disconnected, we get all 1s or all 0s */
-    if (u4Val == 0xFFFFFFFF || u4Val == 0x00000000)
+    if (u4Val == 0xFFFFFFFF)
         return FALSE;
         
     return TRUE;

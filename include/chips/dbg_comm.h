@@ -11,10 +11,14 @@
 #ifndef _DBG_COMMON_H_
 #define _DBG_COMMON_H_
 
+#ifndef _WFDMA_GROUP_INFO_DEFINED_
+#define _WFDMA_GROUP_INFO_DEFINED_
 struct wfdma_group_info {
 	char name[20];
 	u_int32_t hw_desc_base;
 };
+#endif
+
 
 #if (CFG_SUPPORT_CONNAC3X == 0)
 enum _ENUM_WFDMA_TYPE_T {

@@ -1002,6 +1002,10 @@ struct mtk_regd_control {
 	u8 n_channel_active_6g;
 #endif
 	struct CMD_DOMAIN_CHANNEL channels[MAX_SUPPORTED_CH_COUNT];
+	/* wiphy max_power cache from TxPwrLimit table */
+	uint8_t wiphy_pwr_ch[MAX_SUPPORTED_CH_COUNT];
+	int8_t wiphy_pwr_dbm[MAX_SUPPORTED_CH_COUNT];
+	uint32_t wiphy_pwr_count;
 	enum nl80211_dfs_regions dfs_region;
 };
 

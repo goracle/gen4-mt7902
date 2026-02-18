@@ -100,6 +100,20 @@
 
 #define DRV_NAME "["CHIP_NAME"]: "
 
+
+#ifndef ENUM_PKT_802_11_MGMT
+#define ENUM_PKT_802_11_MGMT ENUM_PKT_802_11
+#endif
+
+#ifndef GLUE_SET_PKT_COOKIE
+#define GLUE_SET_PKT_COOKIE(skb, cookie) do {} while (0)
+#endif
+
+
+
+
+
+
 /* Define if target platform is Android.
  * It should already be defined in Android kernel source
  */

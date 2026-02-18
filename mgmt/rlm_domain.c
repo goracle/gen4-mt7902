@@ -998,9 +998,10 @@ struct DOMAIN_INFO_ENTRY *rlmDomainGetDomainInfo(struct ADAPTER *prAdapter)
 
 	ASSERT(prAdapter);
 
-	if (prAdapter->prDomainInfo)
+	if (prAdapter->prDomainInfo) {
+		DBGLOG(RLM, INFO, "DOMAIN_CACHE HIT: CC=0x%04x\n", prAdapter->rWifiVar.u2CountryCode);
 		return prAdapter->prDomainInfo;
-
+	}
 	prRegInfo = &prAdapter->prGlueInfo->rRegInfo;
 
 	DBGLOG(RLM, TRACE, "eRegChannelListMap=%d, u2CountryCode=0x%04x\n",
@@ -1051,8 +1052,9 @@ struct DOMAIN_INFO_ENTRY *rlmDomainGetDomainInfo(struct ADAPTER *prAdapter)
 		if (i >= REG_DOMAIN_GROUP_NUM) {
 			DBGLOG(RLM, INFO,
 			       "No matched country code, use the default regulatory domain\n");
-			prDomainInfo = &arSupportedRegDomains
-							[REG_DOMAIN_DEF_IDX];
+				prDomainInfo = &arSupportedRegDomains
+								[REG_DOMAIN_DEF_IDX];
+				DBGLOG(RLM, ERROR, "DOMAIN_FALLBACK: CC=0x%04x fell to default domain!\n", u2TargetCountryCode);
 		}
 	}
 
@@ -2232,12 +2234,6 @@ u_int8_t rlmDomainCountryCodeUpdateSanity(
 	return TRUE;
 }
 
-void rlmDomainSetCountry(struct ADAPTER *prAdapter)
-{
-    DBGLOG(RLM, TRACE, "rlmDomainSetCountry: NOP (DE-FANGED override active)\n");
-    /* Your US override already handles country code */
-}
-
 
 
 
@@ -2264,6 +2260,8 @@ void rlmDomainCountryCodeUpdate(struct ADAPTER *prAdapter,
     if (!prAdapter->fgIsFwDownloaded || !prAdapter->prGlueInfo) {
         DBGLOG(RLM, INFO, "DE-FANGED: Caching CC 0x%04x - FW/Glue not ready.\n", u4ForcedCC);
         prAdapter->rWifiVar.u2CountryCode = (uint16_t)u4ForcedCC;
+        g_mtk_regd_control.cached_alpha2 = u4ForcedCC;
+        g_mtk_regd_control.pending_regdom_update = TRUE;
         return;
     }
 
@@ -2280,6 +2278,12 @@ void rlmDomainCountryCodeUpdate(struct ADAPTER *prAdapter,
     DBGLOG(RLM, INFO, "DE-FANGED: FW command sent successfully.\n");
 }
 
+
+void rlmDomainSetCountry(struct ADAPTER *prAdapter)
+{
+    DBGLOG(RLM, TRACE, "rlmDomainSetCountry: NOP (DE-FANGED override active)\n");
+    /* Your US override already handles country code */
+}
 
 
 
@@ -2328,7 +2332,6 @@ uint8_t rlmDomainTxPwrLimitGetTableVersion(
 
 void rlmDomainReplayPendingRegdom(struct ADAPTER *prAdapter)
 {
-	struct GLUE_INFO *prGlueInfo;
 	struct wiphy *pWiphy;
 	
 	if (!prAdapter) {
@@ -2336,11 +2339,7 @@ void rlmDomainReplayPendingRegdom(struct ADAPTER *prAdapter)
 		return;
 	}
 	
-	prGlueInfo = prAdapter->prGlueInfo;
-	if (!prGlueInfo) {
-		DBGLOG(RLM, ERROR, "Cannot replay: glue is NULL\n");
-		return;
-	}
+	/* prGlueInfo may be NULL in no-NVRAM setups; wiphy is fetched independently */
 	
 	pWiphy = wlanGetWiphy();
 	if (!pWiphy) {
@@ -5323,11 +5322,7 @@ void rlmDomainSendPwrLimitCmd_V2(struct ADAPTER *prAdapter)
 {
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
 
-  /* --- THE INNOVATIVE BYPASS --- */
-    DBGLOG(RLM, INFO, "MT7902-FIX: Skipping RLM Power Table Flood (No 6G FW/NVRAM)\n");
-    g_mtk_regd_control.txpwr_limit_loaded = TRUE; // Pretend we finished
-    return; 
-    /* ----------------------------- */
+  /* 6G skipped below via CFG_SUPPORT_SINGLE_SKU_6G guard */
 
 	uint8_t ucVersion = 0;
 	uint32_t u4CountryCode;
@@ -5416,6 +5411,20 @@ void rlmDomainSendPwrLimitCmd_V2(struct ADAPTER *prAdapter)
 		       ucVersion);
 	} else {
 		DBGLOG(RLM, WARN, "Failed to load 2.4G/5G power limits\n");
+	}
+
+	/* Populate wiphy power cache from loaded table */
+	if (pTxPwrLimitData && pTxPwrLimitData->ucChNum > 0) {
+		uint32_t i;
+		g_mtk_regd_control.wiphy_pwr_count = 0;
+		for (i = 0; i < pTxPwrLimitData->ucChNum && i < MAX_SUPPORTED_CH_COUNT; i++) {
+			g_mtk_regd_control.wiphy_pwr_ch[i] =
+				pTxPwrLimitData->rChannelTxPwrLimit[i].ucChannel;
+			/* cPwrLimit20 is in 0.5dBm units, convert to dBm */
+			g_mtk_regd_control.wiphy_pwr_dbm[i] =
+				pTxPwrLimitData->rChannelTxPwrLimit[i].rTxPwrLimitValue[1][0] / 2;
+			g_mtk_regd_control.wiphy_pwr_count++;
+		}
 	}
 
 cleanup_2g5g:

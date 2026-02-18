@@ -749,6 +749,7 @@ struct HW_MAC_RX_STS_GROUP_3 {
 };
 #endif /* #if (CFG_SUPPORT_CONNAC3X == 0) */
 
+#if (CFG_SUPPORT_CONNAC3X == 0)
 #if (CFG_SUPPORT_CONNAC2X == 1)
 struct HW_MAC_RX_STS_GROUP_3_V2 {
 	/*  PRXVector Info */
@@ -776,6 +777,7 @@ struct HW_MAC_RX_STS_HARRIER_E1_GROUP_5 {
 #define CONNAC2X_RSSI_MASK	BITS(0, 31)
 #define CONNAC2X_SEL_ANT	BITS(28, 30)
 #endif /* CFG_SUPPORT_CONNAC2X == 1 */
+#endif /* CFG_SUPPORT_CONNAC3X == 0 */
 
 struct HW_MAC_RX_TMRI_PKT_FORMAT {
 	uint8_t ucPID;

@@ -1424,6 +1424,11 @@ int mtk_cfg80211_scan(struct wiphy *wiphy,
 	}
 	pm_ref_held = 1;
 #endif
+   DBGLOG(REQ, ERROR, "SCAN guard: resetting=%d drvReady=%d\n",
+       kalIsResetting(),
+       wlanIsDriverReady(prGlueInfo, WLAN_DRV_READY_CHCECK_WLAN_ON));
+
+
 
 	if (prGlueInfo->prAdapter->chip_info->checkMmioAlive &&
 	    !prGlueInfo->prAdapter->chip_info->checkMmioAlive(prGlueInfo->prAdapter)) {

@@ -78,6 +78,8 @@
 #endif
 #if (CFG_SUPPORT_SNIFFER_RADIOTAP == 1)
 #include "radiotap.h"
+//static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb);
+
 #endif
 
 /*******************************************************************************
@@ -98,6 +100,8 @@
  *                           P R I V A T E   D A T A
  *******************************************************************************
  */
+
+static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb);
 
 #if CFG_MGMT_FRAME_HANDLING
 static PROCESS_RX_MGT_FUNCTION
@@ -289,6 +293,67 @@ static const struct ACTION_FRAME_SIZE_MAP arActionFrameReservedLen[] = {
  * @return (none)
  */
 /*----------------------------------------------------------------------------*/
+
+static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb)
+{
+    struct GLUE_INFO *glue;
+    struct net_device *ndev;
+    struct wireless_dev *wdev;
+    struct sk_buff *skb;
+    int len, freq = 2412;
+
+    if (!prAdapter || !prSwRfb)
+        return -EINVAL;
+
+    glue = prAdapter->prGlueInfo;
+    ndev = glue->prDevHandler;
+
+    rcu_read_lock();
+    wdev = ndev->ieee80211_ptr;
+    if (!wdev) {
+        rcu_read_unlock();
+        return -ENODEV;
+    }
+
+    len = prSwRfb->u2PacketLen;
+    skb = dev_alloc_skb(len);
+    if (!skb) {
+        rcu_read_unlock();
+        return -ENOMEM;
+    }
+
+    /* Copy raw 802.11 frame */
+    memcpy(skb_put(skb, len), prSwRfb->pvHeader, len);
+
+    /* Frequency Mapping Logic */
+    if (prSwRfb->ucChnlNum <= 14)
+        freq = 2407 + (prSwRfb->ucChnlNum * 5);
+    else if (prSwRfb->ucChnlNum >= 36 && prSwRfb->ucChnlNum <= 177)
+        freq = 5000 + (prSwRfb->ucChnlNum * 5);
+    else if (prSwRfb->ucChnlNum >= 1 && prSwRfb->ucChnlNum <= 233) // 6GHz
+        freq = 5940 + (prSwRfb->ucChnlNum * 5);
+
+    /* --- START IWD DEBUG INSTRUMENTATION --- */
+    DBGLOG(RX, INFO, "IWD_RELAY: Ch:%u Freq:%d Len:%d\n", prSwRfb->ucChnlNum, freq, len);
+    if (len >= 24) {
+        /* Header Check: FC, SA (byte 10), BSSID (byte 16) */
+        DBGLOG(RX, INFO, "IWD_RELAY: FC:%02x%02x SA:%pM BSSID:%pM\n",
+               skb->data[0], skb->data[1], skb->data + 10, skb->data + 16);
+        
+        /* Dump first 32 bytes to check for unexpected vendor headers */
+        dumpMemory8(skb->data, (len > 32 ? 32 : len));
+    }
+    /* --- END IWD DEBUG INSTRUMENTATION --- */
+
+    cfg80211_rx_mgmt(wdev, freq, 0, skb->data, skb->len, GFP_ATOMIC);
+
+    dev_kfree_skb_any(skb);
+    rcu_read_unlock();
+
+    return 0;
+}
+
+
 void nicRxInitialize(IN struct ADAPTER *prAdapter)
 {
 	struct RX_CTRL *prRxCtrl;
@@ -3109,8 +3174,7 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
 /*----------------------------------------------------------------------------*/
 void nicRxProcessMgmtPacket(IN struct ADAPTER *prAdapter,
                             IN OUT struct SW_RFB *prSwRfb)
-{
-    struct GLUE_INFO *prGlueInfo;
+{struct GLUE_INFO *prGlueInfo;
     uint8_t ucSubtype;
     uint16_t u2TxFrameCtrl;
 #if CFG_SUPPORT_802_11W
@@ -3122,6 +3186,7 @@ void nicRxProcessMgmtPacket(IN struct ADAPTER *prAdapter,
 
     /* Fill RFB first — required for later processing & safe cleanup. */
     nicRxFillRFB(prAdapter, prSwRfb);
+    __relay_mgmt_to_cfg80211(prAdapter, prSwRfb);
 
     /* Extract management subtype from the 802.11 header */
     ucSubtype = (*(uint8_t *)(prSwRfb->pvHeader) & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
@@ -3480,8 +3545,10 @@ void nicRxProcessPacketType(
 
 	prRxCtrl = &prAdapter->rRxCtrl;
 	prChipInfo = prAdapter->chip_info;
+	DBGLOG(RX, WARN, "[PKT-TYPE] ucPacketType=0x%02x\n", prSwRfb->ucPacketType);
 	switch (prSwRfb->ucPacketType) {
 	case RX_PKT_TYPE_RX_DATA:
+		DBGLOG(RX, WARN, "[RX-DATA] arrived\n");
 		if (HAL_IS_RX_DIRECT(prAdapter)) {
 			spin_lock_bh(&prGlueInfo->rSpinLock[
 				SPIN_LOCK_RX_DIRECT]);
@@ -3498,6 +3565,7 @@ void nicRxProcessPacketType(
 		break;
 
 	case RX_PKT_TYPE_SW_DEFINED:
+		DBGLOG(RX, WARN, "[SW-PKT] raw=0x%04x masked=0x%04x\n", NIC_RX_GET_U2_SW_PKT_TYPE(prSwRfb->prRxStatus), NIC_RX_GET_U2_SW_PKT_TYPE(prSwRfb->prRxStatus) & prChipInfo->u2RxSwPktBitMap);
 		/* HIF_RX_PKT_TYPE_EVENT */
 		if ((NIC_RX_GET_U2_SW_PKT_TYPE(
 			prSwRfb->prRxStatus) &
@@ -3532,6 +3600,7 @@ void nicRxProcessPacketType(
 				prSwRfb->fgHdrTran,
 				get_HdrTrans,
 				prSwRfb->prRxStatus);
+			DBGLOG(RX, WARN, "[PKT-ROUTE] ucOFLD=%u fgHdrTran=%u ucPacketType=%u\n", prSwRfb->ucOFLD, prSwRfb->fgHdrTran, prSwRfb->ucPacketType);
 			if ((prSwRfb->ucOFLD) || (prSwRfb->fgHdrTran)) {
 				if (HAL_IS_RX_DIRECT(prAdapter)) {
 					spin_lock_bh(&prGlueInfo->rSpinLock[

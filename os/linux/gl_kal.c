@@ -3633,7 +3633,7 @@ uint32_t kalIoctlByBssIdx(IN struct GLUE_INFO *prGlueInfo,
     }
     
     /* 2. Non-blocking lock attempt */
-    if (down_trylock(&prGlueInfo->ioctl_sem) != 0)
+    if (down_interruptible(&prGlueInfo->ioctl_sem) != 0)
         return WLAN_STATUS_ADAPTER_NOT_READY;
     
     /* 3. Prepare Request */
@@ -10219,11 +10219,12 @@ int8_t atoi(uint8_t ch)
 
 	return 0;
 }
+extern struct mtk_regd_control g_mtk_regd_control;
 
 #if (CFG_SUPPORT_SINGLE_SKU_LOCAL_DB == 1)
 void
 kalApplyCustomRegulatory(IN struct wiphy *pWiphy,
-			    IN const struct ieee80211_regdomain *pRegdom)
+	IN const struct ieee80211_regdomain *pRegdom)
 {
 	u32 band_idx, ch_idx;
 	struct ieee80211_supported_band *sband;
@@ -10248,32 +10249,30 @@ kalApplyCustomRegulatory(IN struct wiphy *pWiphy,
 
 	/* update to kernel */
 	wiphy_apply_custom_regulatory(pWiphy, pRegdom);
-}
-#endif
 
-const uint8_t *kalFindIeMatchMask(uint8_t eid,
-				const uint8_t *ies, int len,
-				const uint8_t *match,
-				int match_len, int match_offset,
-				const uint8_t *match_mask)
-{
-	/* match_offset can't be smaller than 2, unless match_len is
-	 * zero, in which case match_offset must be zero as well.
-	 */
-	if (WARN_ON((match_len && match_offset < 2) ||
-		(!match_len && match_offset)))
-		return NULL;
-	while (len >= 2 && len >= ies[1] + 2) {
-		if ((ies[0] == eid) &&
-			(ies[1] + 2 >= match_offset + match_len) &&
-			!kalMaskMemCmp(ies + match_offset,
-			match, match_mask, match_len))
-			return ies;
-		len -= ies[1] + 2;
-		ies += ies[1] + 2;
+	/* Apply wiphy max_power from TxPwrLimit table cache */
+	{
+		uint32_t b, c, p;
+		struct ieee80211_supported_band *sband;
+		struct ieee80211_channel *chan;
+		for (b = 0; b < KAL_NUM_BANDS; b++) {
+			sband = pWiphy->bands[b];
+			if (!sband) continue;
+			for (c = 0; c < sband->n_channels; c++) {
+				chan = &sband->channels[c];
+				for (p = 0; p < g_mtk_regd_control.wiphy_pwr_count; p++) {
+					if (ieee80211_frequency_to_channel(chan->center_freq) ==
+						g_mtk_regd_control.wiphy_pwr_ch[p]) {
+						if (g_mtk_regd_control.wiphy_pwr_dbm[p] > 0)
+							chan->max_power = g_mtk_regd_control.wiphy_pwr_dbm[p];
+						break;
+					}
+				}
+			}
+		}
 	}
-	return NULL;
 }
+#endif /* CFG_SUPPORT_SINGLE_SKU_LOCAL_DB */
 
 int _kalSnprintf(char *buf, size_t size, const char *fmt, ...)
 {
