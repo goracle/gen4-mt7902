@@ -138,7 +138,6 @@ static void mt7902CapInit(struct ADAPTER *prAdapter)
 	asicConnac2xCapInit(prAdapter);
 
 	prChipInfo = prAdapter->chip_info;
-	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 }
 
 
@@ -153,7 +152,6 @@ void mt7902EnableInterrupt(
 #endif
 
 	prChipInfo = prAdapter->chip_info;
-	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 
 	if (prChipInfo->is_support_wfdma1)
 		u4HostWpdamBase = CONNAC2X_HOST_WPDMA_1_BASE;
@@ -642,7 +640,6 @@ void mt7902ConstructFirmwarePrio(struct GLUE_INFO *prGlueInfo,
 	}
 
 	prChipInfo = prAdapter->chip_info;
-	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 	if (prChipInfo == NULL) {
 		DBGLOG(INIT, ERROR, "prChipInfo is NULL.\n");
 		return;
@@ -729,7 +726,6 @@ void mt7902ConstructPatchName(struct GLUE_INFO *prGlueInfo,
 	}
 
 	prChipInfo = prAdapter->chip_info;
-	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 	if (prChipInfo == NULL) {
 		DBGLOG(INIT, ERROR, "prChipInfo is NULL.\n");
 		return;
@@ -965,7 +961,6 @@ uint32_t mt7902CoDlPatchSendSemaCtl(IN struct ADAPTER *prAdapter,
 	}
 
 	prChipInfo = prAdapter->chip_info;
-	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 	if (prChipInfo == NULL) {
 		DBGLOG(INIT, ERROR, "prChipInfo is NULL\n");
 		return WLAN_STATUS_FAILURE;
@@ -1050,7 +1045,6 @@ uint32_t mt7902CoDlPatchRecvSemaResp(IN struct ADAPTER *prAdapter,
 
 	ASSERT(prAdapter);
 	prChipInfo = prAdapter->chip_info;
-	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 
 	if (kalIsCardRemoved(prAdapter->prGlueInfo) == TRUE
 	    || fgIsBusAccessFailed == TRUE)
@@ -1299,7 +1293,6 @@ void mt7902ConstructBtPatchName(struct GLUE_INFO *prGlueInfo,
 	}
 
 	prChipInfo = prAdapter->chip_info;
-	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 	if (prChipInfo == NULL) {
 		DBGLOG(INIT, ERROR, "prChipInfo is NULL.\n");
 		return;
@@ -1354,7 +1347,6 @@ void mt7902ConstructZbPatchName(struct GLUE_INFO *prGlueInfo,
 	}
 
 	prChipInfo = prAdapter->chip_info;
-	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 	if (prChipInfo == NULL) {
 		DBGLOG(INIT, ERROR, "prChipInfo is NULL.\n");
 		return;
@@ -1396,7 +1388,6 @@ uint32_t mt7902ConstructBufferBinFileName(struct ADAPTER *prAdapter,
 	}
 
 	prChipInfo = prAdapter->chip_info;
-	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 
 	if (prChipInfo == NULL) {
 		DBGLOG(INIT, ERROR, "prChipInfo == NULL\n");
@@ -1568,20 +1559,20 @@ struct TX_DESC_OPS_T mt7902TxDescOps = {
 };
 
 struct RX_DESC_OPS_T mt7902RxDescOps = {
-	.nic_rxd_get_rx_byte_count = nic_rxd_v3_get_rx_byte_count,
-	.nic_rxd_get_pkt_type = nic_rxd_v3_get_packet_type,
-	.nic_rxd_get_wlan_idx = nic_rxd_v3_get_wlan_idx,
-	.nic_rxd_get_sec_mode = nic_rxd_v3_get_sec_mode,
-	.nic_rxd_get_sw_class_error_bit = nic_rxd_v3_get_sw_class_error_bit,
-	.nic_rxd_get_ch_num = nic_rxd_v3_get_ch_num,
-	.nic_rxd_get_rf_band = nic_rxd_v3_get_rf_band,
-	.nic_rxd_get_tcl = nic_rxd_v3_get_tcl,
-	.nic_rxd_get_ofld = nic_rxd_v3_get_ofld,
-	.nic_rxd_get_HdrTrans = nic_rxd_v3_get_HdrTrans,
-	.nic_rxd_fill_rfb = nic_rxd_v3_fill_rfb,
-	.nic_rxd_sanity_check = nic_rxd_v3_sanity_check,
-	.nic_rxd_check_wakeup_reason = nic_rxd_v3_check_wakeup_reason,
-	.nic_rxd_handle_host_rpt = nic_rxd_v3_handle_host_rpt,
+	.nic_rxd_get_rx_byte_count = nic_rxd_v2_get_rx_byte_count,
+	.nic_rxd_get_pkt_type = nic_rxd_v2_get_packet_type,
+	.nic_rxd_get_wlan_idx = nic_rxd_v2_get_wlan_idx,
+	.nic_rxd_get_sec_mode = nic_rxd_v2_get_sec_mode,
+	.nic_rxd_get_sw_class_error_bit = nic_rxd_v2_get_sw_class_error_bit,
+	.nic_rxd_get_ch_num = nic_rxd_v2_get_ch_num,
+	.nic_rxd_get_rf_band = nic_rxd_v2_get_rf_band,
+	.nic_rxd_get_tcl = nic_rxd_v2_get_tcl,
+	.nic_rxd_get_ofld = nic_rxd_v2_get_ofld,
+	.nic_rxd_get_HdrTrans = nic_rxd_v2_get_HdrTrans,
+	.nic_rxd_fill_rfb = nic_rxd_v2_fill_rfb,
+	.nic_rxd_sanity_check = nic_rxd_v2_sanity_check,
+	.nic_rxd_check_wakeup_reason = nic_rxd_v2_check_wakeup_reason,
+	
 };
 
 struct CHIP_DBG_OPS mt7902DebugOps = {
