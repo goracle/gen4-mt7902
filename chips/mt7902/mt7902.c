@@ -153,6 +153,7 @@ void mt7902EnableInterrupt(
 #endif
 
 	prChipInfo = prAdapter->chip_info;
+	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 
 	if (prChipInfo->is_support_wfdma1)
 		u4HostWpdamBase = CONNAC2X_HOST_WPDMA_1_BASE;
@@ -641,6 +642,7 @@ void mt7902ConstructFirmwarePrio(struct GLUE_INFO *prGlueInfo,
 	}
 
 	prChipInfo = prAdapter->chip_info;
+	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 	if (prChipInfo == NULL) {
 		DBGLOG(INIT, ERROR, "prChipInfo is NULL.\n");
 		return;
@@ -727,6 +729,7 @@ void mt7902ConstructPatchName(struct GLUE_INFO *prGlueInfo,
 	}
 
 	prChipInfo = prAdapter->chip_info;
+	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 	if (prChipInfo == NULL) {
 		DBGLOG(INIT, ERROR, "prChipInfo is NULL.\n");
 		return;
@@ -962,6 +965,7 @@ uint32_t mt7902CoDlPatchSendSemaCtl(IN struct ADAPTER *prAdapter,
 	}
 
 	prChipInfo = prAdapter->chip_info;
+	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 	if (prChipInfo == NULL) {
 		DBGLOG(INIT, ERROR, "prChipInfo is NULL\n");
 		return WLAN_STATUS_FAILURE;
@@ -1046,6 +1050,7 @@ uint32_t mt7902CoDlPatchRecvSemaResp(IN struct ADAPTER *prAdapter,
 
 	ASSERT(prAdapter);
 	prChipInfo = prAdapter->chip_info;
+	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 
 	if (kalIsCardRemoved(prAdapter->prGlueInfo) == TRUE
 	    || fgIsBusAccessFailed == TRUE)
@@ -1294,6 +1299,7 @@ void mt7902ConstructBtPatchName(struct GLUE_INFO *prGlueInfo,
 	}
 
 	prChipInfo = prAdapter->chip_info;
+	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 	if (prChipInfo == NULL) {
 		DBGLOG(INIT, ERROR, "prChipInfo is NULL.\n");
 		return;
@@ -1348,6 +1354,7 @@ void mt7902ConstructZbPatchName(struct GLUE_INFO *prGlueInfo,
 	}
 
 	prChipInfo = prAdapter->chip_info;
+	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 	if (prChipInfo == NULL) {
 		DBGLOG(INIT, ERROR, "prChipInfo is NULL.\n");
 		return;
@@ -1389,6 +1396,7 @@ uint32_t mt7902ConstructBufferBinFileName(struct ADAPTER *prAdapter,
 	}
 
 	prChipInfo = prAdapter->chip_info;
+	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
 
 	if (prChipInfo == NULL) {
 		DBGLOG(INIT, ERROR, "prChipInfo == NULL\n");

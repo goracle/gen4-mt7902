@@ -73,8 +73,8 @@
 #include "mgmt/rsn.h"
 #include "debug.h"
 #if CFG_SUPPORT_NAN
-#include "cmd_buf.h"
 #include "nan_txm.h"
+#include "cmd_buf.h"
 #endif
 
 /******************************************************************************
@@ -11028,93 +11028,22 @@ uint32_t wlanSendSetQueryCmdAdv(IN struct ADAPTER *prAdapter,
 /*----------------------------------------------------------------------------*/
 uint32_t
 wlanSendSetQueryCmd(IN struct ADAPTER *prAdapter,
-        uint8_t ucCID,
-        u_int8_t fgSetQuery,
-        u_int8_t fgNeedResp,
-        u_int8_t fgIsOid,
-        PFN_CMD_DONE_HANDLER pfCmdDoneHandler,
-        PFN_CMD_TIMEOUT_HANDLER pfCmdTimeoutHandler,
-        uint32_t u4SetQueryInfoLen,
-        uint8_t *pucInfoBuffer, OUT void *pvSetQueryBuffer,
-        IN uint32_t u4SetQueryBufferLen) 
+		uint8_t ucCID,
+		u_int8_t fgSetQuery,
+		u_int8_t fgNeedResp,
+		u_int8_t fgIsOid,
+		PFN_CMD_DONE_HANDLER pfCmdDoneHandler,
+		PFN_CMD_TIMEOUT_HANDLER pfCmdTimeoutHandler,
+		uint32_t u4SetQueryInfoLen,
+		uint8_t *pucInfoBuffer, OUT void *pvSetQueryBuffer,
+		IN uint32_t u4SetQueryBufferLen)
 {
-#ifndef CFG_SUPPORT_UNIFIED_COMMAND
-    struct GLUE_INFO *prGlueInfo;
-    struct CMD_INFO *prCmdInfo;
-    uint8_t *pucCmfBuf = NULL;
-    struct mt66xx_chip_info *prChipInfo;
-    uint16_t cmd_size;
-    
-    /* HARDENING: Context and Reset protection */
-    if (!prAdapter || kalIsResetting()) {
-        DBGLOG(INIT, WARN, "MT7902: Drop CMD 0x%x - Adapter resetting or NULL\n", ucCID);
-        return WLAN_STATUS_FAILURE;
-    }
-    
-    prGlueInfo = prAdapter->prGlueInfo;
-    prChipInfo = prAdapter->chip_info;
-    
-    if (!prChipInfo || !prGlueInfo) {
-        DBGLOG(INIT, ERROR, "MT7902: Missing critical structures for CID 0x%x\n", ucCID);
-        return WLAN_STATUS_FAILURE;
-    }
-    
-    cmd_size = prChipInfo->u2CmdTxHdrSize + u4SetQueryInfoLen;
-    
-    // ADD INSTRUMENTATION HERE (after cmd_size is calculated)
-    DBGLOG(INIT, LOUD, "[AUTH-DBG-CMD] CID=0x%02x size=%u\n", ucCID, cmd_size);
-    
-    prCmdInfo = cmdBufAllocateCmdInfo(prAdapter, cmd_size);
-    
-    if (!prCmdInfo) {
-        DBGLOG(INIT, ERROR, "[AUTH-DBG-CMD] *** CMDBUF ALLOCATION FAILED *** CID=0x%02x size=%u\n", 
-               ucCID, cmd_size);
-        dump_stack();
-        return WLAN_STATUS_FAILURE;
-    }
-    
-    /* Ensure memory was actually mapped */
-    if (cmd_size > 0 && !prCmdInfo->pucInfoBuffer) {
-        DBGLOG(INIT, ERROR, "MT7902: Allocated prCmdInfo has NULL payload buffer\n");
-        cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
-        return WLAN_STATUS_FAILURE;
-    }
-    
-    prCmdInfo->eCmdType = COMMAND_TYPE_NETWORK_IOCTL;
-    prCmdInfo->u2InfoBufLen = cmd_size;
-    prCmdInfo->pfCmdDoneHandler = pfCmdDoneHandler;
-    prCmdInfo->pfCmdTimeoutHandler = pfCmdTimeoutHandler;
-    prCmdInfo->fgIsOid = fgIsOid;
-    prCmdInfo->ucCID = ucCID;
-    prCmdInfo->fgSetQuery = fgSetQuery;
-    prCmdInfo->fgNeedResp = fgNeedResp;
-    prCmdInfo->u4SetInfoLen = u4SetQueryInfoLen;
-    prCmdInfo->pvInformationBuffer = pvSetQueryBuffer;
-    prCmdInfo->u4InformationBufferLength = u4SetQueryBufferLen;
-    
-    NIC_FILL_CMD_TX_HDR(prAdapter,
-        prCmdInfo->pucInfoBuffer,
-        prCmdInfo->u2InfoBufLen,
-        prCmdInfo->ucCID,
-        CMD_PACKET_TYPE_ID,
-        &prCmdInfo->ucCmdSeqNum,
-        prCmdInfo->fgSetQuery,
-        &pucCmfBuf, FALSE, 0, S2D_INDEX_CMD_H2N,
-        prCmdInfo->fgNeedResp);
-        
-    if (u4SetQueryInfoLen > 0 && pucInfoBuffer != NULL && pucCmfBuf != NULL)
-        kalMemCopy(pucCmfBuf, pucInfoBuffer, u4SetQueryInfoLen);
-        
-    kalEnqueueCommand(prGlueInfo, (struct QUE_ENTRY *) prCmdInfo);
-    GLUE_SET_EVENT(prGlueInfo);
-    
-    return WLAN_STATUS_PENDING;
-#else
-    return wlanSendSetQueryCmdHelper(...);
-#endif
+	return wlanSendSetQueryExtCmd(prAdapter,
+		ucCID, 0, fgSetQuery, fgNeedResp, fgIsOid,
+		pfCmdDoneHandler, pfCmdTimeoutHandler,
+		u4SetQueryInfoLen, pucInfoBuffer,
+		pvSetQueryBuffer, u4SetQueryBufferLen);
 }
-
-
 
 #if CFG_SUPPORT_WAPI
 /*----------------------------------------------------------------------------*/

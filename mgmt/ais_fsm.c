@@ -1697,6 +1697,11 @@ aisResetScanRequest(IN struct AIS_FSM_INFO *prAisFsmInfo,
 /* ============================================================
  * STATE HANDLER: SCAN / ONLINE_SCAN / LOOKING_FOR
  * ============================================================ */
+/* Instrumented aisHandleState_SCAN_FAMILY for debugging
+ * Drop this into nic/ or common/ and build. Logs a lot of internal state
+ * to help find why firmware considers host 'not ready'.
+ */
+
 static enum ENUM_AIS_STATE
 aisHandleState_SCAN_FAMILY(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 {
@@ -1709,20 +1714,21 @@ aisHandleState_SCAN_FAMILY(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	enum ENUM_BAND eBand   = BAND_2G4;
 	uint8_t ucChannel      = 1;
 
-	DBGLOG(AIS, LOUD,
-	       "[AIS%d] STATE_%s ENTRY: netActive=%d scanType=%d ssidNum=%d\n",
+	DBGLOG(AIS, INFO,
+	       "[AIS%d] SCAN_FAMILY ENTRY: state=%d netActive=%d scanType=%d ssidNum=%d\n",
 	       ucBssIndex,
-	       (prAisFsmInfo->eCurrentState == AIS_STATE_SCAN      ? "SCAN" :
-		prAisFsmInfo->eCurrentState == AIS_STATE_ONLINE_SCAN ? "ONLINE_SCAN" :
-								       "LOOKING_FOR"),
+	       prAisFsmInfo->eCurrentState,
 	       IS_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex),
 	       prAisFsmInfo->rScanRequest.ucScanType,
 	       prAisFsmInfo->rScanRequest.u4SsidNum);
 
 	if (!IS_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex)) {
-		DBGLOG(AIS, LOUD, "[AIS%d] SCAN: Activating network\n", ucBssIndex);
+		DBGLOG(AIS, INFO, "[AIS%d] SCAN: net not active, calling SET_NET_ACTIVE+nicActivateNetwork\n", ucBssIndex);
 		SET_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
 		nicActivateNetwork(prAdapter, prAisBssInfo->ucBssIndex);
+		DBGLOG(AIS, INFO, "[AIS%d] SCAN: nicActivateNetwork done\n", ucBssIndex);
+	} else {
+		DBGLOG(AIS, INFO, "[AIS%d] SCAN: net already active, skipping activate\n", ucBssIndex);
 	}
 
 	/* Determine IE length */
@@ -1803,13 +1809,18 @@ aisHandleState_SCAN_FAMILY(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	prScanReqMsg->fg6gOobRnrParseEn = prScanRequest->fg6gOobRnrParseEn;
 
 	/* Configure channel scope (may set eMsgId=0 to abort on MT7902 roaming block) */
+	DBGLOG(AIS, INFO, "[AIS%d] SCAN: calling aisConfigureScanChannel\n", ucBssIndex);
 	aisConfigureScanChannel(prAdapter, ucBssIndex,
 				prAisFsmInfo, prAisBssInfo,
 				prScanRequest, prScanReqMsg,
 				eBand, ucChannel);
+	DBGLOG(AIS, INFO, "[AIS%d] SCAN: after aisConfigureScanChannel eMsgId=%d eScanChannel=%d ucChannelListNum=%d\n",
+	       ucBssIndex, prScanReqMsg->rMsgHdr.eMsgId,
+	       prScanReqMsg->eScanChannel, prScanReqMsg->ucChannelListNum);
 
 	/* MT7902 roaming-scan was blocked: clean up and bail out. */
 	if (prScanReqMsg->rMsgHdr.eMsgId == 0) {
+		DBGLOG(AIS, INFO, "[AIS%d] SCAN: eMsgId==0, bailing out (roaming block)\n", ucBssIndex);
 		cnmMemFree(prAdapter, prScanReqMsg);
 		return prAisFsmInfo->eCurrentState;
 	}
@@ -1845,9 +1856,12 @@ aisHandleState_SCAN_FAMILY(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	       "[AIS%d] SCAN: Sending scan request to mailbox, seqNum=%d\n",
 	       ucBssIndex, prScanReqMsg->ucSeqNum);
 
+	DBGLOG(AIS, INFO, "[AIS%d] SCAN: sending scan req to mailbox seqNum=%d\n",
+	       ucBssIndex, prScanReqMsg->ucSeqNum);
 	mboxSendMsg(prAdapter, MBOX_ID_0,
 		    (struct MSG_HDR *)prScanReqMsg,
 		    MSG_SEND_METHOD_BUF);
+	DBGLOG(AIS, INFO, "[AIS%d] SCAN: mboxSendMsg done\n", ucBssIndex);
 
 scan_sent:
 	aisResetScanRequest(prAisFsmInfo, prScanRequest);

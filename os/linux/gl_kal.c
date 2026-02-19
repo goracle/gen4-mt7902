@@ -4517,8 +4517,8 @@ int main_thread(void *data)
 		 */
 		do {
 			ret = wait_event_interruptible(prGlueInfo->waitq,
-				((prGlueInfo->ulFlag & GLUE_FLAG_MAIN_PROCESS)
-				!= 0));
+				((prGlueInfo->ulFlag & GLUE_FLAG_MAIN_PROCESS) != 0) ||
+				(prGlueInfo->ulFlag & GLUE_FLAG_HALT));
 		} while (ret != 0);
 #if CFG_ENABLE_WAKE_LOCK
 		if (!KAL_WAKE_LOCK_ACTIVE(prGlueInfo->prAdapter,

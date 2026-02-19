@@ -83,7 +83,6 @@
  *                             D A T A   T Y P E S
  *******************************************************************************
  */
-
 #ifdef CFG_SUPPORT_UNIFIED_COMMAND
 enum EUNM_CMD_SEND_METHOD {
 	CMD_SEND_METHOD_ENQUEUE = 0,
