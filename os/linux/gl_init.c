@@ -5830,16 +5830,19 @@ void wlanOffStopWlanThreads(IN struct GLUE_INFO *prGlueInfo)
 
 #if CFG_SUPPORT_MULTITHREAD
 	wake_up_interruptible(&prGlueInfo->waitq_hif);
-	wait_for_completion_interruptible(
-		&prGlueInfo->rHifHaltComp);
+	if (!wait_for_completion_interruptible_timeout(
+		&prGlueInfo->rHifHaltComp, 5*HZ))
+		DBGLOG(INIT, WARN, "hif_thread halt timeout\n");
 	wake_up_interruptible(&prGlueInfo->waitq_rx);
-	wait_for_completion_interruptible(&prGlueInfo->rRxHaltComp);
+	if (!wait_for_completion_interruptible_timeout(&prGlueInfo->rRxHaltComp, 5*HZ))
+		DBGLOG(INIT, WARN, "rx_thread halt timeout\n");
 #endif
 
 	/* wake up main thread */
 	wake_up_interruptible(&prGlueInfo->waitq);
 	/* wait main thread stops */
-	wait_for_completion_interruptible(&prGlueInfo->rHaltComp);
+	if (!wait_for_completion_interruptible_timeout(&prGlueInfo->rHaltComp, 5*HZ))
+		DBGLOG(INIT, WARN, "main_thread halt timeout\n");
 
 	DBGLOG(INIT, INFO, "wlan thread stopped\n");
 

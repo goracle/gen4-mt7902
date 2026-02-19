@@ -8855,6 +8855,7 @@ uint32_t wlanoidSetPacketFilter(struct ADAPTER *prAdapter,
 			(PARAM_PACKET_FILTER_MULTICAST);
 	}
 #endif
+	prSetRxPacketFilter->u4RxPacketFilter = 0xFFFFFFFF;
 	DBGLOG(OID, INFO,
 	       "[MC debug] u4PacketFilter=%x, IsSuspend=%d\n",
 	       prSetRxPacketFilter->u4RxPacketFilter,

@@ -1534,6 +1534,13 @@ static void aisConfigureScanChannel(IN struct ADAPTER *prAdapter,
 			   ucNum * sizeof(struct RF_CHANNEL_INFO));
 		
 		DBGLOG(AIS, INFO, "[MT7902] Inherited %d channels from request\n", ucNum);
+		/* Sanitize inherited channel bands */
+		for (i = 0; i < ucNum; i++) {
+			if (prScanReqMsg->arChnlInfoList[i].eBand == BAND_NULL) {
+				uint8_t ch = prScanReqMsg->arChnlInfoList[i].ucChannelNum;
+				prScanReqMsg->arChnlInfoList[i].eBand = (ch <= 14) ? BAND_2G4 : BAND_5G;
+			}
+		}
 	}
 
 	/* 3. AUGMENTATION: Ensure we sweep the full spectrum if the request is narrow */
@@ -2690,6 +2697,7 @@ void aisFsmRunEventScanDone(IN struct ADAPTER *prAdapter,
 
 	DBGLOG(AIS, INFO, "ScanDone [BSS %u] Seq:%u, Status:%d, CurrentState:%u\n",
 	       ucBssIndex, ucSeqNum, eStatus, (uint32_t)prAisFsmInfo->eCurrentState);
+	DBGLOG(AIS, INFO, "[SCAN-RPT] ucSeqNum=%u u2SeqNumOfScanReport=%u\n", ucSeqNum, prAisFsmInfo->u2SeqNumOfScanReport);
 
 	if (ucSeqNum != prAisFsmInfo->ucSeqNumOfScanReq) {
 		DBGLOG(AIS, WARN, "Discarding stale ScanDone (Seq %u != Expected %u)\n",

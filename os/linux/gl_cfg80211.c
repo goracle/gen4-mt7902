@@ -3632,7 +3632,7 @@ int mtk_cfg80211_set_power_mgmt(struct wiphy *wiphy,
     }
 #endif
 
-    if (rStatus != WLAN_STATUS_SUCCESS) {
+    if (rStatus != WLAN_STATUS_SUCCESS && rStatus != WLAN_STATUS_PENDING) {
         DBGLOG(REQ, WARN,
                "[PWR-MGMT] Firmware power save config failed (status=0x%x)\n",
                rStatus);

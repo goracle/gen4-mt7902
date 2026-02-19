@@ -73,6 +73,7 @@
 /* State flags for atomic-safe recovery management (V2 Fix) */
 #define MTK_FLAG_MMIO_GONE     0  /* bit 0: MMIO dead, needs recovery */
 #define MTK_FLAG_IRQ_ALIVE     1  /* bit 1: IRQ still valid for sync */
+#define MTK_FLAG_TEARDOWN      2  /* bit 2: module teardown in progress */
 
 /*******************************************************************************
  * C O N S T A N T S

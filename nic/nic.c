@@ -546,11 +546,6 @@ uint32_t nicProcessIST(IN struct ADAPTER *prAdapter)
 		 * On PCIe, 0xFFFFFFFF means the link is down or the chip is asleep.
 		 */
 		if (u4IntStatus == 0xFFFFFFFF) {
-			DBGLOG(HAL, ERROR, "MT7902-FIX: MMIO Read Timeout (0xFFFFFFFF) at iter %u (prAdapter=%p)\n",
-			       i, prAdapter);
-			/* emit helpful diagnostic: raw status and stack trace */
-			DBGLOG(HAL, ERROR, "MT7902-FIX: offending u4IntStatus=0x%08x\n", u4IntStatus);
-			dump_stack(); /* capture kernel stack for offline debugging */
 			u4Status = WLAN_STATUS_ADAPTER_NOT_READY;
 			break;
 		}
@@ -566,49 +561,17 @@ uint32_t nicProcessIST(IN struct ADAPTER *prAdapter)
 			break;
 		}
 
-		/* 4. Valid Interrupt:
-		 * Before we process, ensure we still have Driver Ownership.
-		 */
-		if (nicpmSetDriverOwn(prAdapter) == FALSE) {
-			DBGLOG(HAL, WARN, "MT7902-FIX: Lost Driver-Own in IST at iter %u, attempting recovery (prAdapter=%p)\n",
-			       i, prAdapter);
-
-			/* try once more with a short backoff; if it still fails, capture stack */
-			mdelay(1); /* tiny backoff; adjust if you have a scheduler-friendly wait */
-			if (nicpmSetDriverOwn(prAdapter) == FALSE) {
-				DBGLOG(HAL, ERROR, "MT7902-FIX: Driver-Own recovery failed at iter %u, u4IntStatus=0x%08x\n",
-				       i, u4IntStatus);
-				dump_stack();
-				/* mark adapter not ready so caller can decide next action */
-				u4Status = WLAN_STATUS_ADAPTER_NOT_READY;
-				break;
-			}
-			DBGLOG(HAL, INFO, "MT7902-FIX: Driver-Own recovered at iter %u\n", i);
-		}
-
+		
 		/* Do the real processing; implementation should be side-effect free on error */
 		nicProcessIST_impl(prAdapter, u4IntStatus);
 
-		/* defensive: if processing indicated a fatal condition, bail out
-		 * (nicProcessIST_impl may set adapter flags or similar; check them here
-		 * if you have a convention for fatal state indication)
-		 */
-		if (prAdapter->fgIsRadioOff || prAdapter->rAcpiState == ACPI_STATE_D3) {
-			DBGLOG(HAL, WARN, "MT7902-FIX: IST abort: adapter transitioned to low-power during processing\n");
-			u4Status = WLAN_STATUS_ADAPTER_NOT_READY;
-			/* dump stack to capture the transition point */
-			dump_stack();
-			break;
-		}
 	}
 
 	/* final diagnostics: if we looped the max without seeing 0 or error, log it */
 	if (i == loop_max && u4Status == WLAN_STATUS_SUCCESS) {
 		DBGLOG(HAL, WARN, "MT7902-FIX: IST looped max (%u) without quiescing; last u4IntStatus=0x%08x\n",
 		       loop_max, u4IntStatus);
-		/* optional stack dump for recurrent hangs; keep it informative but not spammy */
-		dump_stack();
-		u4Status = WLAN_STATUS_NOT_INDICATING;
+				u4Status = WLAN_STATUS_NOT_INDICATING;
 	}
 
 	return u4Status;
@@ -635,6 +598,7 @@ uint32_t nicProcessIST_impl(IN struct ADAPTER *prAdapter,
 	ASSERT(prAdapter);
 
 	prAdapter->u4IntStatus = u4IntStatus;
+	DBGLOG(INTR, WARN, "[INT-DISPATCH] u4IntStatus=0x%08x\n", u4IntStatus);
 
 	/* Process each of the interrupt status consequently */
 	prIntEventMap = &arIntEventMapTable[0];

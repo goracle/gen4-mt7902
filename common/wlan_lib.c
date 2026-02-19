@@ -1755,49 +1755,24 @@ u_int8_t wlanISR(IN struct ADAPTER *prAdapter,
  * \return (none)
  */
 /*----------------------------------------------------------------------------*/
-#define WLAN_IST_MAX_RETRIES 5
+//#define WLAN_IST_MAX_RETRIES 5
 
 void wlanIST(struct ADAPTER *prAdapter)
 {
-    static int g_u4IstFailCount = 0;
-    int status;
+	uint32_t i = 0;
 
-    if (!prAdapter) {
-        DBGLOG(INIT, WARN, "wlanIST: Adapter pointer NULL, skipping IST.\n");
-        return;
-    }
-
-    /* Skip IST if firmware isn't ready */
-    if (!prAdapter->fgIsFwDownloaded) {
-        DBGLOG(INIT, WARN, "wlanIST: Firmware not ready, skipping IST.\n");
-        return;
-    }
-
-    /* Main IST loop logic */
-    status = nicProcessIST(prAdapter);
-
-    if (status != WLAN_STATUS_SUCCESS) {
-        g_u4IstFailCount++;
-        DBGLOG(INIT, WARN, "wlanIST: nicProcessIST failed (%d), retry %d/%d\n",
-               status, g_u4IstFailCount, WLAN_IST_MAX_RETRIES);
-
-        if (g_u4IstFailCount >= WLAN_IST_MAX_RETRIES) {
-            DBGLOG(INIT, ERROR, "wlanIST: Max IST retries reached, skipping further IST.\n");
-            return; /* Bail out safely */
-        }
-
-        /* Optional: could schedule a delayed retry instead of immediate loop */
-        return;
-    }
-
-    /* Reset failure counter on success */
-    g_u4IstFailCount = 0;
-
-    /* Continue IST processing if needed */
-    DBGLOG(INIT, INFO, "wlanIST: nicProcessIST succeeded, continuing IST processing.\n");
-
-    /* Example: process other events, deferred CC, etc. */
-    // wlanISTProcessDeferredEvents(prAdapter);
+	if (!prAdapter) {
+		DBGLOG(INIT, WARN, "wlanIST: Adapter pointer NULL, skipping IST.\\n");
+		return;
+	}
+	if (!prAdapter->fgIsFwDownloaded) {
+		DBGLOG(INIT, WARN, "wlanIST: Firmware not ready, skipping IST.\\n");
+		return;
+	}
+	while (i < CFG_IST_LOOP_COUNT &&
+	       nicProcessIST(prAdapter) != WLAN_STATUS_NOT_INDICATING) {
+		i++;
+	}
 }
 
 

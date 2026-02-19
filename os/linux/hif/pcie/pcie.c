@@ -339,27 +339,30 @@ err_release_regions:
 
 static void mtk_pci_remove(struct pci_dev *pdev)
 {
-	struct GLUE_INFO *prGlueInfo = pci_get_drvdata(pdev);
+    struct GLUE_INFO *prGlueInfo = pci_get_drvdata(pdev);
 
-	DBGLOG(INIT, INFO, "MT7902-FIX: Removing PCI device and releasing resources\n");
+    DBGLOG(INIT, INFO, "MT7902-FIX: Removing PCI device and releasing resources\n");
 
-	/* If we have glue info, it means pfWlanProbe at least started.
-	 * pfWlanRemove will clean up netdev, procfs, and threads.
-	 */
-	if (prGlueInfo) {
-		pfWlanRemove();
-	}
+    if (prGlueInfo) {
+        struct GL_HIF_INFO *prHifInfo = &prGlueInfo->rHifInfo;
 
-	/* ALWAYS release these if they were claimed, even if prGlueInfo is NULL.
-	 * This prevents the "EBUSY" error on the next driver load.
-	 */
-	if (pci_is_enabled(pdev)) {
-		pci_release_regions(pdev);
-		pci_disable_device(pdev);
-	}
-	
-	pci_set_drvdata(pdev, NULL);
+        /* Kill recovery work FIRST, before pfWlanRemove can re-trigger it.
+         * If we cancel after pfWlanRemove, teardown races schedule_work
+         * and cancel_work_sync blocks for the full recovery sequence. */
+        set_bit(MTK_FLAG_TEARDOWN, &prHifInfo->state_flags);
+        cancel_work_sync(&prHifInfo->recovery_work);
+
+        pfWlanRemove();
+    }
+
+    if (pci_is_enabled(pdev)) {
+        pci_release_regions(pdev);
+        pci_disable_device(pdev);
+    }
+
+    pci_set_drvdata(pdev, NULL);
 }
+
 /*----------------------------------------------------------------------------*/
 /*! \brief Mark IRQs as dead - call before any PCI teardown
  *
@@ -447,7 +450,9 @@ void mt7902_schedule_recovery_from_atomic(struct GLUE_INFO *prGlueInfo)
     if (prGlueInfo->prDevHandler)
         netif_tx_stop_all_queues(prGlueInfo->prDevHandler);
 
+if (!test_bit(MTK_FLAG_TEARDOWN, &prHifInfo->state_flags))
     schedule_work(&prHifInfo->recovery_work);
+
 }
 
 
@@ -1710,6 +1715,7 @@ void glBusFreeIrq(void *pvData, void *pvCookie)
     if (CSRBaseAddress) {
         iounmap(CSRBaseAddress);
         CSRBaseAddress = NULL;
+        if (prHifInfo) prHifInfo->CSRBaseAddress = NULL;
         pci_release_regions(pdev);
         pci_clear_master(pdev);
     }

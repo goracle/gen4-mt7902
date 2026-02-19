@@ -131,6 +131,16 @@ struct PCIE_CHIP_CR_MAPPING mt7902_bus2chip_cr_mapping[] = {
 	{0x7c060000, 0xe0000, 0x10000}, /* CONN_INFRA, conn_host_csr_top */
 	{0x7c000000, 0xf0000, 0x10000}, /* CONN_INFRA */
 };
+static void mt7902CapInit(struct ADAPTER *prAdapter)
+{
+	struct mt66xx_chip_info *prChipInfo;
+
+	asicConnac2xCapInit(prAdapter);
+
+	prChipInfo = prAdapter->chip_info;
+	asicConnac3xInitRxdHook(prChipInfo->prRxDescOps);
+}
+
 
 void mt7902EnableInterrupt(
 	struct ADAPTER *prAdapter)
@@ -189,7 +199,7 @@ void mt7902EnableInterrupt(
 	}
 #endif /* CFG_CHIP_RESET_SUPPORT */
 
-	DBGLOG(HAL, TRACE, "%s [0x%08x]\n", __func__, IntMask.word);
+	DBGLOG(HAL, WARN, "[INT-ENA] re-armed IntMask=0x%08x\n", IntMask.word);
 } /* end of nicEnableInterrupt() */
 
 void mt7902DisableInterrupt(
@@ -362,6 +372,7 @@ void mt7902Connac2xProcessRxInterrupt(
 	union WPDMA_INT_STA_STRUCT rIntrStatus;
 
 	rIntrStatus = (union WPDMA_INT_STA_STRUCT)prHifInfo->u4IntStatus;
+	DBGLOG(HAL, WARN, "[INT-PROC] raw=0x%08x\n", prHifInfo->u4IntStatus);
 
 	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_2)
 		halRxReceiveRFBs(prAdapter, RX_RING_DATA_IDX_0, TRUE);
@@ -530,6 +541,10 @@ void mt7902ReadIntStatus(
 
 	HAL_MCR_RD(prAdapter,
 		WF_WFDMA_HOST_DMA0_HOST_INT_STA_ADDR, &u4RegValue);
+	{
+	  //static int once;
+		DBGLOG(HAL, WARN, "[INT-RAW] u4RegValue=0x%08x rxdone_bits=0x%08x\n", u4RegValue, prBusInfo->host_int_rxdone_bits);
+	}
 
 	if (HAL_IS_CONNAC2X_EXT_RX_DONE_INTR(u4RegValue,
 				       prBusInfo->host_int_rxdone_bits))
@@ -1661,7 +1676,7 @@ struct mt66xx_chip_info mt66xx_chip_info_mt7902 = {
 	#if (CFG_SUPPORT_802_11AX == 1)
 	.arb_ac_mode_addr = MT7902_ARB_AC_MODE_ADDR,
 	#endif
-	.asicCapInit = asicConnac2xCapInit,
+	.asicCapInit = mt7902CapInit,
 #if CFG_ENABLE_FW_DOWNLOAD
 	.asicEnableFWDownload = asicEnableFWDownload,
 #endif /* CFG_ENABLE_FW_DOWNLOAD */
