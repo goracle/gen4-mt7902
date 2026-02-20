@@ -2843,6 +2843,7 @@ static int32_t wlanNetRegister(struct wireless_dev *prWdev)
 static void wlanNetUnregister(struct wireless_dev *prWdev)
 {
 	struct GLUE_INFO *prGlueInfo;
+	uint32_t u4Idx = 0;
 
 	if (!prWdev) {
 		DBGLOG(INIT, ERROR, "The device context is NULL\n");
@@ -2851,25 +2852,21 @@ static void wlanNetUnregister(struct wireless_dev *prWdev)
 
 	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(prWdev->wiphy);
 
-#if !CFG_SUPPORT_PERSIST_NETDEV
-	{
-		uint32_t u4Idx = 0;
+	rtnl_lock();
+	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
+		if (!gprWdev[u4Idx] || !gprWdev[u4Idx]->netdev)
+			continue;
+		if (gprWdev[u4Idx]->netdev->reg_state != NETREG_REGISTERED)
+			continue;
 
-		for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
-			if (!gprWdev[u4Idx] || !gprWdev[u4Idx]->netdev)
-				continue;
-			if (gprWdev[u4Idx]->netdev->reg_state != NETREG_REGISTERED)
-				continue;
-			dev_close(gprWdev[u4Idx]->netdev);
-			wlanClearDevIdx(gprWdev[u4Idx]->netdev);
-			unregister_netdev(gprWdev[u4Idx]->netdev);
-		}
-
-		prGlueInfo->fgIsRegistered = FALSE;
+		dev_close(gprWdev[u4Idx]->netdev);
+		wlanClearDevIdx(gprWdev[u4Idx]->netdev);
+		unregister_netdevice(gprWdev[u4Idx]->netdev);
 	}
-#endif
+	rtnl_unlock();
 
-}				/* end of wlanNetUnregister() */
+	prGlueInfo->fgIsRegistered = FALSE;
+}
 
 
 
@@ -5830,18 +5827,16 @@ void wlanOffStopWlanThreads(IN struct GLUE_INFO *prGlueInfo)
 
 #if CFG_SUPPORT_MULTITHREAD
 	wake_up_interruptible(&prGlueInfo->waitq_hif);
-	if (!wait_for_completion_interruptible_timeout(
-		&prGlueInfo->rHifHaltComp, 5*HZ))
+	if (!wait_for_completion_timeout(&prGlueInfo->rHifHaltComp, 10*HZ))
 		DBGLOG(INIT, WARN, "hif_thread halt timeout\n");
 	wake_up_interruptible(&prGlueInfo->waitq_rx);
-	if (!wait_for_completion_interruptible_timeout(&prGlueInfo->rRxHaltComp, 5*HZ))
+	if (!wait_for_completion_timeout(&prGlueInfo->rRxHaltComp, 10*HZ))
 		DBGLOG(INIT, WARN, "rx_thread halt timeout\n");
 #endif
 
-	/* wake up main thread */
+	/* wake up main thread and wait for it to exit */
 	wake_up_interruptible(&prGlueInfo->waitq);
-	/* wait main thread stops */
-	if (!wait_for_completion_interruptible_timeout(&prGlueInfo->rHaltComp, 5*HZ))
+	if (!wait_for_completion_timeout(&prGlueInfo->rHaltComp, 10*HZ))
 		DBGLOG(INIT, WARN, "main_thread halt timeout\n");
 
 	DBGLOG(INIT, INFO, "wlan thread stopped\n");
@@ -5927,6 +5922,10 @@ int32_t wlanOffAtReset(void)
 	 *	 requests
 	 */
 	set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
+	/* Silence hardware before stopping threads so tasklet can't reschedule */
+	nicDisableInterrupt(prAdapter);
+	glBusFreeIrq(prDev, prGlueInfo);
+	tasklet_kill(&prGlueInfo->rRxTask);
 	wlanOffStopWlanThreads(prGlueInfo);
 	if (HAL_IS_TX_DIRECT(prAdapter)) {
 		if (prAdapter->fgTxDirectInited) {
@@ -5946,8 +5945,7 @@ int32_t wlanOffAtReset(void)
 	wlanOffUninitNicModule(prAdapter, TRUE);
 /* wlanAdapterStop Section End */
 
-	/* 4 <x> Stopping handling interrupt and free IRQ */
-	glBusFreeIrq(prDev, prGlueInfo);
+	/* 4 <x> IRQ already freed before wlanOffStopWlanThreads above */
 
 
 
@@ -6871,28 +6869,10 @@ static void wlanRemove(void)
      */
     if (prAdapter)
         nicDisableInterrupt(prAdapter);
-
-    /*
-     * 3. Set HALT and stop all kernel threads.
-     * Must happen before glBusFreeIrq — threads may be waiting on
-     * completions that need to be unblocked before we can proceed.
-     */
+    glBusFreeIrq(prDev, prGlueInfo);
+    tasklet_kill(&prGlueInfo->rRxTask);
     set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
     wlanOffStopWlanThreads(prGlueInfo);
-
-    /*
-     * 4. Free the IRQ.
-     *
-     * This MUST happen before wlanNetUnregister/wlanNetDestroy.
-     * glBusFreeIrq takes the netdev as its first argument — if the
-     * netdev is destroyed first, the pointer passed here is dangling.
-     *
-     * free_irq() also calls synchronize_irq() internally (via our
-     * glBusFreeIrq wrapper) to wait for any in-flight handler to
-     * complete. After this returns, no more IRQ handlers will fire
-     * against module code.
-     */
-    glBusFreeIrq(prDev, prGlueInfo);
 
     /*
      * 5. Now safe to unregister and destroy the netdev — IRQ is gone,

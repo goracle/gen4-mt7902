@@ -11159,6 +11159,9 @@ void
 wlanSortChannel(IN struct ADAPTER *prAdapter,
 		IN enum ENUM_CHNL_SORT_POLICY ucSortType)
 {
+	if (!prAdapter || !prAdapter->prGlueInfo ||
+	    test_bit(GLUE_FLAG_HALT_BIT, &prAdapter->prGlueInfo->ulFlag))
+		return;
 	struct PARAM_GET_CHN_INFO *prChnLoadInfo = &
 			(prAdapter->rWifiVar.rChnLoadInfo);
 	int8_t ucIdx = 0, ucRoot = 0, ucChild = 0;

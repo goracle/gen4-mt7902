@@ -2511,7 +2511,8 @@ kalHardStartXmit(struct sk_buff *prOrgSkb,
 	u4TxHeadRoomSize = NIC_TX_DESC_AND_PADDING_LENGTH +
 		prChipInfo->txd_append_size;
 
-	if (prGlueInfo->ulFlag & GLUE_FLAG_HALT) {
+	if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
+			kalIsResetting() || kthread_should_stop()) {
 		DBGLOG(INIT, INFO, "GLUE_FLAG_HALT skip tx\n");
 		dev_kfree_skb(prOrgSkb);
 		return WLAN_STATUS_ADAPTER_NOT_READY;
@@ -4202,11 +4203,11 @@ int hif_thread(void *data)
 
 	kalSetThreadSchPolicyPriority(prGlueInfo);
 
-	while (TRUE) {
+	while (!kthread_should_stop()) {
+		DBGLOG(INIT, INFO, "main_thread: loop top flags=0x%lx stop=%d\n", prGlueInfo->ulFlag, kthread_should_stop());
 
-		if (prGlueInfo->ulFlag & GLUE_FLAG_HALT
-			|| kalIsResetting()
-			) {
+		if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
+				kalIsResetting() || kthread_should_stop()) {
 			DBGLOG(INIT, INFO, "hif_thread should stop now...\n");
 			break;
 		}
@@ -4251,9 +4252,8 @@ int hif_thread(void *data)
 			 * interrupt later
 			 */
 			prAdapter->fgIsIntEnable = FALSE;
-			if (prGlueInfo->ulFlag & GLUE_FLAG_HALT
-				|| kalIsResetting()
-				) {
+			if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
+					kalIsResetting() || kthread_should_stop()) {
 				/* Should stop now... skip pending interrupt */
 				DBGLOG(INIT, INFO,
 				       "ignore pending interrupt\n");
@@ -4308,6 +4308,8 @@ int hif_thread(void *data)
 
 	DBGLOG(INIT, TRACE, "%s:%u stopped!\n",
 	       KAL_GET_CURRENT_THREAD_NAME(), KAL_GET_CURRENT_THREAD_ID());
+	DBGLOG(INIT, INFO, "main_thread: signaling rHaltComp\n");
+	complete(&prGlueInfo->rHaltComp);
 
 #if CFG_CHIP_RESET_HANG
 	while (fgIsResetHangState == SER_L0_HANG_RST_HANG) {
@@ -4353,11 +4355,10 @@ int rx_thread(void *data)
 
 	prTempRxQue = &rTempRxQue;
 
-	while (TRUE) {
+	while (!kthread_should_stop()) {
 
-		if (prGlueInfo->ulFlag & GLUE_FLAG_HALT
-			|| kalIsResetting()
-			) {
+		if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
+				kalIsResetting() || kthread_should_stop()) {
 			DBGLOG(INIT, INFO, "rx_thread should stop now...\n");
 			break;
 		}
@@ -4485,7 +4486,7 @@ int main_thread(void *data)
 	DBGLOG(INIT, INFO, "%s:%u starts running...\n",
 	       KAL_GET_CURRENT_THREAD_NAME(), KAL_GET_CURRENT_THREAD_ID());
 
-	while (TRUE) {
+	while (!kthread_should_stop()) {
 #ifdef UT_TEST_MODE
 		testThreadBegin(prGlueInfo->prAdapter);
 #endif
@@ -4517,9 +4518,12 @@ int main_thread(void *data)
 		 */
 		do {
 			ret = wait_event_interruptible(prGlueInfo->waitq,
+				kthread_should_stop() ||
 				((prGlueInfo->ulFlag & GLUE_FLAG_MAIN_PROCESS) != 0) ||
 				(prGlueInfo->ulFlag & GLUE_FLAG_HALT));
-		} while (ret != 0);
+		} while (ret != 0 && !kthread_should_stop());
+		if (kthread_should_stop())
+			break;
 #if CFG_ENABLE_WAKE_LOCK
 		if (!KAL_WAKE_LOCK_ACTIVE(prGlueInfo->prAdapter,
 					  prTxThreadWakeLock))
@@ -4627,9 +4631,8 @@ int main_thread(void *data)
 			prGlueInfo->prAdapter->fgIsIntEnable = FALSE;
 			/* wlanISR(prGlueInfo->prAdapter, TRUE); */
 
-			if (prGlueInfo->ulFlag & GLUE_FLAG_HALT
-				|| kalIsResetting()
-				) {
+			if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
+					kalIsResetting() || kthread_should_stop()) {
 				/* Should stop now... skip pending interrupt */
 				DBGLOG(INIT, INFO,
 					"ignore pending interrupt\n");
@@ -4717,8 +4720,10 @@ int main_thread(void *data)
 			wlanTxCmdDoneMthread(prGlueInfo->prAdapter);
 #endif
 		if (test_and_clear_bit(GLUE_FLAG_RX_BIT,
-					   &prGlueInfo->ulFlag))
-			nicRxProcessRFBs(prGlueInfo->prAdapter);
+					   &prGlueInfo->ulFlag)) {
+			if (!(prGlueInfo->ulFlag & GLUE_FLAG_HALT))
+				nicRxProcessRFBs(prGlueInfo->prAdapter);
+		}
 
 
 		/* Process RX, In linux, we don't need to free sk_buff by
@@ -4739,7 +4744,8 @@ int main_thread(void *data)
 #endif
 		if (test_and_clear_bit(GLUE_FLAG_TIMEOUT_BIT,
 				       &prGlueInfo->ulFlag))
-			wlanTimerTimeoutCheck(prGlueInfo->prAdapter);
+			if (!(prGlueInfo->ulFlag & GLUE_FLAG_HALT))
+				wlanTimerTimeoutCheck(prGlueInfo->prAdapter);
 #if CFG_SUPPORT_SDIO_READ_WRITE_PATTERN
 		if (prGlueInfo->fgEnSdioTestPattern == TRUE)
 			kalSetEvent(prGlueInfo);
@@ -4766,7 +4772,6 @@ int main_thread(void *data)
 	/* remove pending oid */
 	wlanReleasePendingOid(prGlueInfo->prAdapter, 1);
 
-	complete(&prGlueInfo->rHaltComp);
 #if CFG_ENABLE_WAKE_LOCK
 	if (KAL_WAKE_LOCK_ACTIVE(prGlueInfo->prAdapter,
 				 prTxThreadWakeLock))
@@ -4892,7 +4897,7 @@ void kalFlushPendingTxPackets(IN struct GLUE_INFO
 	} else {
 		GLUE_SPIN_LOCK_DECLARATION();
 
-		while (TRUE) {
+		while (!kthread_should_stop()) {
 			GLUE_ACQUIRE_SPIN_LOCK(prGlueInfo, SPIN_LOCK_TX_QUE);
 			QUEUE_REMOVE_HEAD(prTxQue, prQueueEntry,
 					  struct QUE_ENTRY *);
@@ -8780,7 +8785,8 @@ void kalFreeTxMsduWorker(struct work_struct *work)
 			      rTxMsduFreeWork);
 	prAdapter = prGlueInfo->prAdapter;
 
-	if (prGlueInfo->ulFlag & GLUE_FLAG_HALT)
+	if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
+			kalIsResetting() || kthread_should_stop())
 		return;
 
 	KAL_ACQUIRE_MUTEX(prAdapter, MUTEX_TX_DATA_DONE_QUE);
@@ -9209,7 +9215,8 @@ void kalPerMonHandler(IN struct ADAPTER *prAdapter,
 #if (CFG_COALESCING_INTERRUPT == 1)
 	uint32_t u4CoalescingIntTh;
 #endif
-	if (prGlueInfo->ulFlag & GLUE_FLAG_HALT)
+	if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
+			kalIsResetting() || kthread_should_stop())
 		return;
 
 	prPerMonitor = &prAdapter->rPerMonitor;

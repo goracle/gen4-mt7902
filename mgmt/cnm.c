@@ -1289,6 +1289,12 @@ void cnmIdcDetectHandler(IN struct ADAPTER *prAdapter,
 			IN struct WIFI_EVENT *prEvent)
 {
 
+	if (prAdapter->prGlueInfo &&
+	    test_bit(GLUE_FLAG_HALT_BIT, &prAdapter->prGlueInfo->ulFlag)) {
+		DBGLOG(CNM, WARN, "cnmIdcDetectHandler: HALT, skipping\n");
+		return;
+	}
+
 	struct EVENT_LTE_SAFE_CHN *prEventBody;
 	uint8_t ucIdx;
 	struct BSS_INFO *prBssInfo;

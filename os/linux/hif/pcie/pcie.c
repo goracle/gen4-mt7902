@@ -339,28 +339,32 @@ err_release_regions:
 
 static void mtk_pci_remove(struct pci_dev *pdev)
 {
-    struct GLUE_INFO *prGlueInfo = pci_get_drvdata(pdev);
+	struct GLUE_INFO *prGlueInfo = pci_get_drvdata(pdev);
+	struct GL_HIF_INFO *prHifInfo;
 
-    DBGLOG(INIT, INFO, "MT7902-FIX: Removing PCI device and releasing resources\n");
+	DBGLOG(INIT, INFO, "MT7902-FIX: Removing PCI device and releasing resources\n");
 
-    if (prGlueInfo) {
-        struct GL_HIF_INFO *prHifInfo = &prGlueInfo->rHifInfo;
+	if (!prGlueInfo)
+		goto disable_device;
 
-        /* Kill recovery work FIRST, before pfWlanRemove can re-trigger it.
-         * If we cancel after pfWlanRemove, teardown races schedule_work
-         * and cancel_work_sync blocks for the full recovery sequence. */
-        set_bit(MTK_FLAG_TEARDOWN, &prHifInfo->state_flags);
-        cancel_work_sync(&prHifInfo->recovery_work);
+	prHifInfo = &prGlueInfo->rHifInfo;
 
-        pfWlanRemove();
-    }
+	/* 1. Stop recovery work and set teardown flag to prevent re-scheduling */
+	set_bit(MTK_FLAG_TEARDOWN, &prHifInfo->state_flags);
+	cancel_work_sync(&prHifInfo->recovery_work);
 
-    if (pci_is_enabled(pdev)) {
-        pci_release_regions(pdev);
-        pci_disable_device(pdev);
-    }
+	/* 2. Kill tasklets and disable interrupts before PCI resources are released.
+	 * This prevents the "deadfeed" (0xdeadfeed) register reads in the RX path. */
+	/* 3. Trigger main driver removal */
+	pfWlanRemove();
 
-    pci_set_drvdata(pdev, NULL);
+disable_device:
+	if (pci_is_enabled(pdev)) {
+		pci_release_regions(pdev);
+		pci_disable_device(pdev);
+	}
+
+	pci_set_drvdata(pdev, NULL);
 }
 
 /*----------------------------------------------------------------------------*/
@@ -468,6 +472,11 @@ static void mt7902_recovery_work(struct work_struct *work)
     /* Ensure only one recovery at a time */
     if (!mutex_trylock(&prHifInfo->recovery_lock)) {
         DBGLOG(HAL, WARN, "Recovery already in progress\n");
+        return;
+    }
+    if (test_bit(MTK_FLAG_TEARDOWN, &prHifInfo->state_flags)) {
+        DBGLOG(HAL, WARN, "Teardown in progress, skipping recovery\n");
+        mutex_unlock(&prHifInfo->recovery_lock);
         return;
     }
 

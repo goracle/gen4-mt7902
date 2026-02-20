@@ -624,7 +624,6 @@ uint32_t nicProcessIST_impl(IN struct ADAPTER *prAdapter,
 			prAdapter->u4IntStatus &= ~prIntEventMap->u4Int;
 		}
 	}
-
 	return WLAN_STATUS_SUCCESS;
 }				/* end of nicProcessIST_impl() */
 

@@ -2295,8 +2295,10 @@ struct BSS_DESC * scanResolveOrAllocateBssDesc(struct ADAPTER *prAdapter,
                 
                 if ((prBssDesc->ucRCPI - ucRcpi) >= REPLICATED_BEACON_STRENGTH_THRESHOLD
                     && rCurrentTime - prBssDesc->rUpdateTime <= REPLICATED_BEACON_FRESH_PERIOD) {
+                    prBssDesc->u4UpdateIdx = prAdapter->rWifiVar.rScanInfo.u4ScanUpdateIdx;
                     return prBssDesc;
                 } else if (rCurrentTime - prBssDesc->rUpdateTime <= REPLICATED_BEACON_TIME_THRESHOLD) {
+                    prBssDesc->u4UpdateIdx = prAdapter->rWifiVar.rScanInfo.u4ScanUpdateIdx;
                     return prBssDesc;
                 }
             }

@@ -1614,7 +1614,7 @@ void halRxReceiveRFBs(IN struct ADAPTER *prAdapter, uint32_t u4Port,
 	prRxRing = &prAdapter->prGlueInfo->rHifInfo.RxRing[u4Port];
 
 	kalDevRegRead(prAdapter->prGlueInfo,
-		 prRxRing->hw_cidx_addr, &prRxRing->RxCpuIdx);
+		prRxRing->hw_cidx_addr, &prRxRing->RxCpuIdx);
 
 	/* Dispatch SwRFBs as more as possible in single lock */
 	KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
@@ -1675,6 +1675,23 @@ void halRxReceiveRFBs(IN struct ADAPTER *prAdapter, uint32_t u4Port,
 
 		prSwRfb->ucPacketType =
 			prRxDescOps->nic_rxd_get_pkt_type(prRxStatus);
+
+		/* * H-FIX: The MT7902 Firmware reports scan results as Type 7.
+		 * In some cases, the PDMA layer fails to update u2PacketLen, 
+		 * causing the hardware interrupt to loop indefinitely.
+		 */
+		if (prSwRfb->ucPacketType == 7) {
+			uint16_t u2HwLen = prRxDescOps->nic_rxd_get_rx_byte_count(prRxStatus);
+			
+			if (prSwRfb->u2PacketLen == 0 && u2HwLen > 0) {
+				DBGLOG(RX, WARN, "[H-FIX] Correcting Type 7 Len: 0 -> %u\n", u2HwLen);
+				prSwRfb->u2PacketLen = u2HwLen;
+				if (prSwRfb->pvPacket) {
+					skb_put((struct sk_buff *)prSwRfb->pvPacket, u2HwLen);
+				}
+			}
+		}
+
 		DBGLOG(RX, WARN, "[PDMA-RX] port=%u pkt_type=%u\n", u4Port, prSwRfb->ucPacketType);
 
 		if (prSwRfb->ucPacketType == RX_PKT_TYPE_MSDU_REPORT) {
@@ -1689,7 +1706,7 @@ void halRxReceiveRFBs(IN struct ADAPTER *prAdapter, uint32_t u4Port,
 		}
 
 		GLUE_RX_SET_PKT_INT_TIME(prSwRfb->pvPacket,
-					 prAdapter->prGlueInfo->u8HifIntTime);
+			prAdapter->prGlueInfo->u8HifIntTime);
 		GLUE_RX_SET_PKT_RX_TIME(prSwRfb->pvPacket, sched_clock());
 
 		prSwRfb->ucStaRecIdx =
@@ -1701,8 +1718,8 @@ void halRxReceiveRFBs(IN struct ADAPTER *prAdapter, uint32_t u4Port,
 			prSwRfb->ucPacketType == RX_PKT_TYPE_RX_DATA) {
 #if CFG_SUPPORT_RX_NAPI
 			/* If RxDirectNapi and RxFfifo available, run NAPI mode
-			 * Otherwise, goto default RX-direct policy
-			 */
+			* Otherwise, goto default RX-direct policy
+			*/
 			if (prGlueInfo->prRxDirectNapi &&
 				KAL_FIFO_IN(&prGlueInfo->rRxKfifoQ, prSwRfb))
 				kal_napi_schedule(prGlueInfo->prRxDirectNapi);
@@ -1722,7 +1739,7 @@ void halRxReceiveRFBs(IN struct ADAPTER *prAdapter, uint32_t u4Port,
 
 	if (prRxRing->fgSwRead) {
 		kalDevRegWrite(prAdapter->prGlueInfo,
-			 prRxRing->hw_cidx_addr, prRxRing->RxCpuIdx);
+			prRxRing->hw_cidx_addr, prRxRing->RxCpuIdx);
 		prRxRing->fgSwRead = false;
 	}
 
@@ -1737,6 +1754,7 @@ void halRxReceiveRFBs(IN struct ADAPTER *prAdapter, uint32_t u4Port,
 end:
 	GLUE_DEC_REF_CNT(ai4PortLock[u4Port]);
 }
+
 
 static void halDefaultProcessRxInterrupt(IN struct ADAPTER *prAdapter)
 {
