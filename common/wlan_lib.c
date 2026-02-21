@@ -1762,19 +1762,32 @@ void wlanIST(struct ADAPTER *prAdapter)
 	uint32_t i = 0;
 
 	if (!prAdapter) {
-		DBGLOG(INIT, WARN, "wlanIST: Adapter pointer NULL, skipping IST.\\n");
+		DBGLOG(INIT, WARN, "wlanIST: NULL adapter, skipping IST\n");
 		return;
 	}
+
 	if (!prAdapter->fgIsFwDownloaded) {
-		DBGLOG(INIT, WARN, "wlanIST: Firmware not ready, skipping IST.\\n");
+		DBGLOG(INIT, WARN, "wlanIST: firmware not ready, skipping IST\n");
 		return;
 	}
-	while (i < CFG_IST_LOOP_COUNT &&
-	       nicProcessIST(prAdapter) != WLAN_STATUS_NOT_INDICATING) {
+
+	while (i < CFG_IST_LOOP_COUNT) {
+		/* Check HALT at each iteration so we bail promptly on rmmod
+		 * even if we entered the loop before the bit was set. */
+		if (prAdapter->prGlueInfo &&
+		    test_bit(GLUE_FLAG_HALT_BIT, &prAdapter->prGlueInfo->ulFlag)) {
+			DBGLOG(INIT, WARN,
+				"wlanIST: HALT detected at iteration %u, aborting IST loop\n",
+				i);
+			break;
+		}
+
+		if (nicProcessIST(prAdapter) == WLAN_STATUS_NOT_INDICATING)
+			break;
+
 		i++;
 	}
 }
-
 
 
 
@@ -2983,7 +2996,31 @@ void wlanReleasePendingOid(IN struct ADAPTER *prAdapter,
 
 	do {
 #if CFG_SUPPORT_MULTITHREAD
-		KAL_ACQUIRE_MUTEX(prAdapter, MUTEX_TX_CMD_CLEAR);
+		/*
+		 * Normally we block here to serialise against hif_thread.
+		 * But if HALT is set, hif_thread may be stuck doing PCI I/O
+		 * against a dead BAR while holding this mutex (deadfeed pattern:
+		 * entered wlanTxCmdMthread() just before HALT was observed).
+		 * Blocking would cause main_thread to deadlock, miss its
+		 * rHaltComp signal, and ultimately get leaked when the 30s
+		 * shutdown timer fires — leading to a crash on module unload.
+		 *
+		 * Under HALT we use trylock: if we get it, proceed normally;
+		 * if not, skip the cmd-clear entirely.  Leaving a few commands
+		 * in the queue is harmless — the driver is tearing down anyway
+		 * and nothing will process them.
+		 */
+		if (prAdapter->prGlueInfo &&
+		    (prAdapter->prGlueInfo->ulFlag & GLUE_FLAG_HALT)) {
+			if (!mutex_trylock(
+				    &prAdapter->prGlueInfo->arMutex[MUTEX_TX_CMD_CLEAR])) {
+				DBGLOG(INIT, WARN,
+				       "wlanReleasePendingOid: MUTEX_TX_CMD_CLEAR held under HALT — skipping cmd clear to avoid deadlock\n");
+				break;
+			}
+		} else {
+			KAL_ACQUIRE_MUTEX(prAdapter, MUTEX_TX_CMD_CLEAR);
+		}
 #endif
 		/* 1: Clear pending OID in glue layer command queue */
 		kalOidCmdClearance(prAdapter->prGlueInfo);
@@ -11190,9 +11227,11 @@ wlanSortChannel(IN struct ADAPTER *prAdapter,
 	/* heapify ch rank list */
 	for (ucIdx = MAX_CHN_NUM / 2 - 1; ucIdx >= 0; --ucIdx) {
 		for (ucRoot = ucIdx; ucRoot * 2 + 1 < MAX_CHN_NUM;
+            int loop_guard = 0;
 		     ucRoot = ucChild) {
 
 			ucChild = ucRoot * 2 + 1;
+            if (loop_guard++ > 1024) break; /* DAWGEE SAFETY */
 			/* Coverity check*/
 			if (ucChild < 0 || ucChild >= MAX_CHN_NUM ||
 			    ucRoot < 0 || ucRoot >= MAX_CHN_NUM)
@@ -11249,6 +11288,7 @@ wlanSortChannel(IN struct ADAPTER *prAdapter,
 
 		for (ucRoot = 0; ucRoot * 2 + 1 < ucIdx; ucRoot = ucChild) {
 			ucChild = ucRoot * 2 + 1;
+            if (loop_guard++ > 1024) break; /* DAWGEE SAFETY */
 			/* Coverity check*/
 			if (ucChild < 0 ||
 			    ucRoot < 0 || ucRoot >= MAX_CHN_NUM)

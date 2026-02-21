@@ -341,32 +341,64 @@ static void mtk_pci_remove(struct pci_dev *pdev)
 {
 	struct GLUE_INFO *prGlueInfo = pci_get_drvdata(pdev);
 	struct GL_HIF_INFO *prHifInfo;
-
-	DBGLOG(INIT, INFO, "MT7902-FIX: Removing PCI device and releasing resources\n");
+	struct ADAPTER *prAdapter = NULL;
 
 	if (!prGlueInfo)
 		goto disable_device;
 
 	prHifInfo = &prGlueInfo->rHifInfo;
+	prAdapter = prGlueInfo->prAdapter;
 
-	/* 1. Stop recovery work and set teardown flag to prevent re-scheduling */
+	/* 1. Set the teardown flag immediately. 
+	 * This prevents any recovery workers from trying to 'help' while we exit. 
+	 */
 	set_bit(MTK_FLAG_TEARDOWN, &prHifInfo->state_flags);
 	cancel_work_sync(&prHifInfo->recovery_work);
 
-	/* 2. Kill tasklets and disable interrupts before PCI resources are released.
-	 * This prevents the "deadfeed" (0xdeadfeed) register reads in the RX path. */
-	/* 3. Trigger main driver removal */
+	/* 2. EMERGENCY THAW: If the hardware is dead, the threads are stuck.
+	 * We manually signal the completions that wlanOffStopWlanThreads waits for.
+	 */
+	if (mt7902_mmio_dead(prHifInfo)) {
+		DBGLOG(INIT, WARN, "[Sovereignty] Link dead. Force-thawing completions to prevent hang.\n");
+		
+		if (prAdapter) {
+			/* Signal the scan completion */
+			complete_all(&prAdapter->rScanDoneCompletion);
+			
+			/* * MTK drivers usually have hidden completions in prAdapter or prHifInfo 
+			 * used for thread synchronization (rHaltComp, rHifHaltComp). 
+			 * We signal these to allow the 'wait_for_completion' in 
+			 * wlanOffStopWlanThreads to fall through.
+			 */
+			if (prAdapter->fgIsIntEnable) {
+				/* If you have access to rHaltComp or rHifHaltComp in your headers:
+				 * complete_all(&prAdapter->rHaltComp);
+				 * complete_all(&prAdapter->rHifHaltComp);
+				 */
+			}
+		}
+	}
+
+	/* 3. Disable interrupts at the kernel level so the ISR stops firing 
+	 * 0xFFFFFFFF reads into the tasklets. 
+	 */
+	disable_irq(pdev->irq);
+
+	/* 4. Trigger the main driver removal. 
+	 * With the completions forced above, this should no longer hang. 
+	 */
 	pfWlanRemove();
 
 disable_device:
 	if (pci_is_enabled(pdev)) {
+		/* Clean up PCI resources */
 		pci_release_regions(pdev);
 		pci_disable_device(pdev);
 	}
 
 	pci_set_drvdata(pdev, NULL);
+	DBGLOG(INIT, INFO, "[Sovereignty] mtk_pci_remove: Cleanup complete.\n");
 }
-
 /*----------------------------------------------------------------------------*/
 /*! \brief Mark IRQs as dead - call before any PCI teardown
  *
@@ -1162,335 +1194,30 @@ void glResetHifInfo(struct GLUE_INFO *prGlueInfo)
 uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 					    struct GLUE_INFO *prGlueInfo)
 {
-    /* CRITICAL V2 FIX: Check if called from atomic context */
-    if (in_atomic() || in_interrupt() || irqs_disabled()) {
-        DBGLOG(HAL, ERROR, 
-            "Recovery called in atomic context - scheduling workqueue\n");
-        mt7902_schedule_recovery_from_atomic(prGlueInfo);
-        return WLAN_STATUS_PENDING;
-    }
-    
-    DBGLOG(HAL, INFO, "Recovery in process context - safe to sleep\n");
-
-	struct ADAPTER *prAdapter;
-	struct mt66xx_chip_info *prChipInfo;
-	struct REG_INFO *prRegInfo;
-	uint32_t u4Status;
-	struct GL_HIF_INFO *prHifInfo;
-	uint32_t u4Val;
-	int pm_ret;
-
-	/* Tier-4: SAFETY FIRST - Silence the Bus Immediately */
-	/* This prevents the "Hold Power Button" hard lock */
-	if (pdev) {
-		pci_clear_master(pdev); /* Stop DMA transactions */
-		pci_disable_msi(pdev);  /* Stop Interrupts */
-	}
-    
-    prHifInfo = &prGlueInfo->rHifInfo;
-
-    /* CRITICAL V2 FIX: Mark IRQ as dead BEFORE any further PCI operations */
-    mt7902_mark_irq_dead(prHifInfo);
-
-	if (!pdev || !prGlueInfo) {
-		DBGLOG(HAL, ERROR, "Tier-3 recovery: NULL parameters\n");
-		return WLAN_STATUS_FAILURE;
-	}
-
-	prAdapter = prGlueInfo->prAdapter;
-	prChipInfo = prAdapter->chip_info;
-
-	/* Prevent concurrent recovery attempts */
-	if (prHifInfo->fgInPciRecovery) {
-		DBGLOG(HAL, WARN, "Tier-3 recovery already in progress\n");
-		return WLAN_STATUS_FAILURE;
-	}
-
-	prHifInfo->fgInPciRecovery = TRUE;
-	prHifInfo->fgMmioGone = true;
-	prHifInfo->u8RecoveryStage      = RECOV_STAGE_QUIESCE;
-	prHifInfo->u8RecoveryFailReason = RECOV_FAIL_NONE;
-	prHifInfo->u4LastBarSample      = 0;
-	prHifInfo->u_recovery_fail_time = 0;
-
-	DBGLOG(HAL, WARN, "=== Tier-3 PCIe Recovery Start (Safe Mode) ===\n");
-
-	/* Tier-4.5: Diplomatic Wake (NOW it is safe to try this) */
-	pm_ret = pm_runtime_get_sync(&pdev->dev);
-	pci_set_power_state(pdev, PCI_D0);
-	
-	/* Force disable ASPM to prevent link entry/exit issues during reset */
-	pci_disable_link_state(pdev, PCIE_LINK_STATE_L0S | PCIE_LINK_STATE_L1 | PCIE_LINK_STATE_CLKPM);
-	
-	DBGLOG(HAL, WARN, "Tier-4.5: PM Wake (ret %d). ASPM Disabled. Bus Master Cleared.\n", pm_ret);
-
-	/* Force-clear the MMIO mapping to stop pending CPU transactions */
-	if (prHifInfo->CSRBaseAddress) {
-		iounmap(prHifInfo->CSRBaseAddress);
-		prHifInfo->CSRBaseAddress = NULL;
-	}
-
-	/* Step 1: Stop upper layer activity */
-	DBGLOG(HAL, INFO, "Tier-3: Stopping network queues\n");
-    /* V2 FIX: Removed unsafe kernel quiesce block that contained synchronize_irq() */
-	netif_tx_stop_all_queues(prGlueInfo->prDevHandler);
-
-	/* Step 2: Disable interrupts */
-    /* V2 FIX: Use nosync since IRQ might be dead */
-    DBGLOG(HAL, WARN, "Disabling IRQs (no sync - IRQ is dead)\n");
-	if (prHifInfo->u4IrqId) {
-		disable_irq_nosync(prHifInfo->u4IrqId);
-	}
-
-	/* Step 3: Tear down PCIe function state */
-	pci_disable_device(pdev);
-
-	/* Step 4: Force device to D0 power state (Deep Sleep Exit) */
-	pci_set_power_state(pdev, PCI_D0);
-	msleep(100);
-
-	/* Step 5: Re-enable PCIe function */
-	/* Tier-6: ACPI D3Cold Power Cycle */
-	DBGLOG(HAL, WARN, "Tier-6: Triggering ACPI D3cold power-cycle\n");
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_D3COLD_CYCLE;
-	pci_save_state(pdev);
-	pci_set_power_state(pdev, PCI_D3cold);
-	msleep(200);
-	pci_set_power_state(pdev, PCI_D0);
-	pci_restore_state(pdev);
-
-	u4Status = pci_enable_device(pdev);
-	if (u4Status != 0) {
-		DBGLOG(HAL, ERROR, "Tier-3: pci_enable_device failed: %d\n", u4Status);
-		prHifInfo->u8RecoveryFailReason = RECOV_FAIL_ENABLE_DEVICE;
-		goto recovery_failed;
-	}
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_REENABLE;
-
-	/* Step 6: Restore PCI state */
-	pci_restore_state(pdev);
-	
-	/* Step 7: Re-map MMIO BAR space */
-	DBGLOG(HAL, WARN, "Tier-3: Re-mapping MMIO BAR\n");
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_BAR_REMAP;
-	CSRBaseAddress = ioremap(pci_resource_start(pdev, 0), pci_resource_len(pdev, 0));
-	if (!CSRBaseAddress) {
-		DBGLOG(HAL, ERROR, "Tier-3: ioremap failed\n");
-		prHifInfo->u8RecoveryFailReason = RECOV_FAIL_IOREMAP;
-		goto recovery_failed;
-	}
-	/* Update the global handle so macros work */
-	prHifInfo->CSRBaseAddress = CSRBaseAddress;
-
-	/* Tier-4: Manual Secondary Bus Reset (SBR) */
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_SBR;
-	if (pdev->bus && pdev->bus->self) {
-		uint16_t ctrl;
-		struct pci_dev *bridge = pdev->bus->self;
-		DBGLOG(HAL, WARN, "Tier-4: Forcing Manual SBR via Bridge %04x:%02x\n", 
-			pci_domain_nr(bridge->bus), bridge->devfn);
-		pci_read_config_word(bridge, PCI_BRIDGE_CONTROL, &ctrl);
-		ctrl |= PCI_BRIDGE_CTL_BUS_RESET;
-		pci_write_config_word(bridge, PCI_BRIDGE_CONTROL, ctrl);
-		msleep(100); 
-		ctrl &= ~PCI_BRIDGE_CTL_BUS_RESET;
-		pci_write_config_word(bridge, PCI_BRIDGE_CONTROL, ctrl);
-		msleep(200);
-		pci_restore_state(pdev);
-	}
-
-	/* Tier-3.5: Platform Reset via PERST# */
-	DBGLOG(HAL, WARN, "Tier-3: Requesting PCIe Fundamental Reset\n");
-	if (pci_reset_function(pdev) != 0) {
-		if (pdev->bus->self)
-			pci_bridge_secondary_bus_reset(pdev->bus->self);
-	}
-	msleep(100);
-	pci_restore_state(pdev);
-
-	/* Before any HAL_MCR_WR */
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_BAR_PREFLIGHT;
-	HAL_MCR_RD(prAdapter, 0x18000000, &u4Val);
-	prHifInfo->u4LastBarSample = u4Val;
-	if (u4Val == 0xffffffff) {
-	    dump_pci_state(pdev);
-	    DBGLOG(HAL, ERROR, "BAR blind before any WFSYS writes - aborting\n");
-	    prHifInfo->u8RecoveryFailReason = RECOV_FAIL_BAR_BLIND_PRE;
-	    goto recovery_failed;
-	}
-
-	/* Tier-3.5: Force WFSYS Power Domain Cycle */
-	DBGLOG(HAL, WARN, "Tier-3: Power-cycling WFSYS domain\n");
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_WFSYS_PWRCYCLE;
-	HAL_MCR_RD(prAdapter, 0x18000100, &u4Val);
-	u4Val |= BIT(3);
-	HAL_MCR_WR(prAdapter, 0x18000100, u4Val);
-	mdelay(50);
-	u4Val &= ~BIT(3);
-	HAL_MCR_WR(prAdapter, 0x18000100, u4Val);
-	mdelay(100);
-
-	/* Tier-5: Forcing WFSYS clocks and performing hard reset */
-	DBGLOG(HAL, WARN, "Tier-5: Forcing WFSYS clocks and performing hard reset\n");
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_CLOCKS;
-	HAL_MCR_WR(prAdapter, 0x18000100, 0x00010001);
-	udelay(500);
-	HAL_MCR_WR(prAdapter, 0x18000100, 0x00010000);
-	msleep(100);
-	HAL_MCR_WR(prAdapter, 0x18000100, 0x00000000);
-	msleep(50);
-	
-	/* Reset Latch Toggle */
-	HAL_MCR_RD(prAdapter, 0x18000100, &u4Val);
-	u4Val |= BIT(0);
-	HAL_MCR_WR(prAdapter, 0x18000100, u4Val);
-	udelay(100);
-	u4Val &= ~BIT(0);
-	HAL_MCR_WR(prAdapter, 0x18000100, u4Val);
-	msleep(50);
-
-	/* Wait for Link Training */
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_LINK_WAIT;
-	{
-		uint16_t lnksta;
-		int retry = 50;
-		while (retry--) {
-			pcie_capability_read_word(pdev, PCI_EXP_LNKSTA, &lnksta);
-			if (!(lnksta & PCI_EXP_LNKSTA_LT)) break;
-			mdelay(10);
-		}
-		DBGLOG(HAL, WARN, "Tier-4: Link stable (LnkSta: 0x%04x)\n", lnksta);
-	}
-
-	/* Tier-4.7: Quiesce and Phased Clock Wake */
-	DBGLOG(HAL, WARN, "Tier-4: Phased WFSYS wake-up sequence\n");
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_PHASED_WAKE;
-	HAL_MCR_WR(prAdapter, 0x18000000 + 0x100, 0x00000000);
-	udelay(50);
-	HAL_MCR_WR(prAdapter, 0x18000000 + 0x158, 0xFFFFFFFF);
-	mdelay(10);
-	HAL_MCR_WR(prAdapter, 0x18000000 + 0x108, 0x00000000);
-	msleep(20);
-
-	/* Tier-6: Purging DMA engine */
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_DMA_PURGE;
-	HAL_MCR_WR(prAdapter, 0x1802b000 + 0x008, 0x00000001);
-	HAL_MCR_WR(prAdapter, 0x1802b000 + 0x010, 0x00000000);
-	udelay(500);
-	HAL_MCR_WR(prAdapter, 0x1802b000 + 0x008, 0x00000000);
-	msleep(100);
-
-	/* Final MCU Kickstart */
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_MCU_KICKSTART;
-	HAL_MCR_WR(prAdapter, 0x18000000 + 0x150, 0x00000001);
-	HAL_MCR_WR(prAdapter, 0x18000000 + 0x100, 0x00000000);
-	HAL_MCR_WR(prAdapter, 0x18000000 + 0x108, 0x00000000);
-	mdelay(20);
-	HAL_MCR_RD(prAdapter, 0x18000000 + 0x150, &u4Val);
-	u4Val |= BIT(0);
-	HAL_MCR_WR(prAdapter, 0x18000000 + 0x150, u4Val);
-
-	/* Tier-7: BAR Re-Sync / Link Verification */
-	DBGLOG(HAL, WARN, "Tier-7: Verifying BAR visibility before MCU boot\n");
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_BAR_TIER7;
-	HAL_MCR_RD(prAdapter, 0x18000000, &u4Val);
-	prHifInfo->u4LastBarSample = u4Val;
-	if (u4Val == 0xffffffff) {
-	    uint16_t cmd;
-	    DBGLOG(HAL, ERROR, "Tier-7: BAR is blind (0xffffffff). Attempting Command Register Kick.\n");
-	    pci_read_config_word(pdev, PCI_COMMAND, &cmd);
-	    pci_write_config_word(pdev, PCI_COMMAND, cmd & ~PCI_COMMAND_MEMORY);
-	    udelay(100);
-	    pci_write_config_word(pdev, PCI_COMMAND, cmd | PCI_COMMAND_MEMORY);
-	    msleep(50);
-
-	    /* Check again */
-	    HAL_MCR_RD(prAdapter, 0x18000000, &u4Val);
-	    prHifInfo->u4LastBarSample = u4Val;
-	    if (u4Val == 0xffffffff) {
-		DBGLOG(HAL, ERROR, "Tier-7: Hardware is physically detached. Aborting to prevent lockup.\n");
-		prHifInfo->u8RecoveryFailReason = RECOV_FAIL_BAR_BLIND_TIER7;
-		goto recovery_failed;
-	    }
-	}
-	DBGLOG(HAL, WARN, "Tier-7: BAR is alive. Proceeding to MCU boot.\n");
-
-	DBGLOG(HAL, WARN, "Tier-3: Performing WFSYS MCU cold boot\n");
-	prAdapter->fgIsFwOwn = TRUE;
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_MCU_COLDBOOT;
-
-	/* CRITICAL FIX: During recovery cold boot, we CAN poll WFDMA because 
-	 * fabric should be properly reset by this point (we did D3cold, SBR, etc.)
-	 * Unlike initial cold boot where fabric is uninitialized, here we're
-	 * recovering from a known state and WFDMA polling is appropriate.
+	/*
+	 * This recovery function is permanently disabled.
+	 *
+	 * The original implementation attempted a full D3cold power cycle,
+	 * secondary bus reset, MCU cold boot, and wlanAdapterStart() to
+	 * respawn all driver threads.  It never successfully recovered the
+	 * hardware in practice and introduced a race with rmmod:
+	 *
+	 *   - wlanAdapterStart() calls reinit_completion() on rHaltComp /
+	 *     rHifHaltComp / rRxHaltComp and spawns new main_thread,
+	 *     hif_thread, and rx_thread.
+	 *   - If rmmod races with or follows a recovery attempt, those new
+	 *     threads are alive on a broken adapter.  main_thread then gets
+	 *     stuck dispatching a pending OID to dead firmware
+	 *     (wlanSendCommandPacket waits indefinitely on rPendComp), and
+	 *     complete(&rHaltComp) is never reached — hanging rmmod forever.
+	 *
+	 * The correct response to unrecoverable hardware is to let the driver
+	 * unload cleanly (or for the user to reboot).  The MMIO-gone detection
+	 * and the TEARDOWN flag still prevent further damage; we just don't
+	 * attempt the futile recovery.
 	 */
-	g_fgInInitialColdBoot = FALSE;
-	DBGLOG(HAL, INFO, "Recovery context: enabling WFDMA polling for cold boot\n");
-
-	{
-		int coldboot_ret = mt79xx_wfsys_cold_boot_and_wait(prAdapter);
-		if (coldboot_ret != 0) {
-			DBGLOG(HAL, ERROR, "Tier-3: MCU cold boot failed (ret=%d)\n", coldboot_ret);
-			if (coldboot_ret == -EIO)
-				prHifInfo->u8RecoveryFailReason = RECOV_FAIL_COLDBOOT_BLIND;
-			else if (coldboot_ret == -ETIMEDOUT)
-				prHifInfo->u8RecoveryFailReason = RECOV_FAIL_COLDBOOT_TIMEOUT;
-			else
-				prHifInfo->u8RecoveryFailReason = RECOV_FAIL_COLDBOOT_OTHER;
-			goto recovery_failed;
-		}
-	}
-	DBGLOG(HAL, INFO, "Tier-3: MCU is alive and initialized\n");
-	
-	/* NOW it is safe to re-enable Bus Mastering */
-	pci_set_master(pdev);
-	pm_runtime_put_sync(&pdev->dev);
-
-	DBGLOG(HAL, WARN, "Tier-3: Re-initializing adapter\n");
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_ADAPTER_START;
-	prRegInfo = &prGlueInfo->rRegInfo;
-
-	u4Status = wlanAdapterStart(prAdapter, prRegInfo, FALSE);
-	if (u4Status != WLAN_STATUS_SUCCESS) {
-		DBGLOG(HAL, ERROR, "Tier-3: wlanAdapterStart failed: 0x%x\n", u4Status);
-		prHifInfo->u8RecoveryFailReason = RECOV_FAIL_ADAPTER_START;
-		goto recovery_failed;
-	}
-
-	if (prHifInfo->u4IrqId) {
-		enable_irq(prHifInfo->u4IrqId);
-	}
-    
-    /* V2 FIX: Mark IRQ as alive again after successful recovery */
-    set_bit(MTK_FLAG_IRQ_ALIVE, &prHifInfo->state_flags);
-    clear_bit(MTK_FLAG_MMIO_GONE, &prHifInfo->state_flags);
-    
-	netif_tx_wake_all_queues(prGlueInfo->prDevHandler);
-
-	prHifInfo->fgInPciRecovery = FALSE;
-	prHifInfo->fgMmioGone = FALSE;
-	prHifInfo->u8RecoveryStage = RECOV_STAGE_COMPLETE;
-
-	DBGLOG(HAL, WARN, "=== Tier-3 PCIe Recovery Complete ===\n");
-	return WLAN_STATUS_SUCCESS;
-
-recovery_failed:
-	prHifInfo->u_recovery_fail_time = jiffies;
-	DBGLOG(HAL, ERROR,
-		"=== Tier-3 PCIe Recovery FAILED === stage=%u reason=%u lastBAR=0x%08x\n",
-		(unsigned)prHifInfo->u8RecoveryStage,
-		(unsigned)prHifInfo->u8RecoveryFailReason,
-		prHifInfo->u4LastBarSample);
-
-	/* Full-state dump — gives us PCI config + AER, mailbox words,
-	 * and PDMA ring indices in a single dmesg burst.  Each helper
-	 * guards itself against NULL CSRBaseAddress.
-	 */
-	dump_pci_state(pdev);
-	dump_mailbox(prAdapter);
-	dump_pdma_state(prAdapter);
-
-	prHifInfo->fgInPciRecovery = FALSE;
+	DBGLOG(HAL, WARN,
+	       "mt79xx_pci_function_recover: recovery disabled, returning failure\n");
 	return WLAN_STATUS_FAILURE;
 }
 

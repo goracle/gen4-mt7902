@@ -4060,6 +4060,23 @@ void kalProcessTxReq(struct GLUE_INFO *prGlueInfo,
 	u4TxLoopCount =
 		prGlueInfo->prAdapter->rWifiVar.u4TxFromOsLoopCount;
 
+	/*
+	 * HALT guard: GLUE_FLAG_HALT may have been set *after* main_thread
+	 * passed its loop-top check but before we were dispatched here.
+	 * wlanProcessMboxMessage → mboxRcvAllMsg → aisFsmRunEventScanDone →
+    if (prGlueInfo->ulFlag & GLUE_FLAG_HALT) return;
+	 * kalScanDone → scanReportBss2Cfg80211 → wlanSortChannel has an
+	 * infinite-loop bug under teardown (confirmed: state=R for 60 s at
+	 * two different PCs inside wlanSortChannel).  Do not enter any of
+	 * this under HALT.
+	 */
+	if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
+	    kalIsResetting() || kthread_should_stop()) {
+		DBGLOG(INIT, INFO,
+		       "kalProcessTxReq: HALT set, skipping mbox+tx\n");
+		return;
+	}
+
 	/* Process Mailbox Messages */
 	wlanProcessMboxMessage(prGlueInfo->prAdapter);
 
@@ -4204,7 +4221,7 @@ int hif_thread(void *data)
 	kalSetThreadSchPolicyPriority(prGlueInfo);
 
 	while (!kthread_should_stop()) {
-		DBGLOG(INIT, INFO, "main_thread: loop top flags=0x%lx stop=%d\n", prGlueInfo->ulFlag, kthread_should_stop());
+		DBGLOG(INIT, INFO, "hif_thread: loop top flags=0x%lx stop=%d\n", prGlueInfo->ulFlag, kthread_should_stop());
 
 		if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
 				kalIsResetting() || kthread_should_stop()) {
@@ -4225,9 +4242,10 @@ int hif_thread(void *data)
 		 */
 		do {
 			ret = wait_event_interruptible(prGlueInfo->waitq_hif,
-				((prGlueInfo->ulFlag & GLUE_FLAG_HIF_PROCESS)
-				!= 0));
-		} while (ret != 0);
+				kthread_should_stop() ||
+				((prGlueInfo->ulFlag & GLUE_FLAG_HIF_PROCESS) != 0) ||
+				(prGlueInfo->ulFlag & GLUE_FLAG_HALT));
+		} while (ret != 0 && !kthread_should_stop());
 #if CFG_ENABLE_WAKE_LOCK
 		if (!KAL_WAKE_LOCK_ACTIVE(prGlueInfo->prAdapter,
 					  prHifThreadWakeLock))
@@ -4242,6 +4260,34 @@ int hif_thread(void *data)
 				  &prGlueInfo->ulFlag);
 			continue;
 		}
+
+		/*
+		 * HALT guard before wlanAcquirePowerControl.
+		 *
+		 * wlanAcquirePowerControl() runs ACQUIRE_POWER_CONTROL_FROM_PM,
+		 * which writes to CSRBaseAddress and polls for the PCIe firmware
+		 * to hand driver-ownership back.  During normal operation this
+		 * returns quickly.  During teardown, however:
+		 *
+		 *  - glBusFreeIrq() is now called *after* wlanOffStopWlanThreads()
+		 *    so CSRBaseAddress is still mapped (not yet iounmap'd).
+		 *  - nicDisableInterrupt() has already run, so the firmware may
+		 *    not respond to the ownership request.
+		 *  - Result: the poll spins forever, hif_thread never reaches
+		 *    complete(&rHifHaltComp), and rmmod hangs indefinitely.
+		 *
+		 * Fix: if HALT is set at this point we have nothing useful to do
+		 * in the rest of the loop body anyway (every action bit is
+		 * individually HALT-guarded below).  Break immediately without
+		 * touching hardware.
+		 */
+		if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
+		    kalIsResetting() || kthread_should_stop()) {
+			DBGLOG(INIT, INFO,
+			       "hif_thread: HALT before AcquirePowerControl, stopping\n");
+			break;
+		}
+
 		wlanAcquirePowerControl(prAdapter);
 
 		/* Handle Interrupt */
@@ -4264,9 +4310,23 @@ int hif_thread(void *data)
 			}
 		}
 
-		/* Skip Tx request if SER is operating */
+		/*
+		 * Skip Tx if SER is operating, OR if HALT is set.
+		 *
+		 * HALT guard is critical: wlanRemove() calls glBusFreeIrq()
+		 * (which unmaps CSRBaseAddress and releases PCI regions) BEFORE
+		 * calling wlanOffStopWlanThreads().  If hif_thread enters
+		 * wlanTxCmdMthread() after the BAR is gone it holds
+		 * MUTEX_TX_CMD_CLEAR while doing PCI I/O against unmapped
+		 * memory.  On x86 PCIe that stall prevents
+		 * MUTEX_TX_CMD_CLEAR from being released.  main_thread's
+		 * cleanup then blocks on KAL_ACQUIRE_MUTEX(MUTEX_TX_CMD_CLEAR)
+		 * inside wlanReleasePendingOid(), complete(&rHaltComp) is
+		 * never reached, and wait_for_completion() hangs indefinitely.
+		 */
 		if ((prAdapter->fgIsFwOwn == FALSE) &&
-		    !nicSerIsTxStop(prAdapter)) {
+		    !nicSerIsTxStop(prAdapter) &&
+		    !(prGlueInfo->ulFlag & GLUE_FLAG_HALT)) {
 			/* TX Commands */
 			if (test_and_clear_bit(GLUE_FLAG_HIF_TX_CMD_BIT,
 					       &prGlueInfo->ulFlag))
@@ -4297,7 +4357,6 @@ int hif_thread(void *data)
 		wlanReleasePowerControl(prAdapter);
 	}
 
-	complete(&prGlueInfo->rHifHaltComp);
 #if CFG_ENABLE_WAKE_LOCK
 	if (KAL_WAKE_LOCK_ACTIVE(prGlueInfo->prAdapter,
 				 prHifThreadWakeLock))
@@ -4308,8 +4367,7 @@ int hif_thread(void *data)
 
 	DBGLOG(INIT, TRACE, "%s:%u stopped!\n",
 	       KAL_GET_CURRENT_THREAD_NAME(), KAL_GET_CURRENT_THREAD_ID());
-	DBGLOG(INIT, INFO, "main_thread: signaling rHaltComp\n");
-	complete(&prGlueInfo->rHaltComp);
+	complete(&prGlueInfo->rHifHaltComp);
 
 #if CFG_CHIP_RESET_HANG
 	while (fgIsResetHangState == SER_L0_HANG_RST_HANG) {
@@ -4318,6 +4376,20 @@ int hif_thread(void *data)
 	}
 #endif
 
+	/*
+	 * Park until kthread_stop() is called.
+	 *
+	 * complete() wakes wlanOffStopWlanThreads, which immediately calls
+	 * kthread_stop() and then proceeds to free prGlueInfo.  Without this
+	 * loop the thread can still be executing (spinlock tail of complete(),
+	 * or anything below it) when prGlueInfo is freed, causing a page fault
+	 * with IRQs disabled.  Parking here keeps the thread fully alive and
+	 * idle until kthread_stop() explicitly unblocks it.
+	 */
+	while (!kthread_should_stop()) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule();
+	}
 	return 0;
 }
 
@@ -4373,8 +4445,10 @@ int rx_thread(void *data)
 		 */
 		do {
 			ret = wait_event_interruptible(prGlueInfo->waitq_rx,
-			    ((prGlueInfo->ulFlag & GLUE_FLAG_RX_PROCESS) != 0));
-		} while (ret != 0);
+			    kthread_should_stop() ||
+			    ((prGlueInfo->ulFlag & GLUE_FLAG_RX_PROCESS) != 0) ||
+			    (prGlueInfo->ulFlag & GLUE_FLAG_HALT));
+		} while (ret != 0 && !kthread_should_stop());
 #if CFG_ENABLE_WAKE_LOCK
 		if (!KAL_WAKE_LOCK_ACTIVE(prGlueInfo->prAdapter,
 					  prRxThreadWakeLock))
@@ -4418,7 +4492,6 @@ int rx_thread(void *data)
 		}
 	}
 
-	complete(&prGlueInfo->rRxHaltComp);
 #if CFG_ENABLE_WAKE_LOCK
 	if (KAL_WAKE_LOCK_ACTIVE(prGlueInfo->prAdapter,
 				 prRxThreadWakeLock))
@@ -4429,6 +4502,7 @@ int rx_thread(void *data)
 
 	DBGLOG(INIT, TRACE, "%s:%u stopped!\n",
 	       KAL_GET_CURRENT_THREAD_NAME(), KAL_GET_CURRENT_THREAD_ID());
+	complete(&prGlueInfo->rRxHaltComp);
 
 #if CFG_CHIP_RESET_HANG
 	while (fgIsResetHangState == SER_L0_HANG_RST_HANG) {
@@ -4437,6 +4511,11 @@ int rx_thread(void *data)
 	}
 #endif
 
+	/* Park until kthread_stop() — see hif_thread comment above. */
+	while (!kthread_should_stop()) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule();
+	}
 	return 0;
 }
 #endif
@@ -4524,6 +4603,9 @@ int main_thread(void *data)
 		} while (ret != 0 && !kthread_should_stop());
 		if (kthread_should_stop())
 			break;
+		DBGLOG(INIT, INFO,
+		       "main_thread: woke ulFlag=0x%lx ret=%d should_stop=%d\n",
+		       prGlueInfo->ulFlag, ret, kthread_should_stop());
 #if CFG_ENABLE_WAKE_LOCK
 		if (!KAL_WAKE_LOCK_ACTIVE(prGlueInfo->prAdapter,
 					  prTxThreadWakeLock))
@@ -4659,6 +4741,35 @@ int main_thread(void *data)
 					       &prGlueInfo->ulFlag)) {
 				/* get current prIoReq */
 				prIoReq = &(prGlueInfo->OidEntry);
+
+				/*
+				 * HALT guard for OID dispatch.
+				 *
+				 * Without this, a pending OID (e.g. scan-start,
+				 * connect) dispatched to wlanSetInformation /
+				 * wlanQueryInformation can call
+				 * wlanSendCommandPacket(), which waits
+				 * indefinitely on rPendComp for a firmware ACK.
+				 * If HALT is set the firmware is either halted or
+				 * unreachable, so that ACK never arrives.
+				 * main_thread then never reaches the loop-top
+				 * HALT check, never breaks, and never calls
+				 * complete(&rHaltComp) — hanging rmmod forever.
+				 *
+				 * Fix: under HALT, skip the OID handler entirely,
+				 * fail the request immediately, and unblock any
+				 * ioctl caller waiting on rPendComp.
+				 */
+				if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
+				    kalIsResetting() || kthread_should_stop()) {
+					DBGLOG(INIT, INFO,
+					       "OID skipped under HALT, failing immediately\n");
+					prIoReq->rStatus = WLAN_STATUS_FAILURE;
+					if (!completion_done(&prGlueInfo->rPendComp))
+						complete(&prGlueInfo->rPendComp);
+					break;
+				}
+
 				if (prIoReq->fgRead == FALSE) {
 					prIoReq->rStatus = wlanSetInformation(
 							prIoReq->prAdapter,
@@ -4707,8 +4818,22 @@ int main_thread(void *data)
 #endif
 
 		if (test_and_clear_bit(GLUE_FLAG_TXREQ_BIT,
-				       &prGlueInfo->ulFlag))
-			kalProcessTxReq(prGlueInfo, &fgNeedHwAccess);
+				       &prGlueInfo->ulFlag)) {
+			/*
+			 * Guard against HALT: glBusFreeIrq() may already have
+			 * released PCI regions before we reach here.  Without
+			 * this check main_thread drives into nicTxCmd() /
+			 * wlanProcessCommandQueue() against a dead BAR and hangs
+			 * indefinitely (or blocks on MUTEX_TX_CMD_CLEAR held by
+			 * hif_thread in the same dead PCI path).  This matches
+			 * the existing guards on nicRxProcessRFBs and
+			 * wlanTimerTimeoutCheck.
+			 */
+			if (!(prGlueInfo->ulFlag & GLUE_FLAG_HALT) &&
+					!kalIsResetting() &&
+					!kthread_should_stop())
+				kalProcessTxReq(prGlueInfo, &fgNeedHwAccess);
+		}
 
 #if CFG_SUPPORT_MULTITHREAD
 		/* Process RX */
@@ -4716,12 +4841,19 @@ int main_thread(void *data)
 		testProcessRFBs(prGlueInfo->prAdapter);
 #endif
 		if (test_and_clear_bit(GLUE_FLAG_TX_CMD_DONE_BIT,
-				       &prGlueInfo->ulFlag))
-			wlanTxCmdDoneMthread(prGlueInfo->prAdapter);
+				       &prGlueInfo->ulFlag)) {
+			/* Same HALT guard as above — wlanTxCmdDoneMthread also
+			 * touches hardware and holds MUTEX_TX_CMD_CLEAR. */
+			if (!(prGlueInfo->ulFlag & GLUE_FLAG_HALT) &&
+					!kalIsResetting() &&
+					!kthread_should_stop())
+				wlanTxCmdDoneMthread(prGlueInfo->prAdapter);
+		}
 #endif
 		if (test_and_clear_bit(GLUE_FLAG_RX_BIT,
 					   &prGlueInfo->ulFlag)) {
-			if (!(prGlueInfo->ulFlag & GLUE_FLAG_HALT))
+			if (!(prGlueInfo->ulFlag & GLUE_FLAG_HALT) &&
+					!kalIsResetting() && !kthread_should_stop())
 				nicRxProcessRFBs(prGlueInfo->prAdapter);
 		}
 
@@ -4760,17 +4892,28 @@ int main_thread(void *data)
 		wlanReleasePowerControl(prGlueInfo->prAdapter);
 #endif
 
+	pr_warn("[wlan] main_thread: exited loop, starting cleanup"
+		" ulFlag=0x%lx\n", prGlueInfo->ulFlag);
+
 	/* flush the pending TX packets */
+	pr_warn("[wlan] main_thread: flushing pending TX (cnt=%d)\n",
+		GLUE_GET_REF_CNT(prGlueInfo->i4TxPendingFrameNum));
 	if (GLUE_GET_REF_CNT(prGlueInfo->i4TxPendingFrameNum) > 0)
 		kalFlushPendingTxPackets(prGlueInfo);
+	pr_warn("[wlan] main_thread: kalFlushPendingTxPackets done\n");
 
 	/* flush pending security frames */
+	pr_warn("[wlan] main_thread: clearing security frames (cnt=%d)\n",
+		GLUE_GET_REF_CNT(prGlueInfo->i4TxPendingSecurityFrameNum));
 	if (GLUE_GET_REF_CNT(
 		    prGlueInfo->i4TxPendingSecurityFrameNum) > 0)
 		kalClearSecurityFrames(prGlueInfo);
+	pr_warn("[wlan] main_thread: kalClearSecurityFrames done\n");
 
 	/* remove pending oid */
+	pr_warn("[wlan] main_thread: calling wlanReleasePendingOid\n");
 	wlanReleasePendingOid(prGlueInfo->prAdapter, 1);
+	pr_warn("[wlan] main_thread: wlanReleasePendingOid done\n");
 
 #if CFG_ENABLE_WAKE_LOCK
 	if (KAL_WAKE_LOCK_ACTIVE(prGlueInfo->prAdapter,
@@ -4790,6 +4933,17 @@ int main_thread(void *data)
 	}
 #endif
 
+	/* Signal wlanOffStopWlanThreads that cleanup is complete, then park
+	 * until kthread_stop() unblocks us.  See hif_thread for rationale.
+	 * Nothing after complete() may touch prGlueInfo except the parking
+	 * loop itself (which only calls kthread_should_stop / schedule). */
+	pr_warn("[wlan] main_thread: signaling rHaltComp\n");
+	complete(&prGlueInfo->rHaltComp);
+
+	while (!kthread_should_stop()) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule();
+	}
 	return 0;
 
 }
@@ -5255,9 +5409,26 @@ void kalScanDone(IN struct GLUE_INFO *prGlueInfo,
     if (IS_BSS_INDEX_AIS(prAdapter, ucBssIndex))
         scanLogEssResult(prAdapter);
 
+    /*
+    if (prGlueInfo->ulFlag & GLUE_FLAG_HALT) return;
+     * HALT guard: scanReportBss2Cfg80211 → wlanSortChannel contains an
+     * infinite loop under teardown (corrupted BSS list or count).
+     * Confirmed by sched_show_task: state=R at two different PCs inside
+     * wlanSortChannel 30 s apart.  Skip the entire scan reporting path
+     * when HALT is set — cfg80211 is being torn down anyway and does not
+     * need these results.
+     */
+    if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) || kalIsResetting()) {
+        pr_warn("[wlan] kalScanDone: HALT set, skipping scan report to cfg80211\n");
+        if (prAisFsmInfo)
+            prAisFsmInfo->fgIsScanReporting = FALSE;
+        return;
+    }
+
     /* Hand BSS entries to cfg80211. The reporting guard keeps
      * nicDeactivateNetwork from nuking the BSS context under us.
      */
+    if (prGlueInfo->ulFlag & GLUE_FLAG_HALT) return;
     scanReportBss2Cfg80211(prAdapter, BSS_TYPE_INFRASTRUCTURE, NULL);
 
     wlanCheckSystemConfiguration(prAdapter);
@@ -6558,6 +6729,7 @@ void *pMetGlobalData;
 void kalSchedScanResults(IN struct GLUE_INFO *prGlueInfo)
 {
 	ASSERT(prGlueInfo);
+    if (prGlueInfo->ulFlag & GLUE_FLAG_HALT) return;
 	scanReportBss2Cfg80211(prGlueInfo->prAdapter,
 			       BSS_TYPE_INFRASTRUCTURE, NULL);
 

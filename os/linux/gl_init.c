@@ -73,7 +73,7 @@
  */
 #include <linux/pci.h>
 #include <linux/pci.h>
-
+#include <linux/sched/debug.h>
 #include "gl_os.h"
 #include "debug.h"
 #include "wlan_lib.h"
@@ -4964,14 +4964,62 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 		INIT_DELAYED_WORK(&prGlueInfo->rRxPktDeAggWork,
 				halDeAggRxPktWorker);
 	}
-	prGlueInfo->main_thread = kthread_run(main_thread,
-		prGlueInfo->prDevHandler, "main_thread");
+	/*
+	 * Reinitialise halt completions BEFORE spawning threads.
+	 *
+	 * On first probe init_completion() already gives done=0 so this is a
+	 * no-op.  After a chip reset/recovery the previous thread generation
+	 * left done=1 in each completion; resetting here ensures that
+	 * wlanOffStopWlanThreads()'s wait_for_completion() always waits for
+	 * the *current* generation of threads and never sees a stale signal.
+	 *
+	 * Critical ordering: reinit BEFORE kthread_run().  If the new thread
+	 * observes GLUE_FLAG_HALT immediately (rmmod racing with recovery) and
+	 * fires complete() before we reach wait_for_completion(), the signal is
+	 * preserved.  If we reinit after kthread_run() there would be a window
+	 * where the fresh completion could be discarded.
+	 */
+	reinit_completion(&prGlueInfo->rHaltComp);
+#if CFG_SUPPORT_MULTITHREAD
+	reinit_completion(&prGlueInfo->rHifHaltComp);
+	reinit_completion(&prGlueInfo->rRxHaltComp);
+#endif
+
+	{
+		struct task_struct *_t = kthread_run(main_thread,
+			prGlueInfo->prDevHandler, "main_thread");
+		if (IS_ERR(_t)) {
+			DBGLOG(INIT, ERROR, "kthread_run(main_thread) failed: %ld\n",
+				PTR_ERR(_t));
+			prGlueInfo->main_thread = NULL;
+			return PTR_ERR(_t);
+		}
+		prGlueInfo->main_thread = _t;
+	}
 #if CFG_SUPPORT_MULTITHREAD
 	INIT_WORK(&prGlueInfo->rTxMsduFreeWork, kalFreeTxMsduWorker);
-	prGlueInfo->hif_thread = kthread_run(hif_thread,
+	{
+		struct task_struct *_t = kthread_run(hif_thread,
 			prGlueInfo->prDevHandler, "hif_thread");
-	prGlueInfo->rx_thread = kthread_run(rx_thread,
+		if (IS_ERR(_t)) {
+			DBGLOG(INIT, ERROR, "kthread_run(hif_thread) failed: %ld\n",
+				PTR_ERR(_t));
+			prGlueInfo->hif_thread = NULL;
+			return PTR_ERR(_t);
+		}
+		prGlueInfo->hif_thread = _t;
+	}
+	{
+		struct task_struct *_t = kthread_run(rx_thread,
 			prGlueInfo->prDevHandler, "rx_thread");
+		if (IS_ERR(_t)) {
+			DBGLOG(INIT, ERROR, "kthread_run(rx_thread) failed: %ld\n",
+				PTR_ERR(_t));
+			prGlueInfo->rx_thread = NULL;
+			return PTR_ERR(_t);
+		}
+		prGlueInfo->rx_thread = _t;
+	}
 #endif
 
 	if (!bAtResetFlow)
@@ -5809,8 +5857,120 @@ static int32_t wlanPowerOnInit(void)
 #endif
 
 
+/*
+ * Crash forensics (keep for future reference):
+ *
+ * kthread_stop+0x40 faults at: mov rbp, [rbx + 0xba8]  (rbp → 0, then NULL deref)
+ * rbx = valid task_struct pointer (non-NULL, non-ERR_PTR, passes all guards)
+ * Preceded by: "refcount_t: addition on 0; use-after-free"
+ *
+ * The task_struct memory is still mapped but the kthread cookie at offset 0xba8
+ * (struct kthread *) is NULL — meaning the kthread internals have already been
+ * torn down.  This happens because:
+ *
+ *   1. Thread calls complete(&rHaltComp) then return 0.
+ *   2. Kthread machinery runs kthread_exit() → do_exit() → drops its own
+ *      task_struct reference → if no other reference is held, the struct kthread
+ *      embedded in the task can be freed (zeroed) before our kthread_stop() runs.
+ *   3. kthread_stop() dereferences the now-NULL kthread cookie → crash.
+ *
+ * Fix: pin every task_struct with get_task_struct() BEFORE waiting on any
+ * completion.  This holds a reference that prevents the kthread internals from
+ * being freed while we wait.  Release with put_task_struct() only AFTER
+ * kthread_stop() returns.
+ *
+ * We snapshot and NULL the glue pointer atomically with xchg() first so that
+ * concurrent / re-entrant callers see NULL and skip, preventing double-stop.
+ */
+
+struct wlan_thread_ref {
+	struct task_struct *task;
+	const char         *name;
+	bool                body_done; /* true if driver-level completion fired */
+};
+
+/*
+ * snapshot_thread - atomically take the thread pointer from *tptr, pin it,
+ * and return a ref struct.  Returns {NULL, name} if the pointer was already
+ * NULL or an ERR_PTR — callers must check .task before using.
+ */
+static struct wlan_thread_ref snapshot_thread(struct task_struct **tptr,
+					      const char *name)
+{
+	struct wlan_thread_ref ref = { NULL, name, false };
+	struct task_struct *t;
+
+	if (!tptr)
+		return ref;
+
+	t = xchg(tptr, NULL);           /* atomically take & zero the slot */
+	if (!t || IS_ERR(t)) {
+		DBGLOG(INIT, WARN,
+			"snapshot_thread: %s was %s at snapshot time\n",
+			name, !t ? "NULL" : "ERR_PTR");
+		return ref;
+	}
+
+	/*
+	 * Pin the task_struct NOW, before any completion wait.
+	 * This prevents the kthread machinery from freeing the struct kthread
+	 * cookie (offset ~0xba8 in task_struct) between the thread's return 0
+	 * and our kthread_stop() call, which was the observed crash.
+	 */
+	get_task_struct(t);
+	ref.task = t;
+	DBGLOG(INIT, INFO, "snapshot_thread: %s pinned (task %px)\n", name, t);
+	return ref;
+}
+
+/*
+ * stop_thread_ref - call kthread_stop() on a pinned ref, then release the pin.
+ * No-op if ref.task is NULL (already skipped at snapshot time).
+ */
+static void stop_thread_ref(struct wlan_thread_ref *ref)
+{
+	if (!ref->task)
+		return;
+
+	if (!ref->body_done) {
+		/*
+		 * The driver-level completion timed out — the thread is wedged
+		 * inside the loop body (likely blocked in hardware I/O after a
+		 * deadfeed), not in wait_event_interruptible.  In that state
+		 * kthread_stop() would block forever because kthread_should_stop()
+		 * is never re-checked.
+		 *
+		 * We set the kthread stop flag via kthread_stop() but cannot wait
+		 * for it.  Instead we just release our pin and accept that the
+		 * thread leaks — it will be killed when the kernel module is torn
+		 * down or on the next reboot.  This is far better than hanging
+		 * rmmod indefinitely.
+		 */
+		DBGLOG(INIT, WARN,
+			"stop_thread_ref: %s timed out, skipping kthread_stop "
+			"to avoid hang (thread wedged in HW path)\n",
+			ref->name);
+		put_task_struct(ref->task);
+		ref->task = NULL;
+		return;
+	}
+
+	DBGLOG(INIT, INFO, "stop_thread_ref: stopping %s (task %px)\n",
+		ref->name, ref->task);
+	kthread_stop(ref->task);
+	DBGLOG(INIT, INFO, "stop_thread_ref: %s reaped\n", ref->name);
+
+	put_task_struct(ref->task);     /* release the pin we took in snapshot */
+	ref->task = NULL;
+}
+
 void wlanOffStopWlanThreads(IN struct GLUE_INFO *prGlueInfo)
 {
+#if CFG_SUPPORT_MULTITHREAD
+	struct wlan_thread_ref hif_ref, rx_ref;
+#endif
+	struct wlan_thread_ref main_ref;
+
 	DBGLOG(INIT, TRACE, "start.\n");
 
 	if (prGlueInfo->main_thread == NULL
@@ -5819,37 +5979,224 @@ void wlanOffStopWlanThreads(IN struct GLUE_INFO *prGlueInfo)
 		&& prGlueInfo->rx_thread == NULL
 #endif
 		) {
-
 		DBGLOG(INIT, INFO,
 			"Threads are already NULL, skip stop and free\n");
 		return;
 	}
 
+	/*
+	 * Phase 1: snapshot all thread pointers and pin their task_structs.
+	 *
+	 * We do this FIRST, before any wakeup or completion wait, so that the
+	 * get_task_struct() pin is in place before the thread has a chance to
+	 * exit and have its kthread internals freed.  xchg() also atomically
+	 * clears the glue slot so re-entrant callers see NULL and skip.
+	 */
+#if CFG_SUPPORT_MULTITHREAD
+	hif_ref  = snapshot_thread(&prGlueInfo->hif_thread,  "hif_thread");
+	rx_ref   = snapshot_thread(&prGlueInfo->rx_thread,   "rx_thread");
+#endif
+	main_ref = snapshot_thread(&prGlueInfo->main_thread, "main_thread");
+
+	/*
+	 * Phase 2: signal HALT and wake all threads so they exit their loops
+	 * and reach their respective complete() + return 0.
+	 * Nudge via both wake_up_interruptible (queue) and wake_up_process
+	 * (direct scheduler) to cover races where the queue wakeup is missed.
+	 */
 #if CFG_SUPPORT_MULTITHREAD
 	wake_up_interruptible(&prGlueInfo->waitq_hif);
-	if (!wait_for_completion_timeout(&prGlueInfo->rHifHaltComp, 10*HZ))
-		DBGLOG(INIT, WARN, "hif_thread halt timeout\n");
+	if (hif_ref.task)
+		wake_up_process(hif_ref.task);
+
 	wake_up_interruptible(&prGlueInfo->waitq_rx);
-	if (!wait_for_completion_timeout(&prGlueInfo->rRxHaltComp, 10*HZ))
-		DBGLOG(INIT, WARN, "rx_thread halt timeout\n");
+	if (rx_ref.task)
+		wake_up_process(rx_ref.task);
+#endif
+	wake_up_interruptible(&prGlueInfo->waitq);
+	if (main_ref.task)
+		wake_up_process(main_ref.task);
+
+	/*
+	 * Phase 3: wait for driver-level completions.
+	 *
+	 * IMPORTANT: we must not allow the module to unload while any thread is
+	 * still executing module code.
+	 *
+	 * Ordering rationale: wait for main_thread first (indefinitely), then
+	 * hif/rx with a 30s timeout.  main_thread does the heavy cleanup
+	 * (wlanReleasePendingOid, flushes, etc.) after seeing HALT; once it
+	 * signals done, hif/rx are usually close to done as well, so the 30s
+	 * window is rarely needed.  Waiting for hif/rx before main risks
+	 * wasting 60s on timeouts before we even start on main.
+	 *
+	 * main_thread: MUST use an indefinite wait.  The thread wakes promptly
+	 * from wait_event_interruptible when HALT is set, but then does real
+	 * cleanup that can take time.  A finite timeout here would cause us to
+	 * skip kthread_stop() while the thread is still running module code,
+	 * which causes a page-fault crash when the module text is unmapped.
+	 *
+	 * hif/rx: use a 30s timeout.  If they do not signal in time they are
+	 * genuinely wedged in a dead HW path (deadfeed pattern); in that case
+	 * we skip kthread_stop() to avoid hanging rmmod indefinitely.  The
+	 * thread leaks but rmmod completes safely.  Note: calling kthread_stop()
+	 * on a thread stuck in a non-interruptible HW call hangs forever because
+	 * kthread->exited never fires — that is worse than the leak.
+	 *
+	 * No stale-completion reinit is needed here.  wlanAdapterStart() always
+	 * calls reinit_completion() on all three halt completions immediately
+	 * before spawning threads (see thread creation block in wlanAdapterStart).
+	 * Therefore done=1 at this point always means the *current* thread
+	 * already fired — wait_for_completion() will return instantly, which is
+	 * the correct behaviour.  The old racy reinit-on-done-and-live-task
+	 * logic was removed because it could discard a genuine completion from
+	 * the current thread and cause wait_for_completion() to hang forever.
+	 */
+
+	/*
+	 * Wait for hif_thread and rx_thread BEFORE main_thread.
+	 *
+	 * Ordering rationale: hif_thread holds MUTEX_TX_CMD_CLEAR while
+	 * executing wlanTxCmdMthread().  If it entered that function just
+	 * before HALT was set, it may be stuck doing PCI I/O against a now-
+	 * dead BAR (deadfeed pattern).  main_thread's cleanup path calls
+	 * wlanReleasePendingOid() which acquires the same mutex — so if we
+	 * wait for main first, we deadlock: main blocks on the mutex that hif
+	 * will never release, main never signals rHaltComp, the 30 s timer
+	 * fires, and we leak both threads (crash on module unload).
+	 *
+	 * By waiting for hif/rx first we give them a chance to exit cleanly
+	 * and release the mutex before main_thread ever tries to take it.
+	 * In the deadfeed case hif times out after 30 s; wlanReleasePendingOid
+	 * then uses mutex_trylock so main_thread is never stuck either.
+	 *
+	 * The kthread_stop() order (Phase 4) remains hif→rx→main as before.
+	 */
+#if CFG_SUPPORT_MULTITHREAD
+	{
+		ktime_t _t = ktime_get();
+
+		if (!wait_for_completion_timeout(&prGlueInfo->rHifHaltComp,
+						 30 * HZ)) {
+			pr_warn("[wlan] hif_thread halt TIMEOUT after 30s"
+				" — ulFlag=0x%lx\n", prGlueInfo->ulFlag);
+			if (hif_ref.task) {
+				pr_warn("[wlan] hif_thread (pid %d) state=%ld:\n",
+					task_pid_nr(hif_ref.task),
+					hif_ref.task->__state);
+				sched_show_task(hif_ref.task);
+			}
+		} else {
+			hif_ref.body_done = true;
+		}
+		pr_warn("[wlan] hif_thread body done=%d in %lldms\n",
+			hif_ref.body_done, ktime_ms_delta(ktime_get(), _t));
+	}
+	{
+		ktime_t _t = ktime_get();
+
+		if (!wait_for_completion_timeout(&prGlueInfo->rRxHaltComp,
+						 30 * HZ)) {
+			pr_warn("[wlan] rx_thread halt timeout after 30s"
+				" — ulFlag=0x%lx\n", prGlueInfo->ulFlag);
+			if (rx_ref.task) {
+				pr_warn("[wlan] rx_thread (pid %d) state=%ld:\n",
+					task_pid_nr(rx_ref.task),
+					rx_ref.task->__state);
+				sched_show_task(rx_ref.task);
+			}
+		} else {
+			rx_ref.body_done = true;
+		}
+		pr_warn("[wlan] rx_thread body done=%d in %lldms\n",
+			rx_ref.body_done, ktime_ms_delta(ktime_get(), _t));
+	}
 #endif
 
-	/* wake up main thread and wait for it to exit */
-	wake_up_interruptible(&prGlueInfo->waitq);
-	if (!wait_for_completion_timeout(&prGlueInfo->rHaltComp, 10*HZ))
-		DBGLOG(INIT, WARN, "main_thread halt timeout\n");
+	{
+		ktime_t _t = ktime_get();
 
-	DBGLOG(INIT, INFO, "wlan thread stopped\n");
-
-	/* prGlueInfo->rHifInfo.main_thread = NULL; */
-	prGlueInfo->main_thread = NULL;
+		/*
+		 * hif_thread has now either completed or timed out.  Either way
+		 * it is no longer actively holding MUTEX_TX_CMD_CLEAR in a way
+		 * that can block us: if it completed normally the mutex is free;
+		 * if it timed out wlanReleasePendingOid() will use trylock and
+		 * skip the cmd-clear rather than deadlocking.
+		 *
+		 * CRITICAL: this wait MUST be indefinite (no timeout).
+		 *
+		 * If we time out and skip kthread_stop(), main_thread keeps
+		 * running module code.  wlanRemove() then frees prAdapter and
+		 * the module is unmapped while main_thread is still executing
+		 * it — producing the exact page-fault crash at module text
+		 * addresses seen in the field.
+		 *
+		 * main_thread is safe to wait on indefinitely because:
+		 *  - All hardware-touching paths inside its loop are guarded
+		 *    with HALT checks and will not block after HALT is set.
+		 *  - wlanReleasePendingOid() uses mutex_trylock under HALT so
+		 *    it cannot deadlock on MUTEX_TX_CMD_CLEAR held by hif_thread.
+		 *  - The only way main_thread could appear "stuck" is a genuine
+		 *    kernel bug elsewhere; crashing rmmod is far worse than
+		 *    letting rmmod spin while we collect diagnostics.
+		 *
+		 * We use a 30 s loop solely to emit a warning + stack if the
+		 * wait is unexpectedly long, then keep waiting.
+		 */
+		while (!wait_for_completion_timeout(&prGlueInfo->rHaltComp,
+						    30 * HZ)) {
+			pr_warn("[wlan] main_thread halt still pending after %lldms"
+				" — hif_done=%d rx_done=%d ulFlag=0x%lx\n",
+				ktime_ms_delta(ktime_get(), _t),
 #if CFG_SUPPORT_MULTITHREAD
-	prGlueInfo->hif_thread = NULL;
-	prGlueInfo->rx_thread = NULL;
+				hif_ref.body_done, rx_ref.body_done,
+#else
+				0, 0,
+#endif
+				prGlueInfo->ulFlag);
+			/*
+			 * Dump main_thread's OWN stack, not the current (rmmod)
+			 * stack.  The rmmod/wlanOffStopWlanThreads backtrace is
+			 * already visible in every dump_stack() line above; what
+			 * we actually need to know is WHERE main_thread is blocked.
+			 */
+			if (main_ref.task) {
+				pr_warn("[wlan] main_thread (pid %d) state=%ld:\n",
+					task_pid_nr(main_ref.task),
+					main_ref.task->__state);
+				sched_show_task(main_ref.task);
+			} else {
+				pr_warn("[wlan] main_ref.task is NULL — thread already exited?\n");
+			}
+		}
+		main_ref.body_done = true;
+		DBGLOG(INIT, INFO, "main_thread body done in %lldms\n",
+			ktime_ms_delta(ktime_get(), _t));
+	}
+
+	/*
+	 * Phase 4: kthread_stop() all threads, then release our pins.
+	 *
+	 * kthread_stop() sets the should_stop flag, waits for kthread->exited,
+	 * and reaps the task.  Because we hold a get_task_struct pin, the
+	 * struct kthread cookie inside task_struct is guaranteed to still be
+	 * valid even if the thread already ran past return 0.  Without the pin,
+	 * the observed crash was: kthread_stop+0x40 dereferencing a NULL
+	 * struct kthread * pointer (task_struct offset 0xba8) → NULL deref.
+	 *
+	 * Order: stop hif/rx before main so main doesn't try to drain queues
+	 * that hif/rx are no longer servicing.
+	 */
+#if CFG_SUPPORT_MULTITHREAD
+	stop_thread_ref(&hif_ref);
+	stop_thread_ref(&rx_ref);
 
 	prGlueInfo->u4TxThreadPid = 0xffffffff;
 	prGlueInfo->u4HifThreadPid = 0xffffffff;
 #endif
+	stop_thread_ref(&main_ref);
+
+	DBGLOG(INIT, INFO, "all wlan threads stopped\n");
 
 	if (test_and_clear_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag) &&
 			!completion_done(&prGlueInfo->rPendComp)) {
@@ -5919,14 +6266,18 @@ int32_t wlanOffAtReset(void)
 	flush_work(&prGlueInfo->rTxMsduFreeWork);
 #endif
 	/* 4 <2> Mark HALT, notify main thread to stop, and clean up queued
-	 *	 requests
+	 *	 requests.
+	 *
+	 * Teardown order: silence HW → kill bottom-halves → stop threads →
+	 * free IRQ + BARs.  glBusFreeIrq must come LAST so that the BARs
+	 * remain mapped for any hardware access that threads perform during
+	 * their own cleanup (e.g. nicTxCancelSendingCmd).
 	 */
 	set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
-	/* Silence hardware before stopping threads so tasklet can't reschedule */
 	nicDisableInterrupt(prAdapter);
-	glBusFreeIrq(prDev, prGlueInfo);
 	tasklet_kill(&prGlueInfo->rRxTask);
 	wlanOffStopWlanThreads(prGlueInfo);
+	glBusFreeIrq(prDev, prGlueInfo);
 	if (HAL_IS_TX_DIRECT(prAdapter)) {
 		if (prAdapter->fgTxDirectInited) {
 #if CFG80211_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
@@ -5945,7 +6296,7 @@ int32_t wlanOffAtReset(void)
 	wlanOffUninitNicModule(prAdapter, TRUE);
 /* wlanAdapterStop Section End */
 
-	/* 4 <x> IRQ already freed before wlanOffStopWlanThreads above */
+	/* 4 <x> IRQ and BARs freed by glBusFreeIrq above, after threads stopped */
 
 
 
@@ -6863,16 +7214,28 @@ static void wlanRemove(void)
     prGlueInfo->u4ReadyFlag = 0;
 
     /*
-     * 2. Disable hardware interrupts before stopping threads.
-     * This prevents the IRQ handler from firing against state
-     * that is about to be torn down.
+     * 2. Disable hardware interrupts and kill bottom-halves, but do NOT
+     * release the PCI BARs yet.  Threads may still be mid-cleanup and
+     * could access hardware registers (e.g. wlanReleasePendingOid →
+     * nicTxCancelSendingCmd).  Unmapping the BARs before the threads
+     * exit would turn those accesses into MMIO use-after-iounmap faults.
+     *
+     * Correct teardown order:
+     *   1. Set HALT + silence HW (nicDisableInterrupt) — no new IRQs.
+     *   2. Kill bottom-halves (tasklet_kill, glTaskletUninit).
+     *   3. Stop all threads (wlanOffStopWlanThreads) — BARs still mapped.
+     *   4. Free IRQ and unmap BARs (glBusFreeIrq) — safe, nothing running.
      */
+    set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
+    /* Clear pending RX/TX bits to prevent main_thread processing after HALT */
+    clear_bit(GLUE_FLAG_RX_BIT, &prGlueInfo->ulFlag);
+    smp_wmb();
     if (prAdapter)
         nicDisableInterrupt(prAdapter);
-    glBusFreeIrq(prDev, prGlueInfo);
     tasklet_kill(&prGlueInfo->rRxTask);
-    set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
+    glTaskletUninit(prGlueInfo);
     wlanOffStopWlanThreads(prGlueInfo);
+    glBusFreeIrq(prDev, prGlueInfo);
 
     /*
      * 5. Now safe to unregister and destroy the netdev — IRQ is gone,
@@ -6882,7 +7245,6 @@ static void wlanRemove(void)
     wlanNetDestroy(prDev->ieee80211_ptr);
 
     wlanUnregisterInetAddrNotifier();
-    glTaskletUninit(prGlueInfo);
 
 #if CFG_MET_PACKET_TRACE_SUPPORT
     kalMetRemoveProcfs();
