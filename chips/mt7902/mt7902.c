@@ -1559,19 +1559,19 @@ struct TX_DESC_OPS_T mt7902TxDescOps = {
 };
 
 struct RX_DESC_OPS_T mt7902RxDescOps = {
-	.nic_rxd_get_rx_byte_count = nic_rxd_v2_get_rx_byte_count,
-	.nic_rxd_get_pkt_type = nic_rxd_v2_get_packet_type,
-	.nic_rxd_get_wlan_idx = nic_rxd_v2_get_wlan_idx,
-	.nic_rxd_get_sec_mode = nic_rxd_v2_get_sec_mode,
-	.nic_rxd_get_sw_class_error_bit = nic_rxd_v2_get_sw_class_error_bit,
-	.nic_rxd_get_ch_num = nic_rxd_v2_get_ch_num,
-	.nic_rxd_get_rf_band = nic_rxd_v2_get_rf_band,
-	.nic_rxd_get_tcl = nic_rxd_v2_get_tcl,
-	.nic_rxd_get_ofld = nic_rxd_v2_get_ofld,
-	.nic_rxd_get_HdrTrans = nic_rxd_v2_get_HdrTrans,
-	.nic_rxd_fill_rfb = nic_rxd_v2_fill_rfb,
-	.nic_rxd_sanity_check = nic_rxd_v2_sanity_check,
-	.nic_rxd_check_wakeup_reason = nic_rxd_v2_check_wakeup_reason,
+	.nic_rxd_get_rx_byte_count = nic_rxd_v3_get_rx_byte_count,
+	.nic_rxd_get_pkt_type = nic_rxd_v3_get_packet_type,
+	.nic_rxd_get_wlan_idx = nic_rxd_v3_get_wlan_idx,
+	.nic_rxd_get_sec_mode = nic_rxd_v3_get_sec_mode,
+	.nic_rxd_get_sw_class_error_bit = nic_rxd_v3_get_sw_class_error_bit,
+	.nic_rxd_get_ch_num = nic_rxd_v3_get_ch_num,
+	.nic_rxd_get_rf_band = nic_rxd_v3_get_rf_band,
+	.nic_rxd_get_tcl = nic_rxd_v3_get_tcl,
+	.nic_rxd_get_ofld = nic_rxd_v3_get_ofld,
+	.nic_rxd_get_HdrTrans = nic_rxd_v3_get_HdrTrans,
+	.nic_rxd_fill_rfb = nic_rxd_v3_fill_rfb,
+	.nic_rxd_sanity_check = nic_rxd_v3_sanity_check,
+	.nic_rxd_check_wakeup_reason = nic_rxd_v3_check_wakeup_reason,
 	
 };
 

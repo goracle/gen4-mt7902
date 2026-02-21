@@ -294,13 +294,14 @@ static const struct ACTION_FRAME_SIZE_MAP arActionFrameReservedLen[] = {
  */
 /*----------------------------------------------------------------------------*/
 
-static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb)
+static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter,
+                                    struct SW_RFB *prSwRfb)
 {
     struct GLUE_INFO *glue;
     struct net_device *ndev;
     struct wireless_dev *wdev;
-    struct sk_buff *skb;
     int len, freq = 2412;
+    uint8_t *pvHdr;
 
     if (!prAdapter || !prSwRfb)
         return -EINVAL;
@@ -315,41 +316,207 @@ static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *pr
         return -ENODEV;
     }
 
+    /* Use packet length from RFB (u2PacketLen holds total payload size we observed) */
     len = prSwRfb->u2PacketLen;
-    skb = dev_alloc_skb(len);
-    if (!skb) {
-        rcu_read_unlock();
-        return -ENOMEM;
-    }
+    pvHdr = (uint8_t *)prSwRfb->pvHeader;
 
-    /* Copy raw 802.11 frame */
-    memcpy(skb_put(skb, len), prSwRfb->pvHeader, len);
-
-    /* Frequency Mapping Logic */
+    /* Frequency mapping (kept from original) */
     if (prSwRfb->ucChnlNum <= 14)
         freq = 2407 + (prSwRfb->ucChnlNum * 5);
     else if (prSwRfb->ucChnlNum >= 36 && prSwRfb->ucChnlNum <= 177)
         freq = 5000 + (prSwRfb->ucChnlNum * 5);
-    else if (prSwRfb->ucChnlNum >= 1 && prSwRfb->ucChnlNum <= 233) // 6GHz
+    else if (prSwRfb->ucChnlNum >= 1 && prSwRfb->ucChnlNum <= 233) /* 6GHz */
         freq = 5940 + (prSwRfb->ucChnlNum * 5);
 
-    /* --- START IWD DEBUG INSTRUMENTATION --- */
-    DBGLOG(RX, INFO, "IWD_RELAY: Ch:%u Freq:%d Len:%d\n", prSwRfb->ucChnlNum, freq, len);
-    if (len >= 24) {
-        /* Header Check: FC, SA (byte 10), BSSID (byte 16) */
-        DBGLOG(RX, INFO, "IWD_RELAY: FC:%02x%02x SA:%pM BSSID:%pM\n",
-               skb->data[0], skb->data[1], skb->data + 10, skb->data + 16);
-        
-        /* Dump first 32 bytes to check for unexpected vendor headers */
-        dumpMemory8(skb->data, (len > 32 ? 32 : len));
+    DBGLOG(RX, INFO, "IWD_RELAY: Ch:%u Freq:%d Len:%d\n",
+           prSwRfb->ucChnlNum, freq, len);
+
+    /* Quick header / pointer debug (if we have a little data) */
+    if (len >= 24 && pvHdr) {
+        uint8_t *raw_data = pvHdr;
+        DBGLOG(RX, INFO,
+               "IWD_RELAY: fgHdrTran=%d ucOFLD=%d u2RxStatusOffst=%u u4HeaderOffset=%u rxd_size=%u groupVLD=0x%x g1=%zu g2=%zu g3=%zu hdrLen=%u\n",
+               prSwRfb->fgHdrTran, prSwRfb->ucOFLD, prSwRfb->u2RxStatusOffst,
+               (uint32_t)HAL_MAC_CONNAC3X_RX_STATUS_GET_HEADER_OFFSET((struct HW_MAC_CONNAC3X_RX_DESC *)prSwRfb->prRxStatus),
+               (uint32_t)prAdapter->chip_info->rxd_size,
+               (uint32_t)prSwRfb->ucGroupVLD,
+               sizeof(struct HW_MAC_RX_STS_GROUP_1),
+               sizeof(struct HW_MAC_RX_STS_GROUP_2),
+               sizeof(struct HW_MAC_RX_STS_GROUP_3_V2),
+               (uint32_t)prSwRfb->u2HeaderLen);
+        if (len >= 16) {
+            DBGLOG(RX, INFO, "IWD_RELAY: FC:%02x%02x SA:%pM BSSID:%pM\n",
+                   raw_data[0], raw_data[1], raw_data + 10, raw_data + 16);
+        }
     }
-    /* --- END IWD DEBUG INSTRUMENTATION --- */
 
-    cfg80211_rx_mgmt(wdev, freq, 0, skb->data, skb->len, GFP_ATOMIC);
+    /* Dump raw bytes for analysis if present */
+    if (len >= 64 && pvHdr) {
+        uint8_t *p = pvHdr;
+        DBGLOG(RX, INFO, "IWD_RELAY: RAW[0-15]: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+               p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7],p[8],p[9],p[10],p[11],p[12],p[13],p[14],p[15]);
+        DBGLOG(RX, INFO, "IWD_RELAY: RAW[16-31]: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+               p[16],p[17],p[18],p[19],p[20],p[21],p[22],p[23],p[24],p[25],p[26],p[27],p[28],p[29],p[30],p[31]);
+        DBGLOG(RX, INFO, "IWD_RELAY: RAW[32-47]: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+               p[32],p[33],p[34],p[35],p[36],p[37],p[38],p[39],p[40],p[41],p[42],p[43],p[44],p[45],p[46],p[47]);
+        DBGLOG(RX, INFO, "IWD_RELAY: RAW[48-63]: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+               p[48],p[49],p[50],p[51],p[52],p[53],p[54],p[55],p[56],p[57],p[58],p[59],p[60],p[61],p[62],p[63]);
+    }
 
-    dev_kfree_skb_any(skb);
+    /*
+     * Two supported cases (attempt detection in this order):
+     * 1) Firmware has provided a full contiguous 802.11 beacon frame,
+     *    but pvHeader points into the frame such that the real FC is
+     *    located up to 32 bytes before pvHeader (seen in PRE[-16..-1]).
+     *    -> detect FC(0x80,0x00) at some negative offset and realign.
+     *
+     * 2) Firmware provided MT scan-offload trimmed record:
+     *    [0..15]    RX metadata
+     *    [16..21]   surrogate BSSID
+     *    [20..]     IEs (no fixed params)
+     *    -> rebuild minimal beacon header and append IEs.
+     *
+     * If neither detection succeeds, bail out conservatively.
+     */
+
+    {
+        uint8_t *frame = NULL;
+        int frame_len = 0;
+        bool built = false;
+
+        /* ------------- Case A: real 802.11 header exists before pvHeader ------------- */
+        if (pvHdr) {
+            int search_back;
+            /* Search back up to 32 bytes for a valid beacon FC + broadcast DA */
+            for (search_back = 0; search_back <= 32; search_back += 1) {
+                uint8_t *candidate = pvHdr - search_back;
+                /* ensure we won't read memory we shouldn't (best-effort) */
+                /* We don't have explicit "safe" size here; this matches prior debug which read PRE[-32..-1]. */
+                /* Check FC == 0x80 0x00 (beacon) and DA == ff:ff:ff:ff:ff:ff at offset candidate+4 */
+                if (candidate[0] == 0x80 && candidate[1] == 0x00 &&
+                    candidate[4] == 0xff && candidate[5] == 0xff &&
+                    candidate[6] == 0xff && candidate[7] == 0xff &&
+                    candidate[8] == 0xff && candidate[9] == 0xff) {
+                    /* Found likely real 802.11 header */
+                    int delta = (int)(pvHdr - candidate); /* bytes we need to prepend */
+                    frame_len = len + delta;
+                    if (frame_len <= 0 || frame_len > 4096) {
+                        DBGLOG(RX, WARN, "IWD_RELAY: detected header but frame_len invalid %d\n", frame_len);
+                        break;
+                    }
+                    frame = kzalloc(frame_len, GFP_ATOMIC);
+                    if (!frame) {
+                        DBGLOG(RX, WARN, "IWD_RELAY: kzalloc failed for frame_len=%d\n", frame_len);
+                        break;
+                    }
+                    /* copy full frame starting at candidate for 'frame_len' bytes */
+                    memcpy(frame, candidate, frame_len);
+                    DBGLOG(RX, INFO, "IWD_RELAY: real header found at -%d; frame_len=%d\n", delta, frame_len);
+                    built = true;
+                    break;
+                }
+            }
+        }
+
+        /* ------------- Case B: MT scan offload format: surrogate BSSID + IEs ------------- */
+        if (!built) {
+            /* Heuristic: if pvHdr + 16 contains a plausible BSSID and pvHdr+20 appears to start IEs,
+             * then rebuild a standard beacon header and append the IEs.
+             *
+             * Conditions we check:
+             *  - pvHdr[16..21] not all zero
+             *  - pvHdr[20] is a likely IE tag (<= 221)
+             *  - total ie_len (len - 20) > 0 and within bounds
+             */
+            if (pvHdr && len > 20) {
+                uint8_t *mt = pvHdr;
+                uint8_t *bssid = mt + 16;
+                uint8_t *ies = mt + 20;
+                int ie_len = len - 20;
+
+                /* basic sanity checks */
+                bool bssid_nonzero = false;
+                for (int i = 0; i < 6; i++) {
+                    if (bssid[i] != 0x00) { bssid_nonzero = true; break; }
+                }
+
+                if (bssid_nonzero && ie_len > 0 && ie_len < 4096 && ies[0] <= 221) {
+                    /* build full beacon: 24 + 12 + ie_len = 36 + ie_len */
+                    frame_len = 36 + ie_len;
+                    if (frame_len > 4096) {
+                        DBGLOG(RX, WARN, "IWD_RELAY: rebuilt frame too large %d\n", frame_len);
+                    } else {
+                        frame = kzalloc(frame_len, GFP_ATOMIC);
+                        if (!frame) {
+                            DBGLOG(RX, WARN, "IWD_RELAY: kzalloc failed for rebuilt frame %d\n", frame_len);
+                        } else {
+                            /* FC: beacon */
+                            frame[0] = 0x80; frame[1] = 0x00;
+                            /* Duration = 0 */
+                            frame[2] = frame[3] = 0x00;
+                            /* DA = broadcast */
+                            memset(frame + 4, 0xff, 6);
+                            /* SA = surrogate BSSID (use same as BSSID here) */
+                            memcpy(frame + 10, bssid, 6);
+                            /* BSSID */
+                            memcpy(frame + 16, bssid, 6);
+                            /* SeqCtl = 0 */
+                            frame[22] = frame[23] = 0x00;
+                            /* Timestamp = 0 */
+                            memset(frame + 24, 0x00, 8);
+                            /* Beacon interval = 100 TU */
+                            frame[32] = 0x64; frame[33] = 0x00;
+                            /* Capability: set minimal ESS bit (0x0001) - preserve conservative default */
+                            frame[34] = 0x01; frame[35] = 0x00;
+                            /* IEs */
+                            memcpy(frame + 36, ies, ie_len);
+
+                            DBGLOG(RX, INFO, "IWD_RELAY: MT-offload layout detected - rebuilt frame_len=%d ie_len=%d\n",
+                                   frame_len, ie_len);
+                            built = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        /* If we did not build anything, bail out safely */
+        if (!built || !frame) {
+            DBGLOG(RX, WARN, "IWD_RELAY: could not realign or rebuild beacon - skipping\n");
+            rcu_read_unlock();
+            return -EINVAL;
+        }
+
+        /* --- inform cfg80211 --- */
+        {
+            struct wiphy *wiphy = wdev->wiphy;
+            struct ieee80211_channel *chan;
+            //enum nl80211_band band = (freq >= 5000) ? NL80211_BAND_5GHZ : NL80211_BAND_2GHZ;
+
+            chan = ieee80211_get_channel(wiphy, freq);
+            if (!chan) {
+                DBGLOG(RX, WARN, "IWD_RELAY: no channel for freq %d\n", freq);
+                kfree(frame);
+                rcu_read_unlock();
+                return -EINVAL;
+            }
+
+            DBGLOG(RX, INFO, "IWD_RELAY: inform_bss frame_len=%d freq=%d\n", frame_len, freq);
+
+            /* Pass a copy to cfg80211 to ensure lifetime safety */
+            {
+                struct cfg80211_bss *bss;
+                bss = cfg80211_inform_bss_frame(wiphy, chan,
+                                               (struct ieee80211_mgmt *)frame,
+                                               frame_len, 0, GFP_ATOMIC);
+                if (bss)
+                    cfg80211_put_bss(wiphy, bss);
+            }
+            kfree(frame);
+        }
+    }
+
     rcu_read_unlock();
-
     return 0;
 }
 
@@ -3261,6 +3428,13 @@ void nicRxProcessMgmtPacket(IN struct ADAPTER *prAdapter,
     if (prAdapter->fgTestMode == FALSE) {
 #if CFG_MGMT_FRAME_HANDLING
         prGlueInfo = prAdapter->prGlueInfo;
+
+/* 0x3801 Bypass: Frame was already relayed above. Skip internal processing. */
+        if (prSwRfb->ucPacketType == RX_PKT_TYPE_SW_DEFINED) {
+            DBGLOG(RX, INFO, "[0x3801] Bypassing internal processing for kernel-handled frame\n");
+            nicRxReturnRFB(prAdapter, prSwRfb);
+            return;
+        }
         if ((prGlueInfo == NULL) || (prGlueInfo->u4ReadyFlag == 0)) {
             /* glue not ready, fall through to return RFB */
         } else if (apfnProcessRxMgtFrame[ucSubtype]) {
@@ -3565,6 +3739,10 @@ void nicRxProcessPacketType(
 		break;
 
 	case RX_PKT_TYPE_SW_DEFINED:
+        if (NIC_RX_GET_U2_SW_PKT_TYPE(prSwRfb->prRxStatus) == 0x3801) {
+            nicRxProcessMgmtPacket(prAdapter, prSwRfb);
+            return;
+        }
 		DBGLOG(RX, WARN, "[SW-PKT] raw=0x%04x masked=0x%04x\n", NIC_RX_GET_U2_SW_PKT_TYPE(prSwRfb->prRxStatus), NIC_RX_GET_U2_SW_PKT_TYPE(prSwRfb->prRxStatus) & prChipInfo->u2RxSwPktBitMap);
 		/* HIF_RX_PKT_TYPE_EVENT */
 		if ((NIC_RX_GET_U2_SW_PKT_TYPE(
