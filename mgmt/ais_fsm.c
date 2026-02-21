@@ -2206,8 +2206,9 @@ aisHandleState_NORMAL_TR(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 		return AIS_STATE_IDLE;
 	}
 
-	/* Roaming requests are high-priority but subject to the cap.
-	 * If we have not yet hit the limit, serve roaming as normal. */
+    /* SOVEREIGNTY HACK: Disable driver-init roaming to stop aggressive scanning */
+    if (0) { /* Block autonomous roaming tier */
+	 /* If we have not yet hit the limit, serve roaming as normal. */
 	if (prAisFsmInfo->ucRoamingConsecutiveCount < AIS_ROAMING_CONSECUTIVE_LIMIT) {
 
 		if (aisFsmIsRequestPending(prAdapter, AIS_REQUEST_ROAMING_SEARCH,
@@ -2239,6 +2240,8 @@ aisHandleState_NORMAL_TR(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 		       "checking lower-priority requests\n",
 		       ucBssIndex, prAisFsmInfo->ucRoamingConsecutiveCount);
 	}
+
+    }
 
 	/* Lower-priority requests. Serving either one resets the roaming
 	 * counter so roaming gets its full budget again next time. */

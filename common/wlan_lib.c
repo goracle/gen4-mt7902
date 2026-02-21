@@ -10469,6 +10469,9 @@ void wlanN9CorDumpTimeOut(IN struct ADAPTER *prAdapter,
 			  IN unsigned long ulParamPtr)
 {
 
+DBGLOG(INIT, ERROR, "DIAG: wlanN9CorDumpTimeOut triggered! N9 Assert Timeout. fgN9AssertDumpOngoing=%d, fgN9CorDumpFileOpend=%d\n", 
+           prAdapter->fgN9AssertDumpOngoing, prAdapter->fgN9CorDumpFileOpend);
+
 	if (prAdapter->fgN9CorDumpFileOpend) {
 		DBGLOG(INIT, INFO, "\n[DUMP_N9]====N9 ASSERT_END====\n");
 		prAdapter->fgN9AssertDumpOngoing = FALSE;
@@ -11192,20 +11195,36 @@ wlanGetChannelBandFromIndex(IN uint8_t ucIdx)
 	return eBand;
 }
 
+
+
+
+
+
 void
 wlanSortChannel(IN struct ADAPTER *prAdapter,
 		IN enum ENUM_CHNL_SORT_POLICY ucSortType)
 {
+    int loop_guard = 0;
+    DBGLOG(SCN, ERROR, "DIAG: Entering wlanSortChannel. SortType=%d, MAX_CHN_NUM=%d\n", 
+           ucSortType, MAX_CHN_NUM);
+           
 	if (!prAdapter || !prAdapter->prGlueInfo ||
-	    test_bit(GLUE_FLAG_HALT_BIT, &prAdapter->prGlueInfo->ulFlag))
+	    test_bit(GLUE_FLAG_HALT_BIT, &prAdapter->prGlueInfo->ulFlag)) {
+        DBGLOG(SCN, ERROR, "DIAG: wlanSortChannel aborted early (HALT or NULL)\n");
 		return;
+    }
+
 	struct PARAM_GET_CHN_INFO *prChnLoadInfo = &
 			(prAdapter->rWifiVar.rChnLoadInfo);
-	int8_t ucIdx = 0, ucRoot = 0, ucChild = 0;
+            
+    /* CRITICAL FIX: Promoted from int8_t to int32_t to prevent infinite loop wrap-around */
+	int32_t ucIdx = 0, ucRoot = 0, ucChild = 0; 
 	struct PARAM_CHN_RANK_INFO rChnRankInfo;
 
 	if (ucSortType == CHNL_SORT_POLICY_NONE)
 		return;
+
+    DBGLOG(SCN, INFO, "DIAG: wlanSortChannel - Preparing unsorted list\n");
 
 	/* prepare unsorted ch rank list */
 #if (CFG_SUPPORT_P2PGO_ACS == 1)
@@ -11224,14 +11243,18 @@ wlanSortChannel(IN struct ADAPTER *prAdapter,
 
 		}
 	}
+    
+    DBGLOG(SCN, INFO, "DIAG: wlanSortChannel - Heapify phase\n");
+
 	/* heapify ch rank list */
 	for (ucIdx = MAX_CHN_NUM / 2 - 1; ucIdx >= 0; --ucIdx) {
-		for (ucRoot = ucIdx; ucRoot * 2 + 1 < MAX_CHN_NUM;
-            int loop_guard = 0;
-		     ucRoot = ucChild) {
+        for (ucRoot = ucIdx; ucRoot * 2 + 1 < MAX_CHN_NUM; ucRoot = ucChild) {
 
 			ucChild = ucRoot * 2 + 1;
-            if (loop_guard++ > 1024) break; /* DAWGEE SAFETY */
+            if (loop_guard++ > 100000) {
+                DBGLOG(SCN, ERROR, "DIAG: HEAPIFY LOOP GUARD HIT (ucIdx=%d)\n", ucIdx);
+                break;
+            }
 			/* Coverity check*/
 			if (ucChild < 0 || ucChild >= MAX_CHN_NUM ||
 			    ucRoot < 0 || ucRoot >= MAX_CHN_NUM)
@@ -11264,20 +11287,10 @@ wlanSortChannel(IN struct ADAPTER *prAdapter,
 			kalMemCopy(&prChnLoadInfo->rChnRankList[ucRoot],
 				&rChnRankInfo,
 				sizeof(struct PARAM_CHN_RANK_INFO));
-			DBGLOG(SCN, TRACE,
-				"[ACS]After root uChn=%d,D=%x\n",
-					   prChnLoadInfo->
-					   rChnRankList[ucRoot].ucChannel,
-					   prChnLoadInfo->
-					   rChnRankList[ucRoot].u4Dirtiness);
-			DBGLOG(SCN, TRACE,
-				"[ACS]AFter child Chn=%d,D=%x\n",
-					   prChnLoadInfo->
-					   rChnRankList[ucChild].ucChannel,
-					   prChnLoadInfo->
-					   rChnRankList[ucChild].u4Dirtiness);
 		}
 	}
+
+    DBGLOG(SCN, INFO, "DIAG: wlanSortChannel - Sort phase\n");
 
 	/* sort ch rank list */
 	for (ucIdx = MAX_CHN_NUM - 1; ucIdx > 0; ucIdx--) {
@@ -11288,7 +11301,10 @@ wlanSortChannel(IN struct ADAPTER *prAdapter,
 
 		for (ucRoot = 0; ucRoot * 2 + 1 < ucIdx; ucRoot = ucChild) {
 			ucChild = ucRoot * 2 + 1;
-            if (loop_guard++ > 1024) break; /* DAWGEE SAFETY */
+            if (loop_guard++ > 100000) {
+                DBGLOG(SCN, ERROR, "DIAG: SORT LOOP GUARD HIT (ucIdx=%d)\n", ucIdx);
+                break;
+            }
 			/* Coverity check*/
 			if (ucChild < 0 ||
 			    ucRoot < 0 || ucRoot >= MAX_CHN_NUM)
@@ -11306,17 +11322,6 @@ wlanSortChannel(IN struct ADAPTER *prAdapter,
 			if (prChnLoadInfo->rChnRankList[ucChild].u4Dirtiness <=
 			    prChnLoadInfo->rChnRankList[ucRoot].u4Dirtiness)
 				break;
-			DBGLOG(SCN, TRACE,
-				"[ACS]root ChNum=%d D=%x",
-					   prChnLoadInfo->
-					   rChnRankList[ucRoot].ucChannel,
-					   prChnLoadInfo->
-					   rChnRankList[ucRoot].u4Dirtiness);
-			DBGLOG(SCN, TRACE, "[ACS]child ChNum=%d D=0x%x\n",
-					   prChnLoadInfo->
-					   rChnRankList[ucChild].ucChannel,
-					   prChnLoadInfo->
-					   rChnRankList[ucChild].u4Dirtiness);
 			kalMemCopy(&rChnRankInfo,
 				&(prChnLoadInfo->rChnRankList[ucChild]),
 				sizeof(struct PARAM_CHN_RANK_INFO));
@@ -11326,30 +11331,66 @@ wlanSortChannel(IN struct ADAPTER *prAdapter,
 			kalMemCopy(&prChnLoadInfo->rChnRankList[ucRoot],
 				&rChnRankInfo,
 				sizeof(struct PARAM_CHN_RANK_INFO));
-			DBGLOG(SCN, TRACE,
-				"[ACS]New root ChNum=%d D=%x",
-					   prChnLoadInfo->
-					   rChnRankList[ucRoot].ucChannel,
-					   prChnLoadInfo->
-					   rChnRankList[ucRoot].u4Dirtiness);
-
-			DBGLOG(SCN, TRACE,
-				"[ACS]New child ChNum=%d D=%x",
-					   prChnLoadInfo->
-					   rChnRankList[ucChild].ucChannel,
-					   prChnLoadInfo->
-					   rChnRankList[ucChild].u4Dirtiness);
 		}
 	}
 
-	for (ucIdx = 0; ucIdx < MAX_CHN_NUM; ++ucIdx) {
-		DBGLOG(SCN, TRACE, "[ACS]band=%d,channel=%d,dirtiness=%d\n",
-			prChnLoadInfo->rChnRankList[ucIdx].eBand,
-			prChnLoadInfo->rChnRankList[ucIdx].ucChannel,
-			prChnLoadInfo->rChnRankList[ucIdx].u4Dirtiness);
+    DBGLOG(SCN, ERROR, "DIAG: wlanSortChannel successfully finished!\n");
+}
+
+#if (CFG_SUPPORT_P2PGO_ACS == 1)
+void wlanGetChannelListUnsortedPerBand(
+			IN struct ADAPTER *prAdapter) {
+    /* CRITICAL FIX: Promoted types from int8_t/uint8_t to prevent overflow */
+	int32_t ucIdx = 0;
+	uint32_t i = 0, ucBandIdx = 0, ucNumOfChannel = 0, uc2gChNum = 0;
+	struct RF_CHANNEL_INFO aucChannelList[MAX_PER_BAND_CHN_NUM] = { { 0 } };
+	struct PARAM_GET_CHN_INFO *prChnLoadInfo = &
+			(prAdapter->rWifiVar.rChnLoadInfo);
+
+    DBGLOG(SCN, ERROR, "DIAG: Entering wlanGetChannelListUnsortedPerBand\n");
+
+	for (ucBandIdx = BAND_2G4; ucBandIdx < BAND_NUM; ucBandIdx++) {
+		rlmDomainGetChnlList(prAdapter, ucBandIdx,
+			TRUE, MAX_PER_BAND_CHN_NUM,
+			&ucNumOfChannel, aucChannelList);
+
+		for (i = 0; i < ucNumOfChannel; i++) {
+			ucIdx = wlanGetChannelIndex(
+				aucChannelList[i].eBand,
+				aucChannelList[i].ucChannelNum);
+			prChnLoadInfo->
+				rChnRankList[uc2gChNum+i].eBand =
+				prChnLoadInfo->rEachChnLoad[ucIdx].
+					eBand;
+			prChnLoadInfo->
+				rChnRankList[uc2gChNum+i].ucChannel =
+				prChnLoadInfo->rEachChnLoad[ucIdx].
+					ucChannel;
+			prChnLoadInfo->
+				rChnRankList[uc2gChNum+i].u4Dirtiness =
+				prChnLoadInfo->rEachChnLoad[ucIdx].
+					u4Dirtiness;
+		}
+		uc2gChNum = uc2gChNum + ucNumOfChannel;
 	}
 
+	/*Set the reset idx to invalid value*/
+	for (i = uc2gChNum; i < MAX_CHN_NUM; i++) {
+		prChnLoadInfo->rChnRankList[i].u4Dirtiness = 0xFFFFFFFF;
+		prChnLoadInfo->rChnRankList[i].ucChannel = 0xFF;
+	}
+    
+    DBGLOG(SCN, ERROR, "DIAG: wlanGetChannelListUnsortedPerBand finished\n");
 }
+#endif
+
+
+
+
+
+
+
+
 
 #if (CFG_SUPPORT_P2PGO_ACS == 1)
 void wlanGetChannelListUnsortedPerBand(

@@ -4077,8 +4077,13 @@ void kalProcessTxReq(struct GLUE_INFO *prGlueInfo,
 		return;
 	}
 
+
+DBGLOG(INIT, TRACE, "DIAG: kalProcessTxReq -> wlanProcessMboxMessage START\n");
 	/* Process Mailbox Messages */
 	wlanProcessMboxMessage(prGlueInfo->prAdapter);
+    DBGLOG(INIT, TRACE, "DIAG: kalProcessTxReq -> wlanProcessMboxMessage END\n");
+
+
 
 	/* Process CMD request */
 #if CFG_SUPPORT_MULTITHREAD
@@ -5392,6 +5397,11 @@ void kalScanDone(IN struct GLUE_INFO *prGlueInfo,
                  IN uint8_t ucBssIndex,
                  IN uint32_t status)
 {
+    /* DAWGEE SOVEREIGNTY GUARD: Block processing if we are halting */
+    if (prGlueInfo->ulFlag & GLUE_FLAG_HALT) {
+        DBGLOG(SCN, WARN, "kalScanDone: HALT detected, bailing to prevent sort-loop hang\n");
+        return;
+    }
     uint8_t fgAborted = (status != WLAN_STATUS_SUCCESS) ? TRUE : FALSE;
     struct ADAPTER *prAdapter;
     struct AIS_FSM_INFO *prAisFsmInfo;
@@ -8098,6 +8108,7 @@ uint32_t kalOpenFwDumpFile(u_int8_t ucDumpFileType)
 		DBGLOG(INIT, ERROR, "unknown dump file type\n");
 		break;
 	}
+DBGLOG(INIT, ERROR, "DIAG: Opening FW Dump File: Type=%d, Path=%s\n", ucDumpFileType, apucFileName);
 
 	ret = kalTrunkPath(apucFileName);
 
@@ -9006,6 +9017,10 @@ int32_t kalHaltLock(uint32_t waitMs)
 			return i4Ret;
 
 		prGlueInfo = wlanGetGlueInfo();
+
+DBGLOG(INIT, ERROR, "DIAG: kalHaltLock TIMEOUT! waitMs=%u. Dumping flags=0x%lx\n", 
+               waitMs, prGlueInfo ? prGlueInfo->ulFlag : 0);
+
 		if (rHaltCtrl.fgHeldByKalIoctl) {
 			DBGLOG(INIT, ERROR,
 			       "kalIoctl was executed longer than %u ms, show backtrace of tx_thread!\n",
