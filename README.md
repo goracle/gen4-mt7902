@@ -1,8 +1,12 @@
 # gen4-mt7902 🔧
 
-> ⚠️ **Experimental Driver** — Custom fork optimized for the Mediatek **MT7902** PCIe card. Based on hmtheboy154's port of Mediatek's gen4-mt79xx driver (originally from Xiaomi's rodin BSP). It's messy, it's ugly, but hey—it works! 🎉
+> ⚠️ **Experimental Driver/For Eductional Purposes Only** — Custom android->linux port fork optimized for the Mediatek **MT7902** PCIe card. Based on hmtheboy154's port of Mediatek's gen4-mt79xx driver (originally from Xiaomi's rodin BSP).
 
-This repository is a heavily modified fork focusing on stability improvements and connection reliability. Includes hacky systemd services to work around PCIe power management hangs and prevent kernel panics during shutdown.
+!!DO NOT USE IF YOU NEED WIFI NOW!!.  THERE IS AN OFFICIAL DRIVER BACKPORT OUT: 
+
+https://github.com/hmtheboy154/mt7902
+
+This repository is a heavily modified fork of the unofficial driver, focusing on stability improvements and connection reliability/teaching me how wifi works. Includes hacky systemd services to work around PCIe power management hangs and prevent kernel panics during shutdown.
 
 ---
 
