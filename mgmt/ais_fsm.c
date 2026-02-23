@@ -1413,7 +1413,7 @@ aisHandleState_SEARCH(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	if (!prBssDesc) {
 		DBGLOG(AIS, WARN, "[AIS%d] SEARCH: No candidate found for SSID %s. Looking for...\n",
 		       ucBssIndex, prConnSettings->aucSSID);
-		return AIS_STATE_LOOKING_FOR;
+		return AIS_STATE_WAIT_FOR_NEXT_SCAN;
 	}
 
 	/* Sync bands and security */
@@ -1435,6 +1435,10 @@ aisHandleState_SEARCH(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 		 * join steps and move straight to the required channel join.
 		 */
 		DBGLOG(AIS, INFO, "[AIS%d] Sovereign Join: Transitioning to REQ_CHANNEL_JOIN\n", ucBssIndex);
+		if (!prAisFsmInfo->fgIsCfg80211Connecting) {
+			DBGLOG(AIS, INFO, "[AIS%d] SEARCH: No cfg80211 request, waiting\n", ucBssIndex);
+			return AIS_STATE_WAIT_FOR_NEXT_SCAN;
+		}
 		return AIS_STATE_REQ_CHANNEL_JOIN;
 	}
 
@@ -1907,6 +1911,10 @@ aisHandleState_REQ_CHANNEL_JOIN(IN struct ADAPTER *prAdapter,
 		DBGLOG(AIS, INFO,
 		       "[AIS%d] Channel already requested (token=%d), waiting for grant\n",
 		       ucBssIndex, prAisFsmInfo->ucSeqNumOfChReq);
+		if (!prAisFsmInfo->fgIsCfg80211Connecting) {
+			DBGLOG(AIS, INFO, "[AIS%d] SEARCH: No cfg80211 request, waiting\n", ucBssIndex);
+			return AIS_STATE_WAIT_FOR_NEXT_SCAN;
+		}
 		return AIS_STATE_REQ_CHANNEL_JOIN;
 	}
 
@@ -2220,7 +2228,7 @@ aisHandleState_NORMAL_TR(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 			       "transitioning to LOOKING_FOR\n",
 			       ucBssIndex, prAisFsmInfo->ucRoamingConsecutiveCount);
 			prAisFsmInfo->ucRoamingConsecutiveCount++;
-			return AIS_STATE_LOOKING_FOR;
+			return AIS_STATE_WAIT_FOR_NEXT_SCAN;
 		}
 
 		if (aisFsmIsRequestPending(prAdapter, AIS_REQUEST_ROAMING_CONNECT,
@@ -2631,7 +2639,7 @@ enum ENUM_AIS_STATE aisFsmStateSearchAction(IN struct ADAPTER *prAdapter,
 			prAisFsmInfo->ucConnTrialCount++;
 		/* 4 <A> Try to SCAN */
 		if (prAisFsmInfo->fgTryScan)
-			eState = AIS_STATE_LOOKING_FOR;
+			eState = AIS_STATE_WAIT_FOR_NEXT_SCAN;
 
 		/* 4 <B> We've do SCAN already, now wait in some STATE. */
 		else {
@@ -4751,7 +4759,7 @@ void aisFsmRunEventBGSleepTimeOut(IN struct ADAPTER *prAdapter,
 			ucBssIndex,
 			kalGetTimeTick());
 
-		eNextState = AIS_STATE_LOOKING_FOR;
+		eNextState = AIS_STATE_NORMAL_TR;
 
 		SET_NET_PWR_STATE_ACTIVE(prAdapter,
 					 ucBssIndex);
@@ -4911,7 +4919,7 @@ void aisFsmRunEventJoinTimeout(IN struct ADAPTER *prAdapter,
 		else if (aisFsmIsRequestPending
 			 (prAdapter, AIS_REQUEST_ROAMING_SEARCH,
 			 TRUE, ucBssIndex) == TRUE)
-			eNextState = AIS_STATE_LOOKING_FOR;
+			eNextState = AIS_STATE_NORMAL_TR;
 		/* 4. Process for pending roaming scan */
 		else if (aisFsmIsRequestPending
 			 (prAdapter, AIS_REQUEST_ROAMING_CONNECT,
@@ -5045,8 +5053,9 @@ void aisFsmScanRequest(IN struct ADAPTER *prAdapter,
 			aisFsmSteps(prAdapter, AIS_STATE_SCAN,
 				ucBssIndex);
 		} else {
-			aisFsmInsertRequest(prAdapter, AIS_REQUEST_SCAN,
-				ucBssIndex);
+			/* SOVEREIGNTY: iwd will re-request; do not queue autonomous scan */
+			DBGLOG(SCN, INFO, "[SOV] Scan req dropped, state=%d, iwd will retry\n",
+			       prAisFsmInfo->eCurrentState);
 		}
 	} else {
 		DBGLOG(SCN, WARN, "Scan Request dropped. (state: %d)\n",
@@ -5171,10 +5180,9 @@ void aisFsmScanRequestAdv(IN struct ADAPTER *prAdapter,
 				prConnSettings->fgIsScanReqIssued = FALSE;
 				aisFsmSteps(prAdapter, AIS_STATE_IDLE, ucBssIndex);
 			} else {
-				/* CONGESTION: Hardware is likely still dwelling on channels. Queue this req. */
-				DBGLOG(SCN, INFO, "[H-FIX] Scan in progress (%u ms). Queuing subsequent request.\n", 
+				/* SOVEREIGNTY: scan in progress, drop. iwd will re-request. */
+				DBGLOG(SCN, INFO, "[SOV] Scan in progress (%u ms), dropping duplicate request\n",
 				       u4Elapsed);
-				aisFsmInsertRequest(prAdapter, AIS_REQUEST_SCAN, ucBssIndex);
 			}
 		} else {
 			/* State is not SCAN, but fgIsScanReqIssued is TRUE. Recover the flag. */
@@ -5622,9 +5630,7 @@ void aisFsmRunEventRoamingDiscovery(IN struct ADAPTER *prAdapter,
 	if (prAisFsmInfo->eCurrentState == AIS_STATE_NORMAL_TR
 	    && !timerPendingTimer(&prAisFsmInfo->rJoinTimeoutTimer)) {
 		if (eAisRequest == AIS_REQUEST_ROAMING_SEARCH) {
-			prAisFsmInfo->fgTargetChnlScanIssued = TRUE;
-			aisFsmSteps(prAdapter, AIS_STATE_LOOKING_FOR,
-				ucBssIndex);
+			aisFsmRemoveRoamingRequest(prAdapter, ucBssIndex);
 		} else
 			aisFsmSteps(prAdapter, AIS_STATE_SEARCH,
 				ucBssIndex);
@@ -7644,9 +7650,14 @@ void aisFsmFirePendingSAA(struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	prStaRec = prMsg->prStaRec;
 
 	if (prStaRec && !prStaRec->fgIsValid) {
-		DBGLOG(AIS, INFO, "[AIS%d] Activating StaRec[%u] before SAA\n",
+		DBGLOG(AIS, INFO, "[AIS%d] StaRec[%u] needs FW sync, deferring SAA until STATE_1 ACK\n",
 			ucBssIndex, prStaRec->ucIndex);
 		qmActivateStaRec(prAdapter, prStaRec);
+		prStaRec->ucStaState = STA_STATE_1;
+		/* Send CMD with fgNeedResp=TRUE so FW ACK triggers aisFsmFirePendingSAA */
+		cnmStaSendUpdateCmd(prAdapter, prStaRec, TRUE);
+		/* SAA will be fired from cnmStaRecHandleEventPkt on FW ACK */
+		return;
 	}
 
 	DBGLOG(AIS, INFO, "[AIS%d] STATE_1 ACK: firing deferred SAA msg\n", ucBssIndex);

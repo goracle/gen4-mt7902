@@ -188,7 +188,7 @@ static void halDumpHifDebugLog(struct ADAPTER *prAdapter)
 	prHifInfo->fgIsDumpLog = true;
 
 	if (prAdapter->u4HifDbgFlag & (DEG_HIF_ALL | DEG_HIF_HOST_CSR))
-		fgIsClkEn = halShowHostCsrInfo(prAdapter);
+		fgIsClkEn = false;
 	else {
 		HAL_MCR_WR(prAdapter, HOST_CSR_DRIVER_OWN_INFO, 0x00030000);
 		kalUdelay(1);

@@ -195,7 +195,7 @@ u_int8_t kalDevRegRead(IN struct GLUE_INFO *prGlueInfo,
 	if (!prHifInfo->fgIsDumpLog && prBusInfo->isValidRegAccess &&
 	    !prBusInfo->isValidRegAccess(prAdapter, u4Register)) {
 		/* Don't print log when resetting */
-		if (!wlanIsChipNoAck(prAdapter)) {
+		if (!wlanIsChipNoAck(prAdapter) && !fgIsResetting) {
 			DBGLOG(HAL, ERROR,
 			       "Invalid access! Get CR[0x%08x/0x%08x] value[0x%08x]\n",
 			       u4Register, u4BusAddr, *pu4Value);
@@ -209,12 +209,9 @@ u_int8_t kalDevRegRead(IN struct GLUE_INFO *prGlueInfo,
 		RTMP_IO_READ32(prHifInfo, u4BusAddr, pu4Value);
 		if (kalIsChipDead(prGlueInfo, u4Register, pu4Value)) {
 			/* Don't print log when resetting */
-			if (!wlanIsChipNoAck(prAdapter)) {
+			if (!wlanIsChipNoAck(prAdapter) && !fgIsResetting) {
 				DBGLOG(HAL, ERROR,
 				       "Read register is deadfeed\n");
-				GL_USER_DEFINE_RESET_TRIGGER(prAdapter,
-							     RST_CR_ACCESS_FAIL,
-						       RST_FLAG_DO_WHOLE_RESET);
 			}
 			return FALSE;
 		}
@@ -255,7 +252,7 @@ u_int8_t kalDevRegWrite(IN struct GLUE_INFO *prGlueInfo,
 	if (!prHifInfo->fgIsDumpLog && prBusInfo->isValidRegAccess &&
 	    !prBusInfo->isValidRegAccess(prAdapter, u4Register)) {
 		/* Don't print log when resetting */
-		if (!wlanIsChipNoAck(prAdapter)) {
+		if (!wlanIsChipNoAck(prAdapter) && !fgIsResetting) {
 			DBGLOG(HAL, ERROR,
 			       "Invalid access! Set CR[0x%08x/0x%08x] value[0x%08x]\n",
 			       u4Register, u4BusAddr, u4Value);

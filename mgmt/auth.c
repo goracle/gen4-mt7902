@@ -400,12 +400,6 @@ uint32_t authSendAuthFrame(IN struct ADAPTER *prAdapter,
 	 * This utilizes BPSK modulation, providing the maximum signal-to-noise 
 	 * margin to prevent the MPDU_ER / ACK timeout seen in logs.
 	 */
-	prMsduInfo->u4Option |= MSDU_OPT_FIXED_RATE;
-	prMsduInfo->ucRateIndex = 0;
-
-	DBGLOG(SAA, INFO, "PHY-FIX: Forcing Auth Rate Index 0 for BSS %u\n", 
-	       prStaRec->ucBssIndex);
-
 	/* 4 <6> Inform TXM to send this Authentication frame. */
 	nicTxEnqueueMsdu(prAdapter, prMsduInfo);
 
@@ -548,7 +542,7 @@ authSendAuthFrame(IN struct ADAPTER *prAdapter,
 		     (prStaRec != NULL) ? (prStaRec->ucIndex) : (STA_REC_INDEX_NOT_FOUND),
 		     WLAN_MAC_MGMT_HEADER_LEN,
 		     WLAN_MAC_MGMT_HEADER_LEN + u2PayloadLen, pfTxDoneHandler,
-		     MSDU_RATE_MODE_MANUAL_CR);
+		     MSDU_RATE_MODE_AUTO);
 
 	if ((ucAuthAlgNum == AUTH_ALGORITHM_NUM_SHARED_KEY) && (u2TransactionSeqNum == AUTH_TRANSACTION_SEQ_3))
 		nicTxConfigPktOption(prMsduInfo, MSDU_OPT_PROTECTED_FRAME, TRUE);
@@ -560,9 +554,6 @@ authSendAuthFrame(IN struct ADAPTER *prAdapter,
 
 	/* 4 <5> Configure Control Flags */
 	nicTxConfigPktControlFlag(prMsduInfo, MSDU_CONTROL_FLAG_FORCE_TX, TRUE);
-
-	/* Set the Manual Rate Mode and Rate Index (0 = BPSK/6Mbps) */
-	prMsduInfo->ucRateMode = MSDU_RATE_MODE_MANUAL_CR;
 
 	/* 4 <6> Send it to the TX Queue */
 	nicTxEnqueueMsdu(prAdapter, prMsduInfo);

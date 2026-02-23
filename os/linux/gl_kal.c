@@ -1483,7 +1483,8 @@ static void reportConnectionStatus(
 	struct cfg80211_bss *bss,
 	uint8_t *arBssid,
 	uint32_t eStatus,
-	uint8_t ucBssIndex);
+	uint8_t ucBssIndex,
+	struct CONNECTION_SETTINGS *prConnSettings);
 
 static void logConnectionInfo(
 	struct GLUE_INFO *prGlueInfo,
@@ -1624,8 +1625,10 @@ static void handleMediaConnect(
 			removeDuplicateBssEntries(wiphy, bss, arBssid, &ssid);
 			StatsResetTxRx();
 			
-			reportConnectionStatus(prGlueInfo, prDevHandler, bss, 
-					       arBssid, eStatus, ucBssIndex);
+			struct CONNECTION_SETTINGS *prConnSettings =
+				aisGetConnSettings(prAdapter, ucBssIndex);
+			reportConnectionStatus(prGlueInfo, prDevHandler, bss,
+					       arBssid, eStatus, ucBssIndex, prConnSettings);
 			
 			p2pFuncSwitchSapChannel(prAdapter);
 		}
@@ -2064,29 +2067,29 @@ static void removeDuplicateBssEntries(
 	}
 }
 
+
 static void reportConnectionStatus(
 	struct GLUE_INFO *prGlueInfo,
 	struct net_device *prDevHandler,
 	struct cfg80211_bss *bss,
 	uint8_t *arBssid,
 	uint32_t eStatus,
-	uint8_t ucBssIndex)
+	uint8_t ucBssIndex,
+	struct CONNECTION_SETTINGS *prConnSettings)
 {
-    /* 1. Ensure we always have a BSS for cfg80211, even if ensureBssExists failed */
-    if (!bss) {
-        DBGLOG(INIT, WARN, "BSS is NULL, but forcing connect_result anyway to satisfy iwd\n");
-    }
+	if (!bss)
+		DBGLOG(INIT, WARN, "BSS is NULL, but forcing connect_result anyway to satisfy iwd\n");
 
-    /* 2. Immediate Kernel Notification */
-    /* This is the critical call that tells iwd/cfg80211 the handshake is done. */
-    cfg80211_connect_result(prDevHandler, arBssid, 
-                            NULL, 0, /* No specialized IEs needed for basic sync */
-                            NULL, 0, 
-                            WLAN_STATUS_SUCCESS, GFP_KERNEL);
-
-    DBGLOG(INIT, INFO, "cfg80211_connect_result reported successfully for BSSID " MACSTR "\n", 
-           MAC2STR(arBssid));
+	cfg80211_connect_result(prDevHandler, arBssid,
+				prConnSettings->aucReqIe,
+				prConnSettings->u4ReqIeLength,
+				prConnSettings->aucRspIe,
+				prConnSettings->u4RspIeLength,
+				WLAN_STATUS_SUCCESS, GFP_KERNEL);
+	DBGLOG(INIT, INFO, "cfg80211_connect_result reported successfully for BSSID " MACSTR "\n",
+	       MAC2STR(arBssid));
 }
+
 
 #if 0 //kernel sov disable
 static void reportRoamingEvent(
