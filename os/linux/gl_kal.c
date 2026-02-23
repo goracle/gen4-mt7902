@@ -1723,6 +1723,7 @@ static void handleScanComplete(
 
 	/* Complete the scan request */
 	GLUE_ACQUIRE_SPIN_LOCK(prGlueInfo, SPIN_LOCK_NET_DEV);
+	DBGLOG(SCN, WARN, "SCAN_DONE_GATE: prScanRequest=%p aborted=%u\n", prGlueInfo->prScanRequest, fgScanAborted);
 	if (prGlueInfo->prScanRequest != NULL) {
 		kalCfg80211ScanDone(prGlueInfo->prScanRequest, fgScanAborted);
 		prGlueInfo->prScanRequest = NULL;

@@ -207,6 +207,13 @@ void nic_rxd_v3_fill_rfb(
 		prSwRfb->prRxStatusGroup3 = (void *)
 			((uint8_t *) prRxStatus + u2RxStatusOffset);
 		u2RxStatusOffset += sizeof(struct HW_MAC_RX_STS_GROUP_3_V2);
+		{ struct HW_MAC_RX_STS_GROUP_3_V2 *g3 = (struct HW_MAC_RX_STS_GROUP_3_V2 *)prSwRfb->prRxStatusGroup3;
+		  (void)g3;
+		  DBGLOG(RX, WARN, "[G3-RCPI] offset=%u rcpi0=%u rcpi1=%u rcpi2=%u rcpi3=%u GroupVLD=0x%x\n",
+			(u2RxStatusOffset - (uint16_t)sizeof(struct HW_MAC_RX_STS_GROUP_3_V2)),
+			HAL_RX_STATUS_GET_RCPI0(g3), HAL_RX_STATUS_GET_RCPI1(g3),
+			HAL_RX_STATUS_GET_RCPI2(g3), HAL_RX_STATUS_GET_RCPI3(g3),
+			prSwRfb->ucGroupVLD); }
 #if (CFG_DUMP_RXD == 1)
 		DBGLOG(RX, INFO, "****** RXD GROUP 3 ******\n");
 		DBGLOG_MEM8(RX, INFO, (uint32_t *) prSwRfb->prRxStatusGroup3,

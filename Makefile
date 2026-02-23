@@ -335,7 +335,7 @@ ccflags-y += -DCFG_REDIRECT_OID_SUPPORT=1
 ccflags-y += -DCFG_SUPPORT_CFG80211_QUEUE=1
 ccflags-y += -DCFG_RX_REPORT_FORMAT=2
 ccflags-y += -DCFG_SUPPORT_HE_ER=1
-ccflags-y += -DCFG_SUPPORT_DBDC=0
+ccflags-y += -DCFG_SUPPORT_DBDC=1
 ccflags-y += -DCFG_SUPPORT_BW160=1
 ccflags-y += -DCFG_WIFI_TX_ETH_CHK_EMPTY_PAYLOAD=1
 

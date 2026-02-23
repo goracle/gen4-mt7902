@@ -71,8 +71,12 @@
  *                    E X T E R N A L   R E F E R E N C E S
  *******************************************************************************
  */
+enum EUNM_CMD_SEND_METHOD;
 #include "precomp.h"
-
+#include "nic/cmd_buf.h"
+#include "nic/nic_rx.h"
+#include "nic_uni_cmd_event.h"
+#include "nic_cmd_event.h"
 /*******************************************************************************
  *                              C O N S T A N T S
  *******************************************************************************
@@ -708,6 +712,161 @@ uint32_t nicInitializeAdapter(IN struct ADAPTER *prAdapter)
 
 	return u4Status;
 }
+
+
+
+
+
+
+
+
+
+/* local redecl to avoid incomplete enum in nic_uni_cmd_event.h */
+/*uint32_t wlanSendSetQueryUniCmdAdv(struct ADAPTER*, uint8_t,
+	u_int8_t, u_int8_t, u_int8_t,
+	PFN_CMD_DONE_HANDLER, PFN_CMD_TIMEOUT_HANDLER,
+	uint32_t, uint8_t*, void*, uint32_t, uint32_t);
+*/
+
+uint32_t nicUniCmdSendChPrivilege(struct ADAPTER *prAdapter,
+        struct CMD_CH_PRIVILEGE *cmd)
+{
+    uint8_t buf[sizeof(struct UNI_CMD_CNM) +
+                sizeof(struct UNI_CMD_CNM_CH_PRIVILEGE_REQ)];
+    struct UNI_CMD_CNM *uni_cmd = (struct UNI_CMD_CNM *)buf;
+
+    const int enqueue = 0; /* CMD_SEND_METHOD_ENQUEUE */
+    kalMemZero(buf, sizeof(buf));
+
+    if (cmd->ucAction == CMD_CH_ACTION_ABORT) {
+        struct UNI_CMD_CNM_CH_PRIVILEGE_ABORT *tag =
+            (struct UNI_CMD_CNM_CH_PRIVILEGE_ABORT *)uni_cmd->aucTlvBuffer;
+        tag->u2Tag = UNI_CMD_CNM_TAG_CH_PRIVILEGE_ABORT;
+        tag->u2Length = sizeof(*tag);
+        tag->ucBssIndex = cmd->ucBssIndex;
+        tag->ucTokenID = cmd->ucTokenID;
+        tag->ucDBDCBand = cmd->ucDBDCBand;
+        return wlanSendSetQueryUniCmdAdv(prAdapter,
+            UNI_CMD_ID_CNM, TRUE, FALSE, FALSE, NULL, NULL,
+            sizeof(struct UNI_CMD_CNM) + sizeof(*tag),
+            buf, NULL, 0, enqueue);
+    } else {
+        struct UNI_CMD_CNM_CH_PRIVILEGE_REQ *tag =
+            (struct UNI_CMD_CNM_CH_PRIVILEGE_REQ *)uni_cmd->aucTlvBuffer;
+        tag->u2Tag = UNI_CMD_CNM_TAG_CH_PRIVILEGE_REQ;
+        tag->u2Length = sizeof(*tag);
+        tag->ucBssIndex = cmd->ucBssIndex;
+        tag->ucTokenID = cmd->ucTokenID;
+        tag->ucPrimaryChannel = cmd->ucPrimaryChannel;
+        tag->ucRfSco = cmd->ucRfSco;
+        tag->ucRfBand = cmd->ucRfBand;
+        tag->ucRfChannelWidth = cmd->ucRfChannelWidth;
+        tag->ucRfCenterFreqSeg1 = cmd->ucRfCenterFreqSeg1;
+        tag->ucRfCenterFreqSeg2 = cmd->ucRfCenterFreqSeg2;
+        tag->ucRfChannelWidthFromAP = cmd->ucRfChannelWidth;
+        tag->ucRfCenterFreqSeg1FromAP = cmd->ucRfCenterFreqSeg1;
+        tag->ucRfCenterFreqSeg2FromAP = cmd->ucRfCenterFreqSeg2;
+        tag->ucReqType = cmd->ucReqType;
+        tag->u4MaxInterval = cmd->u4MaxInterval;
+        tag->ucDBDCBand = cmd->ucDBDCBand;
+        return wlanSendSetQueryUniCmdAdv(prAdapter,
+            UNI_CMD_ID_CNM, TRUE, FALSE, FALSE, NULL, NULL,
+            sizeof(struct UNI_CMD_CNM) + sizeof(*tag),
+            buf, NULL, 0, enqueue);
+    }
+}
+
+uint32_t wlanSendSetQueryUniCmdAdv(IN struct ADAPTER *prAdapter,
+	      uint8_t ucUCID,
+	      u_int8_t fgSetQuery,
+	      u_int8_t fgNeedResp,
+	      u_int8_t fgIsOid,
+	      PFN_CMD_DONE_HANDLER pfCmdDoneHandler,
+	      PFN_CMD_TIMEOUT_HANDLER pfCmdTimeoutHandler,
+	      uint32_t u4SetQueryInfoLen,
+	      uint8_t *pucInfoBuffer, OUT void *pvSetQueryBuffer,
+	      IN uint32_t u4SetQueryBufferLen,
+	      uint32_t eMethodint)
+{
+	struct GLUE_INFO *prGlueInfo;
+	struct CMD_INFO *prCmdInfo;
+	uint8_t *pucCmfBuf;
+	struct mt66xx_chip_info *prChipInfo;
+	uint16_t cmd_size;
+	uint8_t ucOption;
+	uint32_t status = (uint32_t)WLAN_STATUS_PENDING;
+
+	if (kalIsResetting()) {
+		DBGLOG(INIT, WARN, "Chip resetting, skip\n");
+		return WLAN_STATUS_NOT_ACCEPTED;
+	}
+
+	prGlueInfo = prAdapter->prGlueInfo;
+	prChipInfo = prAdapter->chip_info;
+	cmd_size = prChipInfo->u2UniCmdTxHdrSize + u4SetQueryInfoLen;
+	prCmdInfo = cmdBufAllocateCmdInfo(prAdapter, cmd_size);
+
+	if (!prCmdInfo) {
+		DBGLOG(INIT, ERROR, "Allocate CMD_INFO_T ==> FAILED.\n");
+		return WLAN_STATUS_RESOURCES;
+	}
+
+	/* Setup common CMD Info Packet */
+	prCmdInfo->eCmdType = COMMAND_TYPE_NETWORK_IOCTL;
+	prCmdInfo->u2InfoBufLen = cmd_size;
+	prCmdInfo->pfCmdDoneHandler = pfCmdDoneHandler;
+	prCmdInfo->pfCmdTimeoutHandler = pfCmdTimeoutHandler;
+	prCmdInfo->fgIsOid = fgIsOid;
+	prCmdInfo->ucCID = ucUCID;
+	prCmdInfo->fgSetQuery = fgSetQuery;
+	prCmdInfo->fgNeedResp = fgNeedResp;
+	prCmdInfo->u4SetInfoLen = u4SetQueryInfoLen;
+	prCmdInfo->pvInformationBuffer = pvSetQueryBuffer;
+	prCmdInfo->u4InformationBufferLength = u4SetQueryBufferLen;
+	ucOption = UNI_CMD_OPT_BIT_1_UNI_CMD;
+	if (fgSetQuery) /* it is a SET command */
+		ucOption |= (prCmdInfo->fgNeedResp ? UNI_CMD_OPT_BIT_0_ACK : 0);
+	ucOption |= (fgIsOid ? UNI_CMD_OPT_BIT_0_ACK : 0);
+	ucOption |= (fgSetQuery ? UNI_CMD_OPT_BIT_2_SET_QUERY : 0);
+
+	/* TODO: uni cmd, fragment */
+	/* Setup WIFI_CMD_T (no payload) */
+	NIC_FILL_UNI_CMD_TX_HDR(prAdapter,
+		prCmdInfo->pucInfoBuffer,
+		prCmdInfo->u2InfoBufLen,
+		prCmdInfo->ucCID,
+		CMD_PACKET_TYPE_ID,
+		&prCmdInfo->ucCmdSeqNum,
+		&pucCmfBuf, S2D_INDEX_CMD_H2N,
+		ucOption);
+	DBGLOG(NIC, INFO, "SEND uni CID=0x%02x seq=%u\n", prCmdInfo->ucCID, prCmdInfo->ucCmdSeqNum);
+	prCmdInfo->pucSetInfoBuffer = pucCmfBuf;
+	if (u4SetQueryInfoLen > 0 && pucInfoBuffer != NULL)
+		kalMemCopy(pucCmfBuf, pucInfoBuffer, u4SetQueryInfoLen);
+
+	switch (eMethodint) {
+	case 0:
+		/* insert into prCmdQueue */
+		kalEnqueueCommand(prGlueInfo,
+				  (struct QUE_ENTRY *) prCmdInfo);
+
+		/* wakeup txServiceThread later */
+		GLUE_SET_EVENT(prGlueInfo);
+		break;
+	case 1:
+		status = wlanSendCommand(prAdapter, prCmdInfo);
+		cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+		break;
+	case 2:
+		status = nicTxCmd(prAdapter, prCmdInfo, TC4_INDEX);
+		cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+		break;
+	}
+
+	return (uint32_t)status;
+}
+
+
 
 #if defined(_HIF_SPI)
 /*----------------------------------------------------------------------------*/

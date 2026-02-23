@@ -651,6 +651,62 @@ struct EVENT_WOWLAN_NOTIFY {
 #define PACKETF_CAP_TYPE_TDIM			BIT(13)
 
 
+enum ENUM_UNI_EVENT_ID {
+	UNI_EVENT_ID_CMD_RESULT      = 0x01,
+				/* Generic event for return cmd status */
+	UNI_EVENT_ID_BMC_RPY_DT      = 0x02,
+	UNI_EVENT_ID_HIF_CTRL	     = 0x03,
+	UNI_EVENT_ID_FW_LOG_2_HOST   = 0x04,
+	UNI_EVENT_ID_ROAMING	      = 0x05,
+	UNI_EVENT_ID_ACCESS_REG      = 0x06,
+	UNI_EVENT_ID_CHIP_CONFIG     = 0x07,
+	UNI_EVENT_ID_SMESH_INFO      = 0x08,
+	UNI_EVENT_ID_IE_COUNTDOWN    = 0x09,
+	UNI_EVENT_ID_ASSERT_DUMP     = 0x0A,
+	UNI_EVENT_ID_SLEEP_NOTIFY    = 0x0b,
+	UNI_EVENT_ID_BEACON_TIMEOUT  = 0x0C,
+	UNI_EVENT_ID_PS_SYNC	     = 0x0D,
+	UNI_EVENT_ID_SCAN_DONE	     = 0x0E,
+	UNI_EVENT_ID_ECC_CAL	     = 0x10,
+	UNI_EVENT_ID_RDD	     = 0x11,
+	UNI_EVENT_ID_ADD_KEY_DONE    = 0x12,
+	UNI_EVENT_ID_OBSS_UPDATE     = 0x13,
+	UNI_EVENT_ID_SER	     = 0x14,
+	UNI_EVENT_ID_IDC	     = 0x17,
+	UNI_EVENT_ID_MAC_INFO	     = 0x1A,
+	UNI_EVENT_ID_TDLS	     = 0x1B,
+	UNI_EVENT_ID_SAP	     = 0x1C,
+	UNI_EVENT_ID_TXCMD_CTRL      = 0x1D,
+	UNI_EVENT_ID_P2P	     = 0x1F,
+	UNI_EVENT_ID_EDCCA	     = 0x21,
+	UNI_EVENT_ID_MIB	     = 0x22,
+	UNI_EVENT_ID_STATISTICS      = 0x23,
+	UNI_EVENT_ID_SR	     = 0x25,
+	UNI_EVENT_ID_SCS	     = 0x26,
+	UNI_EVENT_ID_CNM	     = 0x27,
+	UNI_EVENT_ID_MBMC	     = 0x28,
+	UNI_EVENT_ID_BSS_IS_ABSENCE  = 0x29,
+	UNI_EVENT_ID_TXPOWER	     = 0x2A,
+	UNI_EVENT_ID_WSYS_CONFIG     = 0x2B,
+	UNI_EVENT_ID_BA_OFFLOAD      = 0x2C,
+	UNI_EVENT_ID_STATUS_TO_HOST  = 0x2D,
+	UNI_EVENT_ID_RA	     = 0x2F,
+	UNI_EVENT_ID_TESTMODE_RX_STAT_INFO  = 0x32,
+	UNI_EVENT_ID_BF	     = 0X33,
+	UNI_EVENT_ID_SDVT_STAT	     = 0x34,
+	UNI_EVENT_ID_VOW	     = 0x37,
+	UNI_EVENT_ID_TPC	     = 0x38,
+	UNI_EVENT_ID_MEC	     = 0x3A,
+	UNI_EVENT_ID_RSSI_MONITOR    = 0x41,
+	UNI_EVENT_ID_TEST_TR_PARAM   = 0x42,
+	UNI_EVENT_ID_CHIP_CAPABILITY = 0x43,
+	UNI_EVENT_ID_UPDATE_COEX_PHYRATE = 0x44,
+
+	UNI_EVENT_ID_NUM
+};
+
+
+
 enum _ENUM_FUNCTION_SELECT {
 	FUNCTION_PF				= 1,
 	FUNCTION_BITMAP			= 2,
@@ -2123,6 +2179,24 @@ enum _ENUM_CMD_UPDATE_STA_RECORD_VER_T {
 	CMD_UPDATE_STAREC_VER1,
 	CMD_UPDATE_STAREC_VER_MAX
 };
+
+struct WIFI_UNI_EVENT {
+	uint16_t u2PacketLength;
+	uint16_t u2PacketType;	/* Must be filled with 0xE000 (EVENT Packet) */
+
+	uint8_t ucEID;
+	uint8_t ucSeqNum;
+	uint8_t ucOption;
+	uint8_t aucReserved[1];
+
+	uint8_t ucExtenEID;
+	uint8_t aucReserved2[2];
+	uint8_t ucS2DIndex;
+
+	uint8_t aucBuffer[0];
+};
+
+
 
 struct CMD_BEACON_TEMPLATE_UPDATE {
 	/* 0: update randomly,
@@ -3873,6 +3947,10 @@ void nicCmdEventQueryWlanInfo(IN struct ADAPTER *prAdapter,
 
 void nicCmdEventQueryMibInfo(IN struct ADAPTER *prAdapter,
 	IN struct CMD_INFO *prCmdInfo, IN uint8_t *pucEventBuf);
+
+void nicUniEventChMngrHandleChEvent(struct ADAPTER *ad,
+				    struct WIFI_UNI_EVENT *evt);
+
 
 #ifdef CFG_SUPPORT_UNIFIED_COMMAND
 void nicCmdEventQueryCfgRead(IN struct ADAPTER *prAdapter,

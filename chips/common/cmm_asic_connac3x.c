@@ -1258,6 +1258,10 @@ uint8_t asicConnac3xRxGetRcpiValueFromRxv(
 	/* uint8_t ucRxNum; */
 
 	ASSERT(prSwRfb);
+	if (prSwRfb->prRxStatusGroup3 == NULL) {
+		DBGLOG(RX, WARN, "asicConnac3xRxGetRcpiValueFromRxv: prRxStatusGroup3 NULL, returning LOW_BOUND\n");
+		return RCPI_LOW_BOUND;
+	}
 
 	if (ucRcpiMode >= RCPI_MODE_NUM) {
 		DBGLOG(RX, WARN,

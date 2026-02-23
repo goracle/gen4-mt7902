@@ -131,8 +131,8 @@ struct CMD_INFO {
 	u_int8_t fgNeedResp;
 	uint8_t ucCmdSeqNum;
 	uint32_t u4SetInfoLen;	/* Indicate how many byte we read for Set OID */
-#ifdef CFG_SUPPORT_UNIFIED_COMMAND
 	uint8_t *pucSetInfoBuffer; /* ptr to cmd content without cmd header */
+#ifdef CFG_SUPPORT_UNIFIED_COMMAND
 #endif
 
 	/* information indicating by OID/ioctl */

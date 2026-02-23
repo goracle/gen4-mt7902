@@ -73,6 +73,7 @@
  *******************************************************************************
  */
 #include "precomp.h"
+#include "nic_uni_cmd_event.h"
 #include "gl_ate_agent.h"
 #include "gl_vendor.h"
 
@@ -5873,6 +5874,110 @@ void nicEventCoexCtrl(IN struct ADAPTER *prAdapter,
 	}
 }
 
+
+
+void nicUniEventChMngrHandleChEvent(struct ADAPTER *ad,
+	struct WIFI_UNI_EVENT *evt)
+{
+	int32_t tags_len;
+	uint8_t *tag;
+	uint16_t offset = 0;
+	uint32_t fixed_len = sizeof(struct UNI_EVENT_CNM);
+	uint32_t data_len = GET_UNI_EVENT_DATA_LEN(evt);
+	uint8_t *data = GET_UNI_EVENT_DATA(evt);
+	uint32_t fail_cnt = 0;
+
+	tags_len = data_len - fixed_len;
+	tag = data + fixed_len;
+	TAG_FOR_EACH(tag, tags_len, offset) {
+		DBGLOG(CNM, INFO, "Tag(%d, %d)\n", TAG_ID(tag), TAG_LEN(tag));
+
+		switch (TAG_ID(tag)) {
+		case UNI_EVENT_CNM_TAG_CH_PRIVILEGE_GRANT: {
+			struct UNI_EVENT_CNM_CH_PRIVILEGE_GRANT *grant =
+				(struct UNI_EVENT_CNM_CH_PRIVILEGE_GRANT *)tag;
+			struct EVENT_CH_PRIVILEGE *legacy;
+			struct WIFI_EVENT *prEvent;
+
+			prEvent = (struct WIFI_EVENT *)kalMemAlloc(
+					sizeof(struct WIFI_EVENT) +
+					sizeof(struct EVENT_CH_PRIVILEGE),
+					VIR_MEM_TYPE);
+			if (!prEvent) {
+				DBGLOG(NIC, ERROR,
+				       "Allocate prEvent failed!\n");
+				return;
+			}
+
+			legacy = (struct EVENT_CH_PRIVILEGE *)
+				prEvent->aucBuffer;
+
+			legacy->ucBssIndex = grant->ucBssIndex;
+			legacy->ucTokenID = grant->ucTokenID;
+			legacy->ucStatus = grant->ucStatus;
+			legacy->ucPrimaryChannel = grant->ucPrimaryChannel;
+			legacy->ucRfSco = grant->ucRfSco;
+			legacy->ucRfBand = grant->ucRfBand;
+			legacy->ucRfChannelWidth = grant->ucRfChannelWidth;
+			legacy->ucRfCenterFreqSeg1 = grant->ucRfCenterFreqSeg1;
+			legacy->ucRfCenterFreqSeg2 = grant->ucRfCenterFreqSeg2;
+			legacy->ucReqType = grant->ucReqType;
+			legacy->ucDBDCBand = grant->ucDBDCBand;
+			legacy->u4GrantInterval = grant->u4GrantInterval;
+
+			cnmChMngrHandleChEvent(ad, prEvent);
+
+			kalMemFree(prEvent, VIR_MEM_TYPE,
+				sizeof(struct WIFI_EVENT) +
+				sizeof(struct EVENT_CH_PRIVILEGE));
+		}
+			break;
+		case UNI_EVENT_CNM_TAG_GET_CHANNEL_INFO:
+			break;
+		case UNI_EVENT_CNM_TAG_GET_BSS_INFO:
+			break;
+		case UNI_EVENT_CNM_TAG_OPMODE_CHANGE: {
+			struct UNI_EVENT_CNM_OPMODE_CHANGE *opmode =
+				(struct UNI_EVENT_CNM_OPMODE_CHANGE *)tag;
+			struct EVENT_OPMODE_CHANGE *legacy;
+			struct WIFI_EVENT *prEvent;
+
+			prEvent = (struct WIFI_EVENT *)kalMemAlloc(
+					sizeof(struct WIFI_EVENT) +
+					sizeof(struct EVENT_OPMODE_CHANGE),
+					VIR_MEM_TYPE);
+			if (!prEvent) {
+				DBGLOG(NIC, ERROR,
+				       "Allocate prEvent failed!\n");
+				return;
+			}
+
+			legacy = (struct EVENT_OPMODE_CHANGE *)
+				prEvent->aucBuffer;
+
+			legacy->ucBssBitmap = (uint8_t) opmode->u2BssBitmap;
+			legacy->ucEnable = opmode->ucEnable;
+			legacy->ucOpTxNss = opmode->ucOpTxNss;
+			legacy->ucOpRxNss = opmode->ucOpRxNss;
+			legacy->ucReason = opmode->ucReason;
+
+			cnmOpmodeEventHandler(ad, prEvent);
+
+			kalMemFree(prEvent, VIR_MEM_TYPE,
+				sizeof(struct WIFI_EVENT) +
+				sizeof(struct EVENT_OPMODE_CHANGE));
+		}
+			break;
+		default:
+			fail_cnt++;
+			ASSERT(fail_cnt < MAX_UNI_EVENT_FAIL_TAG_COUNT)
+			DBGLOG(CNM, WARN, "invalid tag = %d\n", TAG_ID(tag));
+			break;
+		}
+	}
+}
+
+
 void nicEventCnmInfo(IN struct ADAPTER *prAdapter,
 		     IN struct WIFI_EVENT *prEvent)
 {
@@ -5882,6 +5987,11 @@ void nicEventCnmInfo(IN struct ADAPTER *prAdapter,
 	prCmdInfo = nicGetPendingCmdInfo(prAdapter,
 					 prEvent->ucSeqNum);
 
+	if (prCmdInfo == NULL) {
+		nicUniEventChMngrHandleChEvent(prAdapter,
+			(struct WIFI_UNI_EVENT *)prEvent);
+		return;
+	}
 	if (prCmdInfo != NULL) {
 		if (prCmdInfo->pfCmdDoneHandler) {
     if (prCmdInfo->pfCmdDoneHandler) {

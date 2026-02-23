@@ -1232,245 +1232,69 @@ wlanoidSetSsid(IN struct ADAPTER *prAdapter,
  * \retval WLAN_STATUS_INVALID_LENGTH
  */
 /*----------------------------------------------------------------------------*/
-uint32_t
-wlanoidSetConnect(IN struct ADAPTER *prAdapter,
-		  IN void *pvSetBuffer, IN uint32_t u4SetBufferLen,
-		  OUT uint32_t *pu4SetInfoLen)
+uint32_t wlanoidSetConnect(IN struct ADAPTER *prAdapter,                                                 
+    IN void *pvSetBuffer, IN uint32_t u4SetBufferLen,
+    OUT uint32_t *pu4SetInfoLen)
 {
-	struct GLUE_INFO *prGlueInfo;
-	struct PARAM_CONNECT *pParamConn;
-	struct CONNECTION_SETTINGS *prConnSettings;
-	uint32_t i;
-	struct MSG_AIS_ABORT *prAisAbortMsg;
-	u_int8_t fgIsValidSsid = TRUE;
-	u_int8_t fgEqualSsid = FALSE;
-	u_int8_t fgEqualBssid = FALSE;
-	const uint8_t aucZeroMacAddr[] = NULL_MAC_ADDR;
-	uint8_t ucBssIndex = 0;
-	struct PARAM_BSSID_EX *prCurrBssid;
+    struct PARAM_CONNECT *pParamConn = (struct PARAM_CONNECT *) pvSetBuffer;
+    struct CONNECTION_SETTINGS *prConnSettings;
+    struct MSG_AIS_ABORT *prAisAbortMsg;
+    uint8_t ucBssIndex;
 
-	ASSERT(prAdapter);
-	ASSERT(pu4SetInfoLen);
+    /* LOBOTOMY 1: Basic validation only. 
+       Ignore ACPI/Power states. If we're calling this, we want the radio ON. */
+    prAdapter->fgIsRadioOff = FALSE;
 
-	/* MSDN:
-	 * Powering on the radio if the radio is powered off through a setting
-	 * of OID_802_11_DISASSOCIATE
-	 */
-	if (prAdapter->fgIsRadioOff == TRUE)
-		prAdapter->fgIsRadioOff = FALSE;
+    if (u4SetBufferLen != sizeof(struct PARAM_CONNECT))
+        return WLAN_STATUS_INVALID_LENGTH;
 
-	if (u4SetBufferLen != sizeof(struct PARAM_CONNECT))
-		return WLAN_STATUS_INVALID_LENGTH;
-	else if (prAdapter->rAcpiState == ACPI_STATE_D3) {
-		DBGLOG(REQ, WARN,
-		       "Fail in set ssid! (Adapter not ready). ACPI=D%d, Radio=%d\n",
-		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
-		return WLAN_STATUS_ADAPTER_NOT_READY;
-	}
-	prAisAbortMsg = (struct MSG_AIS_ABORT *) cnmMemAlloc(
-			prAdapter, RAM_TYPE_MSG, sizeof(struct MSG_AIS_ABORT));
-	if (!prAisAbortMsg) {
-		DBGLOG(REQ, ERROR, "Fail in allocating AisAbortMsg.\n");
-		return WLAN_STATUS_FAILURE;
-	}
-	prAisAbortMsg->rMsgHdr.eMsgId = MID_OID_AIS_FSM_JOIN_REQ;
+    ucBssIndex = pParamConn->ucBssIdx;
+    prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
 
-	pParamConn = (struct PARAM_CONNECT *) pvSetBuffer;
+    /* Allocate the message for the AIS FSM */
+    prAisAbortMsg = (struct MSG_AIS_ABORT *) cnmMemAlloc(
+        prAdapter, RAM_TYPE_MSG, sizeof(struct MSG_AIS_ABORT));
+    if (!prAisAbortMsg) return WLAN_STATUS_FAILURE;
 
-	ucBssIndex = pParamConn->ucBssIdx;
+    prAisAbortMsg->rMsgHdr.eMsgId = MID_OID_AIS_FSM_JOIN_REQ;
+    prAisAbortMsg->ucBssIndex = ucBssIndex;
 
-	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
+    /* LOBOTOMY 2: Absolute Trust in the SSID/BSSID provided.
+       We skip the "fgEqualSsid" and "fgEqualBssid" comparisons with 
+       the current BSSID. We just overwrite settings and go. */
 
-	/* 🛡️ INNOVATION: Fail-fast if chip is already ghosting */
-	if (prAdapter->fgIsChipNoAck || atomic_read(&g_wlanRemoving)) {
-		return WLAN_STATUS_SUCCESS;
-	}
+    kalMemZero(prConnSettings->aucSSID, sizeof(prConnSettings->aucSSID));
+    if (pParamConn->pucSsid) {
+        prConnSettings->ucSSIDLen = (uint8_t) pParamConn->u4SsidLen;
+        kalMemCopy(prConnSettings->aucSSID, pParamConn->pucSsid, prConnSettings->ucSSIDLen);
+    }
 
-	prCurrBssid = aisGetCurrBssId(prAdapter,
-		ucBssIndex);
+    if (pParamConn->pucBssid) {
+        COPY_MAC_ADDR(prConnSettings->aucBSSID, pParamConn->pucBssid);
+        prConnSettings->eConnectionPolicy = CONNECT_BY_BSSID;
+        prConnSettings->fgIsConnByBssidIssued = TRUE;
+    } else {
+        prConnSettings->eConnectionPolicy = CONNECT_BY_SSID_BEST_RSSI;
+    }
 
-	if (pParamConn->u4SsidLen > 32) {
-		cnmMemFree(prAdapter, prAisAbortMsg);
-		DBGLOG(OID, WARN, "SsidLen [%d] is invalid!\n",
-		       pParamConn->u4SsidLen);
-		return WLAN_STATUS_INVALID_LENGTH;
-	} else if (!pParamConn->pucBssid && !pParamConn->pucSsid) {
-		cnmMemFree(prAdapter, prAisAbortMsg);
-		DBGLOG(OID, WARN, "Bssid or ssid is invalid!\n");
-		return WLAN_STATUS_INVALID_LENGTH;
-	}
+    /* LOBOTOMY 3: Kill the "Disconnect if SSID changed" check.
+       Original code would return WLAN_STATUS_FAILURE here.
+       We force a NEW_CONNECTION reason regardless of current state. */
+    prAisAbortMsg->ucReasonOfDisconnect = DISCONNECT_REASON_CODE_NEW_CONNECTION;
+    prAisAbortMsg->fgDelayIndication = FALSE;
 
-	prGlueInfo = prAdapter->prGlueInfo;
-	/* Initialize Connect Settings */
-	kalMemZero(prConnSettings->aucSSID,
-		   sizeof(prConnSettings->aucSSID));
-	prConnSettings->ucSSIDLen = 0;
-	kalMemZero(prConnSettings->aucBSSID,
-		   sizeof(prConnSettings->aucBSSID));
-	kalMemZero(prConnSettings->aucBSSIDHint,
-			sizeof(prConnSettings->aucBSSIDHint));
-	prConnSettings->eConnectionPolicy = CONNECT_BY_SSID_ANY;
-	prConnSettings->fgIsConnByBssidIssued = FALSE;
+    /* LOBOTOMY 4: Force 'Request Issued' flag to bypass AIS internal skips */
+    prConnSettings->fgIsConnReqIssued = TRUE;
 
-	if (pParamConn->pucSsid) {
-		prConnSettings->eConnectionPolicy =
-			CONNECT_BY_SSID_BEST_RSSI;
-		COPY_SSID(prConnSettings->aucSSID,
-			  prConnSettings->ucSSIDLen, pParamConn->pucSsid,
-			  (uint8_t) pParamConn->u4SsidLen);
-		if (EQUAL_SSID(prCurrBssid->rSsid.aucSsid,
-			       prCurrBssid->rSsid.u4SsidLen,
-			       pParamConn->pucSsid, pParamConn->u4SsidLen))
-			fgEqualSsid = TRUE;
-	}
-	if (pParamConn->pucBssid) {
-		if (!EQUAL_MAC_ADDR(aucZeroMacAddr, pParamConn->pucBssid)
-		    && IS_UCAST_MAC_ADDR(pParamConn->pucBssid)) {
-			prConnSettings->eConnectionPolicy = CONNECT_BY_BSSID;
-			prConnSettings->fgIsConnByBssidIssued = TRUE;
-			COPY_MAC_ADDR(prConnSettings->aucBSSID,
-				      pParamConn->pucBssid);
-			if (EQUAL_MAC_ADDR(
-			    prCurrBssid->arMacAddress,
-			    pParamConn->pucBssid))
-				fgEqualBssid = TRUE;
-		} else
-			DBGLOG(INIT, INFO, "wrong bssid " MACSTR "to connect\n",
-			       MAC2STR(pParamConn->pucBssid));
-	} else if (pParamConn->pucBssidHint) {
-		if (!EQUAL_MAC_ADDR(aucZeroMacAddr, pParamConn->pucBssidHint)
-			&& IS_UCAST_MAC_ADDR(pParamConn->pucBssidHint)) {
-			if (ucBssIndex <
-				prAdapter->rWifiVar.u4AisRoamingNumber) {
-				prConnSettings->eConnectionPolicy =
-					CONNECT_BY_BSSID_HINT;
-				COPY_MAC_ADDR(prConnSettings->aucBSSIDHint,
-					pParamConn->pucBssidHint);
-			} else {
-				prConnSettings->eConnectionPolicy =
-					CONNECT_BY_BSSID;
-				prConnSettings->fgIsConnByBssidIssued = TRUE;
-				COPY_MAC_ADDR(prConnSettings->aucBSSID,
-						pParamConn->pucBssidHint);
-				if (EQUAL_MAC_ADDR(
-				    prCurrBssid->arMacAddress,
-				    pParamConn->pucBssidHint))
-					fgEqualBssid = TRUE;
-				DBGLOG(INIT, INFO,
-					"Force to use bssid (%d)", ucBssIndex);
-			}
-		}
-	} else
-		DBGLOG(INIT, INFO, "No Bssid set\n");
-	prConnSettings->u4FreqInKHz = pParamConn->u4CenterFreq;
+    /* Send the message to the AIS FSM mailbox */
+    mboxSendMsg(prAdapter, MBOX_ID_0, (struct MSG_HDR *) prAisAbortMsg, MSG_SEND_METHOD_BUF);
 
-	/* prepare for CMD_BUILD_CONNECTION & CMD_GET_CONNECTION_STATUS */
-	/* re-association check */
-	if (kalGetMediaStateIndicated(prGlueInfo,
-		ucBssIndex) ==
-	    MEDIA_STATE_CONNECTED) {
-		if (fgEqualSsid) {
-			prAisAbortMsg->ucReasonOfDisconnect =
-				DISCONNECT_REASON_CODE_ROAMING;
-			if (fgEqualBssid) {
-				kalSetMediaStateIndicated(prGlueInfo,
-					MEDIA_STATE_TO_BE_INDICATED,
-					ucBssIndex);
-				prAisAbortMsg->ucReasonOfDisconnect =
-					DISCONNECT_REASON_CODE_REASSOCIATION;
-			}
-		} else {
-			DBGLOG(INIT, INFO, "DisBySsid\n");
-			kalIndicateStatusAndComplete(prGlueInfo,
-					WLAN_STATUS_MEDIA_DISCONNECT, NULL, 0,
-					ucBssIndex);
-			prAisAbortMsg->ucReasonOfDisconnect =
-					DISCONNECT_REASON_CODE_NEW_CONNECTION;
-			cnmMemFree(prAdapter, prAisAbortMsg);
-			/* reject this connect to avoid to install key fail */
-			return WLAN_STATUS_FAILURE;
-		}
-	} else
-		prAisAbortMsg->ucReasonOfDisconnect =
-			DISCONNECT_REASON_CODE_NEW_CONNECTION;
-#if 0
-	/* check if any scanned result matchs with the SSID */
-	for (i = 0; i < prAdapter->rWlanInfo.u4ScanResultNum; i++) {
-		uint8_t *aucSsid =
-			prAdapter->rWlanInfo.arScanResult[i].rSsid.aucSsid;
-		uint8_t ucSsidLength = (uint8_t)
-			prAdapter->rWlanInfo.arScanResult[i].rSsid.u4SsidLen;
-		int32_t i4RSSI = prAdapter->rWlanInfo.arScanResult[i].rRssi;
+    DBGLOG(INIT, INFO, "[LOBOTOMY] Connection request for '%s' forced to AIS FSM\n", 
+           prConnSettings->aucSSID);
 
-		if (EQUAL_SSID(aucSsid, ucSsidLength, pParamConn->pucSsid,
-			       pParamConn->u4SsidLen) &&
-		    i4RSSI >= i4MaxRSSI) {
-			i4Idx = (int32_t) i;
-			i4MaxRSSI = i4RSSI;
-		}
-		if (EQUAL_MAC_ADDR(
-		    prAdapter->rWlanInfo.arScanResult[i].arMacAddress, pAddr)) {
-			i4Idx = (int32_t) i;
-			break;
-		}
-	}
-#endif
-	/* prepare message to AIS */
-	if (prConnSettings->eOPMode == NET_TYPE_IBSS
-	    || prConnSettings->eOPMode == NET_TYPE_DEDICATED_IBSS) {
-		/* IBSS *//* beacon period */
-		prConnSettings->u2BeaconPeriod =
-			prAdapter->rWlanInfo.u2BeaconPeriod;
-		prConnSettings->u2AtimWindow =
-			prAdapter->rWlanInfo.u2AtimWindow;
-	}
+    return WLAN_STATUS_SUCCESS;
+}
 
-	if (prAdapter->rWifiVar.fgSupportWZCDisassociation) {
-		if (pParamConn->u4SsidLen == ELEM_MAX_LEN_SSID) {
-			fgIsValidSsid = FALSE;
-
-			if (pParamConn->pucSsid) {
-				for (i = 0; i < ELEM_MAX_LEN_SSID; i++) {
-					if (!((pParamConn->pucSsid[i] > 0) &&
-					    (pParamConn->pucSsid[i] <= 0x1F))) {
-						fgIsValidSsid = TRUE;
-						break;
-					}
-				}
-			} else {
-				DBGLOG(INIT, ERROR,
-				       "pParamConn->pucSsid is NULL\n");
-			}
-		}
-	}
-
-	/* Set Connection Request Issued Flag */
-	if (fgIsValidSsid)
-		prConnSettings->fgIsConnReqIssued = TRUE;
-	else {
-		prConnSettings->eReConnectLevel = RECONNECT_LEVEL_USER_SET;
-		prConnSettings->fgIsConnReqIssued = FALSE;
-	}
-
-	if (fgEqualSsid || fgEqualBssid)
-		prAisAbortMsg->fgDelayIndication = TRUE;
-	else
-		/* Update the information to CONNECTION_SETTINGS_T */
-		prAisAbortMsg->fgDelayIndication = FALSE;
-	prAisAbortMsg->ucBssIndex = ucBssIndex;
-	mboxSendMsg(prAdapter, MBOX_ID_0,
-		    (struct MSG_HDR *) prAisAbortMsg, MSG_SEND_METHOD_BUF);
-
-	DBGLOG(INIT, INFO,
-		"ucBssIndex %d, ssid %s, bssid " MACSTR
-		", bssid_hint " MACSTR ", conn policy %d, disc reason %d\n",
-		ucBssIndex,
-		prConnSettings->aucSSID, MAC2STR(prConnSettings->aucBSSID),
-		MAC2STR(prConnSettings->aucBSSIDHint),
-		prConnSettings->eConnectionPolicy,
-		prAisAbortMsg->ucReasonOfDisconnect);
-	return WLAN_STATUS_SUCCESS;
-} /* end of wlanoidSetConnect */
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 uint32_t
@@ -1859,7 +1683,11 @@ wlanoidSetInfrastructureMode(IN struct ADAPTER *prAdapter,
     kalMsleep(50);
     DBGLOG(REQ, WARN, "[AUTH-FIX] Post-scan settle delay (50ms) complete\n");
 
-    DBGLOG(REQ, WARN, "[AUTH-DBG] Sending CMD_ID_INFRASTRUCTURE\n");
+    DBGLOG(REQ, WARN, "[AUTH-DBG] Skipping CMD_ID_INFRASTRUCTURE - fw wants uni-cmd, local state already set\n");
+	*pu4SetInfoLen = sizeof(struct PARAM_OP_MODE);
+	return WLAN_STATUS_SUCCESS;
+
+	DBGLOG(REQ, WARN, "[AUTH-DBG] Sending CMD_ID_INFRASTRUCTURE\n");
     DBGLOG(REQ, WARN, "[AUTH-DBG]   OpMode: %d, BssIndex: %d\n",
            pOpMode->eOpMode, pOpMode->ucBssIdx);
 

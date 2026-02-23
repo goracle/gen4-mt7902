@@ -1686,6 +1686,7 @@ void halRxReceiveRFBs(IN struct ADAPTER *prAdapter, uint32_t u4Port,
 			if (prSwRfb->u2PacketLen == 0 && u2HwLen > 0) {
 				DBGLOG(RX, WARN, "[H-FIX] Correcting Type 7 Len: 0 -> %u\n", u2HwLen);
 				prSwRfb->u2PacketLen = u2HwLen;
+				prSwRfb->u2RxByteCount = u2HwLen;
 				if (prSwRfb->pvPacket) {
 					skb_put((struct sk_buff *)prSwRfb->pvPacket, u2HwLen);
 				}

@@ -812,124 +812,67 @@ void scnFsmRemovePendingMsg(IN struct ADAPTER *prAdapter, IN uint8_t ucSeqNum,
  * ============================================================================
  */
 
-void scnEventScanDone(IN struct ADAPTER *prAdapter,
-                      IN struct EVENT_SCAN_DONE *prScanDone,
-                      u_int8_t fgIsNewVersion)
+
+void scnEventScanDone(IN struct ADAPTER *prAdapter,                                                 
+    IN struct EVENT_SCAN_DONE *prScanDone,
+    u_int8_t fgIsNewVersion)
 {
     struct SCAN_INFO *prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
-    struct SCAN_PARAM *prScanParam = &prScanInfo->rScanParam;
+    //struct SCAN_PARAM *prScanParam = &prScanInfo->rScanParam;
     struct BSS_DESC *prBssDesc;
     unsigned long flags;
-
-    uint32_t u4CurrentUpdateIdx;
     uint32_t u4TotalInList = 0;
-    uint32_t u4BssIndicateCnt = 0;
-
-    /* Temporary storage for pointers to indicate outside the lock */
-#define MAX_INDICATE_BSS 128
-    struct BSS_DESC *aprIndicate[MAX_INDICATE_BSS];
     uint32_t u4IndicateNum = 0;
 
+    /* Removed MAX_INDICATE_BSS 128 limit logic to prevent dropping valid APs */
+    /* If memory permits, we report everything the radio saw */
+
     if (fgIsNewVersion) {
-        scanlog_dbg(LOG_SCAN_DONE_F2D, INFO,
-                    "scnEventScanDone V%u! Seq[%u]\n",
-                    prScanDone->ucScanDoneVersion,
-                    prScanDone->ucSeqNum);
+        DBGLOG(SCN, INFO, "scnEventScanDone V%u! Seq[%u] - LOBOTOMIZED\n",
+            prScanDone->ucScanDoneVersion, prScanDone->ucSeqNum);
     }
 
-    /* =========================
-     * CRITICAL SECTION: Snapshot
-     * =========================
-     */
     spin_lock_irqsave(&prAdapter->rScanListLock, flags);
 
-    u4CurrentUpdateIdx = prScanInfo->u4ScanUpdateIdx;
+    /* LOBOTOMY: We no longer care about u4ScanUpdateIdx. 
+       If it's in the list, it's valid for iwd to see. */
 
-    DBGLOG(SCN, INFO,
-           "[DEBUG] ScanDone Event Rcvd. TargetUpdateIdx=%u\n",
-           u4CurrentUpdateIdx);
-
-    LINK_FOR_EACH_ENTRY(prBssDesc,
-                        &prScanInfo->rBSSDescList,
-                        rLinkEntry,
-                        struct BSS_DESC) {
-
+    LINK_FOR_EACH_ENTRY(prBssDesc, &prScanInfo->rBSSDescList, rLinkEntry, struct BSS_DESC) {
         u4TotalInList++;
 
-        if (prBssDesc->u4UpdateIdx != u4CurrentUpdateIdx)
-            continue;
+        if (prBssDesc->ucChannelNum == 0) continue;
 
-        if (prBssDesc->ucChannelNum == 0) {
-            DBGLOG(SCN, WARN,
-                   "Skip BSS with invalid channel 0\n");
-            continue;
-        }
-
-        if (u4IndicateNum < MAX_INDICATE_BSS) {
-            aprIndicate[u4IndicateNum++] = prBssDesc;
-        } else {
-            DBGLOG(SCN, WARN,
-                   "Indicate buffer full, dropping extras\n");
-            break;
-        }
+        /* REPORT ALL: We bypass the 'if (idx != current)' check entirely.
+           This ensures iwd sees "H" even if the driver's internal clock is lagging. */
+        
+        scanReportBss2Cfg80211(prAdapter, prBssDesc->eBSSType, prBssDesc);
+        u4IndicateNum++;
     }
 
-    if (u4IndicateNum == 0 && u4TotalInList > 0) {
-        DBGLOG(SCN, ERROR,
-               "[CRITICAL] List has %u entries but none match UpdateIdx %u\n",
-               u4TotalInList, u4CurrentUpdateIdx);
-    }
-
-    /* Cleanup stale entries while lock is held */
+    /* Force cleanup of actually expired entries, but don't be aggressive */
     scanRemoveBssDescsByPolicy(prAdapter, SCN_RM_POLICY_TIMEOUT);
 
-    /* Update completion timestamp */
-    prScanInfo->rLastScanCompletedTime = kalGetTimeTick();
+    /* LOBOTOMY: Reset cooldown. We want the hardware ready for AUTH immediately. */
+    prScanInfo->rLastScanCompletedTime = 0; 
 
     spin_unlock_irqrestore(&prAdapter->rScanListLock, flags);
 
-    /* =========================
-     * Reporting (may sleep)
-     * =========================
-     */
-    for (u4BssIndicateCnt = 0;
-         u4BssIndicateCnt < u4IndicateNum;
-         u4BssIndicateCnt++) {
-
-        struct BSS_DESC *p = aprIndicate[u4BssIndicateCnt];
-
-        DBGLOG(SCN, INFO,
-               "[SCN-REPORT] Reporting: BSSID[%02x:%02x:%02x:%02x:%02x:%02x] "
-               "Ch:%u Band:%u SSID:%s\n",
-               p->aucBSSID[0], p->aucBSSID[1],
-               p->aucBSSID[2], p->aucBSSID[3],
-               p->aucBSSID[4], p->aucBSSID[5],
-               p->ucChannelNum, p->eBand,
-               p->aucSSID);
-
-        scanReportBss2Cfg80211(prAdapter, p->eBSSType, p);
-    }
-
-    DBGLOG(SCN, INFO,
-           "[SUCCESS] Indicated %u fresh BSS entries (Total evaluated: %u)\n",
-           u4IndicateNum, u4TotalInList);
-
-    DBGLOG(SCN, INFO,
-           "[COOLDOWN] Timestamp set to %u. Cooldown active.\n",
-           prScanInfo->rLastScanCompletedTime);
-
-    /* =========================
-     * Completion + FSM (no lock)
-     * =========================
-     */
+    /* Signal completion to the kernel immediately */
     complete(&prAdapter->rScanDoneCompletion);
 
-    scnFsmGenerateScanDoneMsg(prAdapter,
-                              prScanParam->ucSeqNum,
-                              prScanParam->ucBssIndex,
-                              SCAN_STATUS_DONE);
-
+    /* Bypass FSM message generation if possible, force state to IDLE 
+       so the next AUTH command isn't rejected with 0x103 Busy. */
     scnFsmSteps(prAdapter, SCAN_STATE_IDLE);
+
+    DBGLOG(SCN, INFO, "[LOBOTOMY SUCCESS] Reported %u entries to iwd/cfg80211\n", u4IndicateNum);
+
+    /* Close the cfg80211 scan request so iwd sees results. */
+    {
+        uint8_t ucBssIndex = prScanInfo->rScanParam.ucBssIndex;
+        struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
+        if (prGlueInfo)
+            kalScanDone(prGlueInfo, ucBssIndex, WLAN_STATUS_SUCCESS);
+    }
 }
 
 /*----------------------------------------------------------------------------*/

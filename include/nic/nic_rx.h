@@ -523,6 +523,26 @@
  *                             D A T A   T Y P E S
  *******************************************************************************
  */
+
+struct WIFI_UNI_SETQUERY_INFO {
+	/* legacy cmd*/
+	IN uint8_t ucCID;
+	IN uint8_t ucExtCID;
+	IN uint8_t fgSetQuery;
+	IN uint8_t fgNeedResp;
+	IN uint8_t fgIsOid;
+	IN PFN_CMD_DONE_HANDLER pfCmdDoneHandler;
+	IN PFN_CMD_TIMEOUT_HANDLER pfCmdTimeoutHandler;
+	IN uint32_t u4SetQueryInfoLen;
+	IN uint8_t *pucInfoBuffer;
+	IN void *pvSetQueryBuffer;
+	IN uint32_t u4SetQueryBufferLen;
+
+	/* uni cmds */
+	OUT struct LINK rUniCmdList;
+};
+
+
 enum ENUM_RX_STATISTIC_COUNTER {
 	RX_MPDU_TOTAL_COUNT = 0,
 	RX_SIZE_ERR_DROP_COUNT,
@@ -772,6 +792,9 @@ struct HW_MAC_RX_STS_HARRIER_E1_GROUP_5 {
 	/* FALCON: DW 18~33 for harrier E1,  DW 18~35 for harrier E2 */
 	uint32_t u4RxVector[16];
 };
+
+
+
 
 
 #define CONNAC2X_RSSI_MASK	BITS(0, 31)
@@ -1046,6 +1069,14 @@ typedef uint32_t(*PROCESS_RX_MGT_FUNCTION) (struct ADAPTER *, struct SW_RFB *);
 
 typedef void(*PROCESS_RX_EVENT_FUNCTION) (struct ADAPTER *,
 	struct WIFI_EVENT *);
+
+typedef uint32_t (*PROCESS_LEGACY_TO_UNI_FUNCTION) (struct ADAPTER *,
+       struct WIFI_UNI_SETQUERY_INFO *);
+
+typedef void(*PROCESS_RX_UNI_EVENT_FUNCTION) (struct ADAPTER *,
+       struct WIFI_UNI_EVENT *);
+
+
 
 struct RX_EVENT_HANDLER {
 	enum ENUM_EVENT_ID eEID;

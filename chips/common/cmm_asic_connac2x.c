@@ -63,18 +63,20 @@
 ********************************************************************************
 */
 
+#include "coda/mt7915/wf_wfdma_host_dma0.h"
+#include "coda/mt7915/wf_wfdma_host_dma1.h"
+#include "precomp.h"
+#include "wlan_lib.h"
+#include "chips/cmm_asic_connac2x.h"
+#include "nic_uni_cmd_event.h"
+
 #if (CFG_SUPPORT_CONNAC2X == 1)
 
 /*******************************************************************************
 *                    E X T E R N A L   R E F E R E N C E S
 ********************************************************************************
 */
-#include "coda/mt7915/wf_wfdma_host_dma0.h"
-#include "coda/mt7915/wf_wfdma_host_dma1.h"
 
-
-#include "precomp.h"
-#include "wlan_lib.h"
 
 /*******************************************************************************
 *                              C O N S T A N T S
@@ -164,10 +166,9 @@ void asicConnac2xCapInit(
 	prChipInfo->u2CmdTxHdrSize = sizeof(struct CONNAC2X_WIFI_CMD);
 	prChipInfo->asicFillInitCmdTxd = asicConnac2xFillInitCmdTxd;
 	prChipInfo->asicFillCmdTxd = asicConnac2xFillCmdTxd;
-#ifdef CFG_SUPPORT_UNIFIED_COMMAND
+
 	prChipInfo->u2UniCmdTxHdrSize = sizeof(struct CONNAC2X_WIFI_UNI_CMD);
 	prChipInfo->asicFillUniCmdTxd = asicConnac2xFillUniCmdTxd;
-#endif
 	prChipInfo->u2RxSwPktBitMap = CONNAC2X_RX_STATUS_PKT_TYPE_SW_BITMAP;
 	prChipInfo->u2RxSwPktEvent = CONNAC2X_RX_STATUS_PKT_TYPE_SW_EVENT;
 	prChipInfo->u2RxSwPktFrame = CONNAC2X_RX_STATUS_PKT_TYPE_SW_FRAME;
@@ -331,7 +332,6 @@ static void asicConnac2xFillCmdTxdInfo(
 			prWifiCmd->ucSetQuery, prCmdInfo->u2InfoBufLen);
 }
 
-#ifdef CFG_SUPPORT_UNIFIED_COMMAND
 static void asicConnac2xFillUniCmdTxdInfo(
 	struct ADAPTER *prAdapter,
 	struct WIFI_UNI_CMD_INFO *prCmdInfo,
@@ -366,7 +366,6 @@ static void asicConnac2xFillUniCmdTxdInfo(
 			prWifiCmd->u2CID, prWifiCmd->ucSeqNum,
 			prWifiCmd->ucOption, prCmdInfo->u2InfoBufLen);
 }
-#endif
 
 void asicConnac2xFillInitCmdTxd(
 	struct ADAPTER *prAdapter,
@@ -485,7 +484,6 @@ void asicConnac2xFillCmdTxd(
 		*pCmdBuf = &prWifiCmd->aucBuffer[0];
 }
 
-#ifdef CFG_SUPPORT_UNIFIED_COMMAND
 void asicConnac2xFillUniCmdTxd(
 	struct ADAPTER *prAdapter,
 	struct WIFI_UNI_CMD_INFO *prCmdInfo,
@@ -500,7 +498,6 @@ void asicConnac2xFillUniCmdTxd(
 	if (pCmdBuf)
 		*pCmdBuf = &prWifiCmd->aucBuffer[0];
 }
-#endif
 
 #if defined(_HIF_PCIE) || defined(_HIF_AXI)
 uint32_t asicConnac2xWfdmaCfgAddrGet(

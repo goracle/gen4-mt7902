@@ -1507,8 +1507,8 @@ u_int8_t (*checkMmioAlive)(struct ADAPTER *prAdapter);
 	uint32_t u4ChipIpVersion;
 	uint32_t u4ChipIpConfig;
 	uint16_t u2ADieChipVersion;
-#ifdef CFG_SUPPORT_UNIFIED_COMMAND
 	uint16_t u2UniCmdTxHdrSize;
+#ifdef CFG_SUPPORT_UNIFIED_COMMAND
 #endif
 
 	void (*asicCapInit)(IN struct ADAPTER *prAdapter);
@@ -1522,11 +1522,12 @@ u_int8_t (*checkMmioAlive)(struct ADAPTER *prAdapter);
 		IN struct WIFI_CMD_INFO *prCmdInfo,
 		OUT uint8_t *pucSeqNum, OUT void **pCmdBuf);
 #ifdef CFG_SUPPORT_UNIFIED_COMMAND
+
+#endif
 	void (*asicFillUniCmdTxd)(IN struct ADAPTER *prAdapter,
 		IN struct WIFI_UNI_CMD_INFO *prCmdInfo,
 		OUT uint8_t *pucSeqNum, OUT void **pCmdBuf);
-#endif
-	uint32_t (*asicGetChipID)(IN struct ADAPTER *prAdapter);
+  uint32_t (*asicGetChipID)(IN struct ADAPTER *prAdapter);
 	void (*fillHifTxDesc)(OUT uint8_t **pDest, IN uint16_t *pInfoBufLen,
 		IN uint8_t ucPacketType);
 	uint32_t (*downloadBufferBin)(IN struct ADAPTER *prAdapter);

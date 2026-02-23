@@ -363,11 +363,15 @@ void cnmDbdcRuntimeCheckDecision(IN struct ADAPTER *prAdapter,
 u_int8_t cnmDbdcIsP2pListenDbdcEn(void);
 #endif
 
+#endif /*CFG_SUPPORT_DBDC*/
+
+
+
 void cnmDbdcGuardTimerCallback(IN struct ADAPTER *prAdapter,
 	IN unsigned long plParamPtr);
 void cnmDbdcEventHwSwitchDone(IN struct ADAPTER *prAdapter,
 	IN struct WIFI_EVENT *prEvent);
-#endif /*CFG_SUPPORT_DBDC*/
+
 
 enum ENUM_CNM_NETWORK_TYPE_T cnmGetBssNetworkType(struct BSS_INFO *prBssInfo);
 

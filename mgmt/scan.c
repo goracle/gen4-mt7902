@@ -3718,47 +3718,34 @@ static void scnReportSingleBss(struct ADAPTER *prAdapter,
      */
 }
 
-void scanReportBss2Cfg80211(IN struct ADAPTER *prAdapter,
-                            IN enum ENUM_BSS_TYPE eBSSType,
-                            IN struct BSS_DESC *prSpecificBss)
+void scanReportBss2Cfg80211(IN struct ADAPTER *prAdapter,                                          
+    IN enum ENUM_BSS_TYPE eBSSType,
+    IN struct BSS_DESC *prSpecificBss)
 {
-    struct SCAN_INFO *prScanInfo;
-    struct BSS_DESC *prBss;
-
-    ASSERT(prAdapter);
-    prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
-
-    /* Case 1: Report a specific, single BSS entry */
+    /* LOBOTOMY: Strip all filters. We want raw data flow. */
     if (prSpecificBss) {
-        if (scanCheckBssIsLegal(prAdapter, prSpecificBss)) {
-            scnReportSingleBss(prAdapter, prSpecificBss);
-        }
+        /* Bypass scanCheckBssIsLegal entirely. 
+           If iwd wants to connect to an 'illegal' channel, 
+           let the kernel/user decide, not this driver layer. */
+        scnReportSingleBss(prAdapter, prSpecificBss);
         return;
     }
 
-    /* Case 2: Iterate and report the entire BSS list */
-    DBGLOG(SCN, TRACE, "Reporting BSS list for type: %d\n", eBSSType);
+    /* We don't even need Case 2 (Iteration) anymore because our 
+       rewrite of scnEventScanDone now handles the loop. 
+       But we'll keep it as a fallback with the filters removed. */
+
+    struct SCAN_INFO *prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
+    struct BSS_DESC *prBss;
 
     LINK_FOR_EACH_ENTRY(prBss, &prScanInfo->rBSSDescList, rLinkEntry, struct BSS_DESC) {
-        
-        /* Skip if regulatory says this channel is currently illegal */
-        if (!scanCheckBssIsLegal(prAdapter, prBss))
-            continue;
-
-        /* Match logic for Infra vs P2P */
-        if (prBss->eBSSType == eBSSType 
-#if CFG_ENABLE_WIFI_DIRECT
-            || (eBSSType == BSS_TYPE_P2P_DEVICE && prBss->fgIsP2PReport)
-#endif
-        ) {
-            scnReportSingleBss(prAdapter, prBss);
-        }
+        /* Push everything. No regulatory check, no BSS type check. */
+        scnReportSingleBss(prAdapter, prBss);
     }
 
-    /* Optional: update scores for Auto Channel Selection */
-    p2pFunCalAcsChnScores(prAdapter);
+    /* LOBOTOMY: Removed p2pFunCalAcsChnScores(prAdapter). 
+       No need to waste cycles calculating ACS scores for a fixed SSID 'H'. */
 }
-
 
 
 

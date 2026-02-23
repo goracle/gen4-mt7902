@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Copyright (c) 2021 MediaTek Inc
+ //* Copyright (c) 2021 MediaTek Inc
 
 
 /*! \file   "nic_uni_cmd_event.h"
@@ -119,23 +118,7 @@ struct WIFI_UNI_CMD {
 	uint8_t aucBuffer[0];
 };
 
-struct WIFI_UNI_SETQUERY_INFO {
-	/* legacy cmd*/
-	IN uint8_t ucCID;
-	IN uint8_t ucExtCID;
-	IN uint8_t fgSetQuery;
-	IN uint8_t fgNeedResp;
-	IN uint8_t fgIsOid;
-	IN PFN_CMD_DONE_HANDLER pfCmdDoneHandler;
-	IN PFN_CMD_TIMEOUT_HANDLER pfCmdTimeoutHandler;
-	IN uint32_t u4SetQueryInfoLen;
-	IN uint8_t *pucInfoBuffer;
-	IN void *pvSetQueryBuffer;
-	IN uint32_t u4SetQueryBufferLen;
 
-	/* uni cmds */
-	OUT struct LINK rUniCmdList;
-};
 
 struct WIFI_UNI_CMD_ENTRY {
 	struct LINK_ENTRY rLinkEntry;
@@ -2124,22 +2107,6 @@ struct UNI_CMD_FRM_IND_FROM_HOST_PARM {
  *******************************************************************************
  */
 
-struct WIFI_UNI_EVENT {
-	uint16_t u2PacketLength;
-	uint16_t u2PacketType;	/* Must be filled with 0xE000 (EVENT Packet) */
-
-	uint8_t ucEID;
-	uint8_t ucSeqNum;
-	uint8_t ucOption;
-	uint8_t aucReserved[1];
-
-	uint8_t ucExtenEID;
-	uint8_t aucReserved2[2];
-	uint8_t ucS2DIndex;
-
-	uint8_t aucBuffer[0];
-};
-
 /*
  * TLV element structure should start with a 2-byte Tag field and a 2-byte
  * length field and pad to 4-byte alignment. The u2Length field indicate
@@ -2151,59 +2118,6 @@ struct TAG_HDR {
 	uint8_t aucBuffer[0];
 };
 
-enum ENUM_UNI_EVENT_ID {
-	UNI_EVENT_ID_CMD_RESULT      = 0x01,
-				/* Generic event for return cmd status */
-	UNI_EVENT_ID_BMC_RPY_DT      = 0x02,
-	UNI_EVENT_ID_HIF_CTRL	     = 0x03,
-	UNI_EVENT_ID_FW_LOG_2_HOST   = 0x04,
-	UNI_EVENT_ID_ROAMING	      = 0x05,
-	UNI_EVENT_ID_ACCESS_REG      = 0x06,
-	UNI_EVENT_ID_CHIP_CONFIG     = 0x07,
-	UNI_EVENT_ID_SMESH_INFO      = 0x08,
-	UNI_EVENT_ID_IE_COUNTDOWN    = 0x09,
-	UNI_EVENT_ID_ASSERT_DUMP     = 0x0A,
-	UNI_EVENT_ID_SLEEP_NOTIFY    = 0x0b,
-	UNI_EVENT_ID_BEACON_TIMEOUT  = 0x0C,
-	UNI_EVENT_ID_PS_SYNC	     = 0x0D,
-	UNI_EVENT_ID_SCAN_DONE	     = 0x0E,
-	UNI_EVENT_ID_ECC_CAL	     = 0x10,
-	UNI_EVENT_ID_RDD	     = 0x11,
-	UNI_EVENT_ID_ADD_KEY_DONE    = 0x12,
-	UNI_EVENT_ID_OBSS_UPDATE     = 0x13,
-	UNI_EVENT_ID_SER	     = 0x14,
-	UNI_EVENT_ID_IDC	     = 0x17,
-	UNI_EVENT_ID_MAC_INFO	     = 0x1A,
-	UNI_EVENT_ID_TDLS	     = 0x1B,
-	UNI_EVENT_ID_SAP	     = 0x1C,
-	UNI_EVENT_ID_TXCMD_CTRL      = 0x1D,
-	UNI_EVENT_ID_P2P	     = 0x1F,
-	UNI_EVENT_ID_EDCCA	     = 0x21,
-	UNI_EVENT_ID_MIB	     = 0x22,
-	UNI_EVENT_ID_STATISTICS      = 0x23,
-	UNI_EVENT_ID_SR	     = 0x25,
-	UNI_EVENT_ID_SCS	     = 0x26,
-	UNI_EVENT_ID_CNM	     = 0x27,
-	UNI_EVENT_ID_MBMC	     = 0x28,
-	UNI_EVENT_ID_BSS_IS_ABSENCE  = 0x29,
-	UNI_EVENT_ID_TXPOWER	     = 0x2A,
-	UNI_EVENT_ID_WSYS_CONFIG     = 0x2B,
-	UNI_EVENT_ID_BA_OFFLOAD      = 0x2C,
-	UNI_EVENT_ID_STATUS_TO_HOST  = 0x2D,
-	UNI_EVENT_ID_RA	     = 0x2F,
-	UNI_EVENT_ID_TESTMODE_RX_STAT_INFO  = 0x32,
-	UNI_EVENT_ID_BF	     = 0X33,
-	UNI_EVENT_ID_SDVT_STAT	     = 0x34,
-	UNI_EVENT_ID_VOW	     = 0x37,
-	UNI_EVENT_ID_TPC	     = 0x38,
-	UNI_EVENT_ID_MEC	     = 0x3A,
-	UNI_EVENT_ID_RSSI_MONITOR    = 0x41,
-	UNI_EVENT_ID_TEST_TR_PARAM   = 0x42,
-	UNI_EVENT_ID_CHIP_CAPABILITY = 0x43,
-	UNI_EVENT_ID_UPDATE_COEX_PHYRATE = 0x44,
-
-	UNI_EVENT_ID_NUM
-};
 
 struct UNI_EVENT_CMD_RESULT {
 	uint16_t u2CID;
@@ -2956,7 +2870,7 @@ uint32_t wlanSendSetQueryCmdHelper(IN struct ADAPTER *prAdapter,
 		    uint32_t u4SetQueryInfoLen,
 		    uint8_t *pucInfoBuffer, OUT void *pvSetQueryBuffer,
 		    IN uint32_t u4SetQueryBufferLen,
-		    enum EUNM_CMD_SEND_METHOD eMethod);
+		    uint32_t eMethodint);
 
 uint32_t wlanSendSetQueryUniCmd(IN struct ADAPTER *prAdapter,
 			uint8_t ucUCID,
@@ -2979,7 +2893,7 @@ uint32_t wlanSendSetQueryUniCmdAdv(IN struct ADAPTER *prAdapter,
 			uint32_t u4SetQueryInfoLen,
 			uint8_t *pucInfoBuffer, OUT void *pvSetQueryBuffer,
 			IN uint32_t u4SetQueryBufferLen,
-			enum EUNM_CMD_SEND_METHOD eMethod);
+			uint32_t eMethodint);
 
 /*******************************************************************************
  *                   Command

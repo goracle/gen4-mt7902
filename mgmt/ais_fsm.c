@@ -5203,7 +5203,7 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 	prAisBssInfo = aisGetAisBssInfo(prAdapter, ucBssIndex);
 	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
 
-	DBGLOG(AIS, INFO,
+	DBGLOG(AIS, WARN,
 	       "[AIS%d] CH_GRANT received: Token=%d Interval=%u CH=%d State=%d\n",
 	       ucBssIndex, ucTokenID, u4GrantInterval,
 	       prMsgChGrant->ucPrimaryChannel, prAisFsmInfo->eCurrentState);
