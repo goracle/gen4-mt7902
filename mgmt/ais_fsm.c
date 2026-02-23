@@ -5199,6 +5199,14 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 	ucTokenID = prMsgChGrant->ucTokenID;
 	u4GrantInterval = prMsgChGrant->u4GrantInterval;
 	ucBssIndex = prMsgChGrant->ucBssIndex;
+	prAisBssInfo = aisGetAisBssInfo(prAdapter, ucBssIndex);
+	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+	if (!prAisFsmInfo) {
+		log_dbg(AIS, ERROR, "[AIS-DIAG] ChGrant NULL fsm bss=%d token=%d\n", ucBssIndex, ucTokenID);
+		cnmMemFree(prAdapter, prMsgHdr);
+		return;
+	}
+	log_dbg(AIS, ERROR, "[AIS-DIAG] ChGrant state=%d token=%d seqReq=%d seqAbort=%d\n", prAisFsmInfo->eCurrentState, ucTokenID, prAisFsmInfo->ucSeqNumOfChReq, prAisFsmInfo->ucSeqNumOfChAbort);
 
 	prAisBssInfo = aisGetAisBssInfo(prAdapter, ucBssIndex);
 	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
