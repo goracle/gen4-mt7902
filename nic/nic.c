@@ -1342,6 +1342,8 @@ uint32_t nicMediaJoinFailure(IN struct ADAPTER *prAdapter,
 	switch (GET_BSS_INFO_BY_INDEX(prAdapter,
 				      ucBssIndex)->eNetworkType) {
 	case NETWORK_TYPE_AIS:
+		GET_BSS_INFO_BY_INDEX(prAdapter, ucBssIndex)->eConnectionState =
+			MEDIA_STATE_DISCONNECTED;
 		kalIndicateStatusAndComplete(prGlueInfo, rStatus, NULL, 0,
 			ucBssIndex);
 
