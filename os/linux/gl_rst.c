@@ -697,8 +697,10 @@ void glResetTriggerCommon(struct ADAPTER *prAdapter, uint32_t u4RstFlag,
 		(uint16_t)(u2FwPeerVersion >> 8),
 		(uint16_t)(u2FwPeerVersion & BITS(0, 7)));
 
-	prAdapter->u4HifDbgFlag |= DEG_HIF_DEFAULT_DUMP;
-	halPrintHifDbgInfo(prAdapter);
+	if (!fgIsResetting) {
+		prAdapter->u4HifDbgFlag |= DEG_HIF_DEFAULT_DUMP;
+		halPrintHifDbgInfo(prAdapter);
+	}
 
 	if ((u4RstFlag & RST_FLAG_DO_CORE_DUMP)
 		&& (prChipDbg->show_mcu_debug_info != NULL))

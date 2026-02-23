@@ -7634,9 +7634,21 @@ void aisPreSuspendFlow(IN struct ADAPTER *prAdapter)
 void aisFsmFirePendingSAA(struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 {
 	struct AIS_FSM_INFO *prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+	struct MSG_SAA_FSM_START *prMsg;
+	struct STA_RECORD *prStaRec;
 
 	if (!prAisFsmInfo || !prAisFsmInfo->prPendingSAAMsg)
 		return;
+
+	prMsg = (struct MSG_SAA_FSM_START *)prAisFsmInfo->prPendingSAAMsg;
+	prStaRec = prMsg->prStaRec;
+
+	if (prStaRec && !prStaRec->fgIsValid) {
+		DBGLOG(AIS, INFO, "[AIS%d] Activating StaRec[%u] before SAA\n",
+			ucBssIndex, prStaRec->ucIndex);
+		qmActivateStaRec(prAdapter, prStaRec);
+	}
+
 	DBGLOG(AIS, INFO, "[AIS%d] STATE_1 ACK: firing deferred SAA msg\n", ucBssIndex);
 	mboxSendMsg(prAdapter, MBOX_ID_0,
 		(struct MSG_HDR *)prAisFsmInfo->prPendingSAAMsg, MSG_SEND_METHOD_BUF);
