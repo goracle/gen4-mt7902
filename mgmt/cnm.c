@@ -71,6 +71,11 @@
  */
 #include "precomp.h"
 #include "wsys_cmd_handler_fw.h"
+#include "nic/cmd_buf.h"
+#include "nic_cmd_event.h"
+#include "nic_uni_cmd_event.h"
+
+
 
 /*******************************************************************************
  *                              C O N S T A N T S
@@ -681,14 +686,15 @@ void cnmUninit(struct ADAPTER *prAdapter)
  * @return (none)
  */
 /*----------------------------------------------------------------------------*/
-void cnmChMngrRequestPrivilege(struct ADAPTER
-			       *prAdapter,
-			       struct MSG_HDR *prMsgHdr)
+void cnmChMngrRequestPrivilege(struct ADAPTER *prAdapter,
+struct MSG_HDR *prMsgHdr)
 {
 	struct MSG_CH_REQ *prMsgChReq;
-	struct CMD_CH_PRIVILEGE *prCmdBody;
+	struct UNI_CMD_CNM *prUniCmdCnm;
+	struct UNI_CMD_CNM_CH_PRIVILEGE_REQ *prTlv;
 	struct BSS_INFO *prBssInfo = (struct BSS_INFO *) NULL;
 	uint32_t rStatus;
+	uint32_t u4UniCmdSize;
 
 	ASSERT(prAdapter);
 	ASSERT(prMsgHdr);
@@ -698,114 +704,89 @@ void cnmChMngrRequestPrivilege(struct ADAPTER
 #if CFG_SUPPORT_DBDC
 	if (cnmDBDCIsReqPeivilegeLock()) {
 		LINK_INSERT_TAIL(&g_rDbdcInfo.rPendingMsgList,
-				 &prMsgHdr->rLinkEntry);
+			&prMsgHdr->rLinkEntry);
 		log_dbg(CNM, INFO,
-		       "[DBDC] ChReq: queued BSS %u Token %u REQ\n",
-		       prMsgChReq->ucBssIndex, prMsgChReq->ucTokenID);
+			"[DBDC] ChReq: queued BSS %u Token %u REQ\n",
+			prMsgChReq->ucBssIndex, prMsgChReq->ucTokenID);
 		return;
 	}
 #endif
 
-	prCmdBody = (struct CMD_CH_PRIVILEGE *)
-		    cnmMemAlloc(prAdapter, RAM_TYPE_BUF,
-				sizeof(struct CMD_CH_PRIVILEGE));
-	ASSERT(prCmdBody);
-
-	/* To do: exception handle */
-	if (!prCmdBody) {
-		log_dbg(CNM, ERROR,
-		       "ChReq: fail to get buf (net=%d, token=%d)\n",
-		       prMsgChReq->ucBssIndex, prMsgChReq->ucTokenID);
-
-		cnmMemFree(prAdapter, prMsgHdr);
-		return;
-	}
-
 	/* Activate network if it's not activated yet */
 	prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, prMsgChReq->ucBssIndex);
-
 	if (!IS_BSS_ACTIVE(prBssInfo)) {
 		SET_NET_ACTIVE(prAdapter, prBssInfo->ucBssIndex);
 		nicActivateNetwork(prAdapter, prBssInfo->ucBssIndex);
 	}
 
 	log_dbg(CNM, INFO,
-	       "ChReq net=%d token=%d b=%d c=%d s=%d w=%d s1=%d s2=%d d=%d t=%d\n",
-	       prMsgChReq->ucBssIndex, prMsgChReq->ucTokenID,
-	       prMsgChReq->eRfBand, prMsgChReq->ucPrimaryChannel,
-	       prMsgChReq->eRfSco, prMsgChReq->eRfChannelWidth,
-	       prMsgChReq->ucRfCenterFreqSeg1,
-	       prMsgChReq->ucRfCenterFreqSeg2,
-	       prMsgChReq->u4MaxInterval,
-	       prMsgChReq->eReqType);
+		"ChReq net=%d token=%d b=%d c=%d s=%d w=%d s1=%d s2=%d d=%d t=%d\n",
+		prMsgChReq->ucBssIndex, prMsgChReq->ucTokenID,
+		prMsgChReq->eRfBand, prMsgChReq->ucPrimaryChannel,
+		prMsgChReq->eRfSco, prMsgChReq->eRfChannelWidth,
+		prMsgChReq->ucRfCenterFreqSeg1,
+		prMsgChReq->ucRfCenterFreqSeg2,
+		prMsgChReq->u4MaxInterval,
+		prMsgChReq->eReqType);
 
-	prCmdBody->ucBssIndex = prMsgChReq->ucBssIndex;
-	prCmdBody->ucTokenID = prMsgChReq->ucTokenID;
-	prCmdBody->ucAction = CMD_CH_ACTION_REQ;	/* Request */
-	prCmdBody->ucPrimaryChannel =
-		prMsgChReq->ucPrimaryChannel;
-	prCmdBody->ucRfSco = (uint8_t)prMsgChReq->eRfSco;
-	prCmdBody->ucRfBand = (uint8_t)prMsgChReq->eRfBand;
-	prCmdBody->ucRfChannelWidth = (uint8_t)
-				      prMsgChReq->eRfChannelWidth;
-	prCmdBody->ucRfCenterFreqSeg1 = (uint8_t)
-					prMsgChReq->ucRfCenterFreqSeg1;
-	prCmdBody->ucRfCenterFreqSeg2 = (uint8_t)
-					prMsgChReq->ucRfCenterFreqSeg2;
+	u4UniCmdSize = sizeof(struct UNI_CMD_CNM) +
+		sizeof(struct UNI_CMD_CNM_CH_PRIVILEGE_REQ);
 
-	prCmdBody->ucReqType = (uint8_t)prMsgChReq->eReqType;
-	prCmdBody->ucDBDCBand = (uint8_t)prMsgChReq->eDBDCBand;
-	prCmdBody->aucReserved = 0;
-	prCmdBody->u4MaxInterval = prMsgChReq->u4MaxInterval;
-	prCmdBody->aucReserved2[0] = 0;
-	prCmdBody->aucReserved2[1] = 0;
-	prCmdBody->aucReserved2[2] = 0;
-	prCmdBody->aucReserved2[3] = 0;
-	prCmdBody->aucReserved2[4] = 0;
+	prUniCmdCnm = (struct UNI_CMD_CNM *)
+		cnmMemAlloc(prAdapter, RAM_TYPE_BUF, u4UniCmdSize);
+	if (!prUniCmdCnm) {
+		log_dbg(CNM, ERROR,
+			"ChReq: fail to get buf (net=%d, token=%d)\n",
+			prMsgChReq->ucBssIndex, prMsgChReq->ucTokenID);
+		cnmMemFree(prAdapter, prMsgHdr);
+		return;
+	}
+
+	kalMemZero(prUniCmdCnm, u4UniCmdSize);
+
+	prTlv = (struct UNI_CMD_CNM_CH_PRIVILEGE_REQ *)prUniCmdCnm->aucTlvBuffer;
+	prTlv->u2Tag = UNI_CMD_CNM_TAG_CH_PRIVILEGE_REQ;
+	prTlv->u2Length = sizeof(struct UNI_CMD_CNM_CH_PRIVILEGE_REQ);
+	prTlv->ucBssIndex = prMsgChReq->ucBssIndex;
+	prTlv->ucTokenID = prMsgChReq->ucTokenID;
+	prTlv->ucPrimaryChannel = prMsgChReq->ucPrimaryChannel;
+	prTlv->ucRfSco = (uint8_t)prMsgChReq->eRfSco;
+	prTlv->ucRfBand = (uint8_t)prMsgChReq->eRfBand;
+	prTlv->ucRfChannelWidth = (uint8_t)prMsgChReq->eRfChannelWidth;
+	prTlv->ucRfCenterFreqSeg1 = (uint8_t)prMsgChReq->ucRfCenterFreqSeg1;
+	prTlv->ucRfCenterFreqSeg2 = (uint8_t)prMsgChReq->ucRfCenterFreqSeg2;
+	prTlv->ucReqType = (uint8_t)prMsgChReq->eReqType;
+	prTlv->ucDBDCBand = (uint8_t)prMsgChReq->eDBDCBand;
+	prTlv->u4MaxInterval = prMsgChReq->u4MaxInterval;
 
 #if (CFG_SUPPORT_802_11AX == 1)
-	prCmdBody->ucRfChannelWidthFromAP = (uint8_t)
-					prMsgChReq->eRfChannelWidthFromAP;
-	prCmdBody->ucRfCenterFreqSeg1FromAP = (uint8_t)
-					prMsgChReq->ucRfCenterFreqSeg1FromAP;
-	prCmdBody->ucRfCenterFreqSeg2FromAP = (uint8_t)
-					prMsgChReq->ucRfCenterFreqSeg2FromAP;
-#else	/* assign 0 as default value */
-	prCmdBody->ucRfChannelWidthFromAP = 0;
-	prCmdBody->ucRfCenterFreqSeg1FromAP = 0;
-	prCmdBody->ucRfCenterFreqSeg2FromAP = 0;
-#endif	/* CFG_SUPPORT_802_11AX == 1 */
+	prTlv->ucRfChannelWidthFromAP = (uint8_t)prMsgChReq->eRfChannelWidthFromAP;
+	prTlv->ucRfCenterFreqSeg1FromAP = (uint8_t)prMsgChReq->ucRfCenterFreqSeg1FromAP;
+	prTlv->ucRfCenterFreqSeg2FromAP = (uint8_t)prMsgChReq->ucRfCenterFreqSeg2FromAP;
+#else
+	prTlv->ucRfChannelWidthFromAP = 0;
+	prTlv->ucRfCenterFreqSeg1FromAP = 0;
+	prTlv->ucRfCenterFreqSeg2FromAP = 0;
+#endif
 
-	ASSERT(prCmdBody->ucBssIndex <=
-	       prAdapter->ucHwBssIdNum);
+	ASSERT(prTlv->ucBssIndex <= prAdapter->ucHwBssIdNum);
+	if (prTlv->ucBssIndex > prAdapter->ucHwBssIdNum)
+		log_dbg(CNM, ERROR, "CNM: ChReq with wrong netIdx=%d\n",
+			prTlv->ucBssIndex);
 
-	/* For monkey testing 20110901 */
-	if (prCmdBody->ucBssIndex > prAdapter->ucHwBssIdNum)
-		log_dbg(CNM, ERROR,
-		       "CNM: ChReq with wrong netIdx=%d\n\n",
-		       prCmdBody->ucBssIndex);
+	rStatus = wlanSendSetQueryUniCmd(prAdapter,
+		UNI_CMD_ID_CNM,
+		TRUE,
+		FALSE,
+		FALSE,
+		NULL,
+		NULL,
+		u4UniCmdSize,
+		(uint8_t *)prUniCmdCnm,
+		NULL,
+		0);
 
-	rStatus = wlanSendSetQueryCmd(prAdapter,	/* prAdapter */
-				      CMD_ID_CH_PRIVILEGE,	/* ucCID */
-				      TRUE,	/* fgSetQuery */
-				      FALSE,	/* fgNeedResp */
-				      FALSE,	/* fgIsOid */
-				      NULL,	/* pfCmdDoneHandler */
-				      NULL,	/* pfCmdTimeoutHandler */
-
-				      /* u4SetQueryInfoLen */
-				      sizeof(struct CMD_CH_PRIVILEGE),
-
-				      /* pucInfoBuffer */
-				      (uint8_t *)prCmdBody,
-
-				      NULL,	/* pvSetQueryBuffer */
-				      0	/* u4SetQueryBufferLen */
-				     );
-
-	/* ASSERT(rStatus == WLAN_STATUS_PENDING); */
-
-	cnmMemFree(prAdapter, prCmdBody);
+	cnmMemFree(prAdapter, prUniCmdCnm);
 	cnmMemFree(prAdapter, prMsgHdr);
 }	/* end of cnmChMngrRequestPrivilege()*/
 
@@ -820,12 +801,14 @@ void cnmChMngrRequestPrivilege(struct ADAPTER
  */
 /*----------------------------------------------------------------------------*/
 void cnmChMngrAbortPrivilege(struct ADAPTER *prAdapter,
-			     struct MSG_HDR *prMsgHdr)
+struct MSG_HDR *prMsgHdr)
 {
 	struct MSG_CH_ABORT *prMsgChAbort;
-	struct CMD_CH_PRIVILEGE *prCmdBody;
+	struct UNI_CMD_CNM *prUniCmdCnm;
+	struct UNI_CMD_CNM_CH_PRIVILEGE_ABORT *prTlv;
 	struct CNM_INFO *prCnmInfo;
 	uint32_t rStatus;
+	uint32_t u4UniCmdSize;
 #if CFG_SISO_SW_DEVELOP
 	struct BSS_INFO *prBssInfo;
 #endif
@@ -842,29 +825,21 @@ void cnmChMngrAbortPrivilege(struct ADAPTER *prAdapter,
 #if CFG_SUPPORT_DBDC
 	if (cnmDBDCIsReqPeivilegeLock()) {
 		LINK_FOR_EACH(prLinkEntry_pendingMsg,
-			      &g_rDbdcInfo.rPendingMsgList) {
+				&g_rDbdcInfo.rPendingMsgList) {
 			prPendingMsg = (struct MSG_CH_REQ *)
-				       LINK_ENTRY(prLinkEntry_pendingMsg,
-						struct MSG_HDR, rLinkEntry);
-
-			/* Find matched request and check
-			 * if it is being served.
-			 */
+				LINK_ENTRY(prLinkEntry_pendingMsg,
+					struct MSG_HDR, rLinkEntry);
 			if (prPendingMsg->ucBssIndex == prMsgChAbort->ucBssIndex
-			    && prPendingMsg->ucTokenID
-				== prMsgChAbort->ucTokenID) {
-
+				&& prPendingMsg->ucTokenID == prMsgChAbort->ucTokenID) {
 				LINK_REMOVE_KNOWN_ENTRY(
 					&g_rDbdcInfo.rPendingMsgList,
 					&prPendingMsg->rMsgHdr.rLinkEntry);
-
-				log_dbg(CNM, INFO, "[DBDC] ChAbort: remove BSS %u Token %u REQ)\n",
+				log_dbg(CNM, INFO,
+					"[DBDC] ChAbort: remove BSS %u Token %u REQ)\n",
 					prPendingMsg->ucBssIndex,
 					prPendingMsg->ucTokenID);
-
 				cnmMemFree(prAdapter, prPendingMsg);
 				cnmMemFree(prAdapter, prMsgHdr);
-
 				return;
 			}
 		}
@@ -874,75 +849,63 @@ void cnmChMngrAbortPrivilege(struct ADAPTER *prAdapter,
 	/* Check if being granted channel privilege is aborted */
 	prCnmInfo = &prAdapter->rCnmInfo;
 	if (prCnmInfo->fgChGranted &&
-	    prCnmInfo->ucBssIndex == prMsgChAbort->ucBssIndex
-	    && prCnmInfo->ucTokenID == prMsgChAbort->ucTokenID) {
-
+		prCnmInfo->ucBssIndex == prMsgChAbort->ucBssIndex
+		&& prCnmInfo->ucTokenID == prMsgChAbort->ucTokenID) {
 		prCnmInfo->fgChGranted = FALSE;
 	}
 
-	prCmdBody = (struct CMD_CH_PRIVILEGE *)
-		    cnmMemAlloc(prAdapter, RAM_TYPE_BUF,
-				sizeof(struct CMD_CH_PRIVILEGE));
-	if (!prCmdBody) {
-		log_dbg(CNM, ERROR,
-		       "ChAbort: fail to get buf (net=%d, token=%d)\n",
-		       prMsgChAbort->ucBssIndex, prMsgChAbort->ucTokenID);
+	u4UniCmdSize = sizeof(struct UNI_CMD_CNM) +
+		sizeof(struct UNI_CMD_CNM_CH_PRIVILEGE_ABORT);
 
+	prUniCmdCnm = (struct UNI_CMD_CNM *)
+		cnmMemAlloc(prAdapter, RAM_TYPE_BUF, u4UniCmdSize);
+	if (!prUniCmdCnm) {
+		log_dbg(CNM, ERROR,
+			"ChAbort: fail to get buf (net=%d, token=%d)\n",
+			prMsgChAbort->ucBssIndex, prMsgChAbort->ucTokenID);
 		cnmMemFree(prAdapter, prMsgHdr);
 		return;
 	}
 
-	prCmdBody->ucBssIndex = prMsgChAbort->ucBssIndex;
-	prCmdBody->ucTokenID = prMsgChAbort->ucTokenID;
-	prCmdBody->ucAction = CMD_CH_ACTION_ABORT;	/* Abort */
-	prCmdBody->ucDBDCBand = (uint8_t)
-				prMsgChAbort->eDBDCBand;
+	kalMemZero(prUniCmdCnm, u4UniCmdSize);
+
+	prTlv = (struct UNI_CMD_CNM_CH_PRIVILEGE_ABORT *)prUniCmdCnm->aucTlvBuffer;
+	prTlv->u2Tag = UNI_CMD_CNM_TAG_CH_PRIVILEGE_ABORT;
+	prTlv->u2Length = sizeof(struct UNI_CMD_CNM_CH_PRIVILEGE_ABORT);
+	prTlv->ucBssIndex = prMsgChAbort->ucBssIndex;
+	prTlv->ucTokenID = prMsgChAbort->ucTokenID;
+	prTlv->ucDBDCBand = (uint8_t)prMsgChAbort->eDBDCBand;
 
 	log_dbg(CNM, INFO, "ChAbort net=%d token=%d dbdc=%u\n",
-	       prCmdBody->ucBssIndex, prCmdBody->ucTokenID,
-	       prCmdBody->ucDBDCBand);
+		prTlv->ucBssIndex, prTlv->ucTokenID, prTlv->ucDBDCBand);
 
-	ASSERT(prCmdBody->ucBssIndex <=
-	       prAdapter->ucHwBssIdNum);
+	ASSERT(prTlv->ucBssIndex <= prAdapter->ucHwBssIdNum);
+	if (prTlv->ucBssIndex > prAdapter->ucHwBssIdNum)
+		log_dbg(CNM, ERROR, "CNM: ChAbort with wrong netIdx=%d\n",
+			prTlv->ucBssIndex);
 
-	/* For monkey testing 20110901 */
-	if (prCmdBody->ucBssIndex > prAdapter->ucHwBssIdNum)
-		log_dbg(CNM, ERROR,
-		       "CNM: ChAbort with wrong netIdx=%d\n\n",
-		       prCmdBody->ucBssIndex);
-
-	rStatus = wlanSendSetQueryCmd(prAdapter,	/* prAdapter */
-				      CMD_ID_CH_PRIVILEGE,	/* ucCID */
-				      TRUE,	/* fgSetQuery */
-				      FALSE,	/* fgNeedResp */
-				      FALSE,	/* fgIsOid */
-				      NULL,	/* pfCmdDoneHandler */
-				      NULL,	/* pfCmdTimeoutHandler */
-
-				      /* u4SetQueryInfoLen */
-				      sizeof(struct CMD_CH_PRIVILEGE),
-
-				      /* pucInfoBuffer */
-				      (uint8_t *)prCmdBody,
-
-				      NULL,	/* pvSetQueryBuffer */
-				      0	/* u4SetQueryBufferLen */
-				     );
-
-	/* ASSERT(rStatus == WLAN_STATUS_PENDING); */
+	rStatus = wlanSendSetQueryUniCmd(prAdapter,
+		UNI_CMD_ID_CNM,
+		TRUE,
+		FALSE,
+		FALSE,
+		NULL,
+		NULL,
+		u4UniCmdSize,
+		(uint8_t *)prUniCmdCnm,
+		NULL,
+		0);
 
 #if CFG_SISO_SW_DEVELOP
-	prBssInfo =
-		prAdapter->aprBssInfo[prMsgChAbort->ucBssIndex];
-	/* Driver clear granted CH in BSS info */
+	prBssInfo = prAdapter->aprBssInfo[prMsgChAbort->ucBssIndex];
 	prBssInfo->fgIsGranted = FALSE;
 	prBssInfo->eBandGranted = BAND_NULL;
 	prBssInfo->ucPrimaryChannelGranted = 0;
 #endif
 
-	cnmMemFree(prAdapter, prCmdBody);
+	cnmMemFree(prAdapter, prUniCmdCnm);
 	cnmMemFree(prAdapter, prMsgHdr);
-}				/* end of cnmChMngrAbortPrivilege()*/
+}			/* end of cnmChMngrAbortPrivilege()*/
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -4630,3 +4593,23 @@ void cnmStopPendingJoinTimerForSuspend(IN struct ADAPTER *prAdapter)
 	}
 }
 #endif
+
+uint32_t wlanSendSetQueryUniCmd(IN struct ADAPTER *prAdapter,
+			uint8_t ucUCID,
+			u_int8_t fgSetQuery,
+			u_int8_t fgNeedResp,
+			u_int8_t fgIsOid,
+			PFN_CMD_DONE_HANDLER pfCmdDoneHandler,
+			PFN_CMD_TIMEOUT_HANDLER pfCmdTimeoutHandler,
+			uint32_t u4SetQueryInfoLen,
+			uint8_t *pucInfoBuffer, OUT void *pvSetQueryBuffer,
+			IN uint32_t u4SetQueryBufferLen)
+{
+	return wlanSendSetQueryUniCmdAdv(prAdapter,
+			ucUCID, fgSetQuery, fgNeedResp, fgIsOid,
+			pfCmdDoneHandler, pfCmdTimeoutHandler,
+			u4SetQueryInfoLen, pucInfoBuffer,
+			pvSetQueryBuffer, u4SetQueryBufferLen,
+			0);
+}
+

@@ -131,228 +131,208 @@ static uint8_t *apucDebugAAState[AA_STATE_NUM] = {
 */
 /*----------------------------------------------------------------------------*/
 void saaSendAuthAssoc(IN struct ADAPTER *prAdapter,
-	IN struct STA_RECORD *prStaRec)
+		      IN struct STA_RECORD *prStaRec)
 {
 	uint32_t rStatus;
+	uint8_t ucBssIndex;
+	struct BSS_INFO *prBssInfo;
+	struct BSS_DESC *prBssDesc = NULL;
+	struct AIS_SPECIFIC_BSS_INFO *prAisSpecBssInfo = NULL;
 	struct CONNECTION_SETTINGS *prConnSettings = NULL;
 	struct P2P_CONNECTION_SETTINGS *prP2pConnSettings = NULL;
-	uint16_t u2AuthTransSN =
-		AUTH_TRANSACTION_SEQ_1; /* default for OPEN auth */
+	struct PARAM_SSID rSsid;
+	uint16_t u2AuthTransSN = AUTH_TRANSACTION_SEQ_1;
 #if CFG_SUPPORT_WPA3_H2E
 	uint16_t u2AuthStatusCode = STATUS_CODE_RESERVED;
 #endif
-	struct BSS_DESC *prBssDesc = NULL;
-	struct AIS_SPECIFIC_BSS_INFO *prAisSpecBssInfo = NULL;
-	uint8_t ucBssIndex = 0;
-	struct PARAM_SSID rSsid;
-	uint8_t fgIsSendAssoc;
-	uint8_t fgIsP2pConn;
-	u_int8_t ucChannelNum;
-	struct BSS_INFO *prBssInfo;
+	u_int8_t fgIsSendAssoc;
+	u_int8_t fgIsP2pConn;
+	uint8_t ucChannelNum;
 
 	ASSERT(prAdapter);
 	ASSERT(prStaRec);
 
 	ucBssIndex = prStaRec->ucBssIndex;
 
-	DBGLOG(SAA, INFO, "DEBUG: Entering SAA for MAC " MACSTR " on BSS Index %d\n", 
+	DBGLOG(SAA, INFO, "DEBUG: Entering SAA for MAC " MACSTR " on BSS Index %d\n",
 	       MAC2STR(prStaRec->aucMacAddr), ucBssIndex);
+	DBGLOG(SAA, INFO, "[SAA]saaSendAuthAssoc, StaState:%d\n",
+	       prStaRec->ucStaState);
 
-	kalMemZero(&rSsid,
-		sizeof(struct PARAM_SSID));
+	kalMemZero(&rSsid, sizeof(struct PARAM_SSID));
 
+	/* --- Pull per-connection settings --- */
 	if (IS_STA_IN_P2P(prStaRec)) {
-		prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter,
-					  ucBssIndex);
-		prP2pConnSettings =  prAdapter->rWifiVar.prP2PConnSettings[prBssInfo->u4PrivateData];
+		prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, ucBssIndex);
+		prP2pConnSettings = prAdapter->rWifiVar
+			.prP2PConnSettings[prBssInfo->u4PrivateData];
 		fgIsSendAssoc = prP2pConnSettings->fgIsSendAssoc;
-		fgIsP2pConn = TRUE;
-		ucChannelNum = 0;
-		COPY_SSID(rSsid.aucSsid,
-						  rSsid.u4SsidLen,
-						  prP2pConnSettings->aucSSID,
-						  prP2pConnSettings->ucSSIDLen);
+		fgIsP2pConn   = TRUE;
+		ucChannelNum  = 0;
+		COPY_SSID(rSsid.aucSsid, rSsid.u4SsidLen,
+			  prP2pConnSettings->aucSSID,
+			  prP2pConnSettings->ucSSIDLen);
 	} else {
 		prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
 		fgIsSendAssoc = prConnSettings->fgIsSendAssoc;
-		fgIsP2pConn = FALSE;
-		ucChannelNum = prConnSettings->ucChannelNum;
-		COPY_SSID(rSsid.aucSsid,
-						  rSsid.u4SsidLen,
-						  prConnSettings->aucSSID,
-						  prConnSettings->ucSSIDLen);
+		fgIsP2pConn   = FALSE;
+		ucChannelNum  = prConnSettings->ucChannelNum;
+		COPY_SSID(rSsid.aucSsid, rSsid.u4SsidLen,
+			  prConnSettings->aucSSID,
+			  prConnSettings->ucSSIDLen);
 	}
 
-	DBGLOG(SAA, INFO,
-		"[SAA]saaSendAuthAssoc, StaState:%d\n",
-		prStaRec->ucStaState);
-
+	/* --- Retry limit check --- */
 	if (prStaRec->ucTxAuthAssocRetryCount >=
-		prStaRec->ucTxAuthAssocRetryLimit) {
-
-		/* Record the Status Code of Authentication Request */
-		prStaRec->u2StatusCode =
-			fgIsSendAssoc ?
+	    prStaRec->ucTxAuthAssocRetryLimit) {
+		prStaRec->u2StatusCode = fgIsSendAssoc ?
 			STATUS_CODE_ASSOC_TIMEOUT :
 			STATUS_CODE_AUTH_TIMEOUT;
 
 		if (saaFsmSendEventJoinComplete(prAdapter,
 			WLAN_STATUS_FAILURE, prStaRec, NULL)
-					== WLAN_STATUS_RESOURCES) {
-			/* [TODO]can set a timer and retry later */
+		    == WLAN_STATUS_RESOURCES)
 			DBGLOG(SAA, WARN,
-				"[SAA]can't alloc msg for inform AIS join complete\n");
-		}
-	} else {
-		prStaRec->ucTxAuthAssocRetryCount++;
-		/* Prepare to send authentication frame */
-		if (!fgIsSendAssoc) {
-			if (!fgIsP2pConn) {
-				/* Fill authentication transaction
-				 * sequence number
-				 * depends on auth type
-				 */
-				if (((prAdapter->prGlueInfo->
-					rWpaInfo[ucBssIndex].
-						u4AuthAlg & AUTH_TYPE_SAE) ||
-					(prAdapter->prGlueInfo->
-						rWpaInfo[ucBssIndex].u4AuthAlg
-						& AUTH_TYPE_SHARED_KEY)) &&
-						prConnSettings->ucAuthDataLen) {
-					kalMemCopy(&u2AuthTransSN,
-						prConnSettings->aucAuthData,
-					AUTH_TRANSACTION_SEQENCE_NUM_FIELD_LEN);
-					DBGLOG(SAA, INFO,
-					"[SAA]Get auth SN from Conn Settings, AuthSn = %d\n",
-						u2AuthTransSN);
-				}
-#if CFG_SUPPORT_WPA3_H2E
-				if (prAdapter->prGlueInfo->
-					rWpaInfo[ucBssIndex].u4AuthAlg & AUTH_TYPE_SAE) {
-					kalMemCopy(&u2AuthStatusCode,
-						&prConnSettings->aucAuthData[2],
-						AUTH_STATUS_CODE_FIELD_LEN);
-					DBGLOG(SAA, INFO,
-						"[SAA]Get auth StatusCode=%d from Conn Settings\n",
-						u2AuthStatusCode);
-				}
-#endif
-			}
+			       "[SAA] can't alloc msg for join complete\n");
+		return;
+	}
 
-			/* Update Station Record - Class 1 Flag */
-			if (prStaRec->ucStaState != STA_STATE_1) {
-				DBGLOG(SAA, WARN,
-					"[SAA]Rx send auth CMD at unexpected state:%d\n",
-					prStaRec->ucStaState);
-				cnmStaRecChangeState(
-					prAdapter, prStaRec, STA_STATE_1);
+	prStaRec->ucTxAuthAssocRetryCount++;
+
+	/* === AUTH path === */
+	if (!fgIsSendAssoc) {
+		/* Firmware needs the StaRec in STATE_1 before we send auth.
+		 * Set it directly — do NOT go through cnmStaRecChangeState
+		 * here, that function has guards that can skip the firmware
+		 * sync depending on current state.
+		 */
+		if (prStaRec->ucStaState != STA_STATE_1) {
+			DBGLOG(SAA, WARN,
+			       "[SAA] Auth at unexpected StaState:%d, forcing STATE_1\n",
+			       prStaRec->ucStaState);
+			prStaRec->ucStaState = STA_STATE_1;
+			cnmStaSendUpdateCmd(prAdapter, prStaRec, FALSE);
+		}
+
+		if (!fgIsP2pConn && prConnSettings) {
+			uint32_t u4AuthAlg =
+				prAdapter->prGlueInfo->rWpaInfo[ucBssIndex].u4AuthAlg;
+
+			if (((u4AuthAlg & AUTH_TYPE_SAE) ||
+			     (u4AuthAlg & AUTH_TYPE_SHARED_KEY)) &&
+			    prConnSettings->ucAuthDataLen) {
+				kalMemCopy(&u2AuthTransSN,
+					   prConnSettings->aucAuthData,
+					   AUTH_TRANSACTION_SEQENCE_NUM_FIELD_LEN);
+				DBGLOG(SAA, INFO,
+				       "[SAA] Auth SN from ConnSettings: %d\n",
+				       u2AuthTransSN);
 			}
+#if CFG_SUPPORT_WPA3_H2E
+			if (u4AuthAlg & AUTH_TYPE_SAE) {
+				kalMemCopy(&u2AuthStatusCode,
+					   &prConnSettings->aucAuthData[2],
+					   AUTH_STATUS_CODE_FIELD_LEN);
+				DBGLOG(SAA, INFO,
+				       "[SAA] Auth StatusCode from ConnSettings: %d\n",
+				       u2AuthStatusCode);
+			}
+#endif
+		}
+
 #if !CFG_SUPPORT_AAA
-			rStatus = authSendAuthFrame(prAdapter,
-					prStaRec, u2AuthTransSN);
+		rStatus = authSendAuthFrame(prAdapter, prStaRec, u2AuthTransSN);
 #else
-			rStatus = authSendAuthFrame(prAdapter,
-					prStaRec, ucBssIndex, NULL,
+		rStatus = authSendAuthFrame(prAdapter, prStaRec, ucBssIndex,
+					    NULL, u2AuthTransSN,
 #if CFG_SUPPORT_WPA3_H2E
-					u2AuthTransSN, u2AuthStatusCode);
+					    u2AuthStatusCode);
 #else
-					u2AuthTransSN, STATUS_CODE_RESERVED);
+					    STATUS_CODE_RESERVED);
 #endif
-#endif /* CFG_SUPPORT_AAA */
-			prStaRec->eAuthAssocSent = u2AuthTransSN;
-		} else { /* Prepare to send association frame */
+#endif
+		prStaRec->eAuthAssocSent = u2AuthTransSN;
 
-			/* Fill Cipher/AKM before sending association request,
-			 * copy from AIS search step
-			 */
-			/* Add patch to resolve PMF 5.3.3.5 &
-			 * PMF 5.4.3.1 test failure issue.
-			 * choose right prBssDesc to do actions based on BSSID &
-			 * SSID or channel Number
-			 */
-			if (rSsid.u4SsidLen) {
-				prBssDesc =
-					scanSearchBssDescByBssidAndSsid(
-					prAdapter,
-					prStaRec->aucMacAddr,
-					TRUE,
-					&rSsid);
-				if (prBssDesc != NULL)
-					DBGLOG(RSN, INFO, "[RSN] prBssDesc["
-						MACSTR" ,%s] Searched by BSSID["
-						MACSTR"] & SSID %s.\n",
-						MAC2STR(prBssDesc->aucBSSID),
-						prBssDesc->aucSSID,
-						MAC2STR(prStaRec->aucMacAddr),
-						rSsid.aucSsid);
-				else
-					DBGLOG(RSN, WARN, "prBssDesc = NULL\n");
-			} else {
-				prBssDesc =
-					scanSearchBssDescByBssidAndChanNum(
-					prAdapter,
-					prStaRec->aucMacAddr,
-					TRUE,
-					ucChannelNum);
-				DBGLOG(RSN, INFO, "[RSN] prBssDesc["
-					MACSTR" ,%s] Searched by BSSID["
-					MACSTR"] & ChanNum %d.\n",
-					MAC2STR(prBssDesc->aucBSSID),
-					prBssDesc->aucSSID,
-					MAC2STR(prStaRec->aucMacAddr),
-					ucChannelNum);
-			}
+	/* === ASSOC path === */
+	} else {
+		/* Find the BSS descriptor for RSN policy selection */
+		if (rSsid.u4SsidLen) {
+			prBssDesc = scanSearchBssDescByBssidAndSsid(
+				prAdapter, prStaRec->aucMacAddr, TRUE, &rSsid);
+			if (prBssDesc)
+				DBGLOG(RSN, INFO,
+				       "[RSN] BssDesc[" MACSTR " ,%s] by BSSID["
+				       MACSTR "] & SSID %s\n",
+				       MAC2STR(prBssDesc->aucBSSID),
+				       prBssDesc->aucSSID,
+				       MAC2STR(prStaRec->aucMacAddr),
+				       rSsid.aucSsid);
+			else
+				DBGLOG(RSN, WARN, "[RSN] prBssDesc=NULL\n");
+		} else {
+			prBssDesc = scanSearchBssDescByBssidAndChanNum(
+				prAdapter, prStaRec->aucMacAddr, TRUE,
+				ucChannelNum);
+			if (prBssDesc)
+				DBGLOG(RSN, INFO,
+				       "[RSN] BssDesc[" MACSTR " ,%s] by BSSID["
+				       MACSTR "] & ChanNum %d\n",
+				       MAC2STR(prBssDesc->aucBSSID),
+				       prBssDesc->aucSSID,
+				       MAC2STR(prStaRec->aucMacAddr),
+				       ucChannelNum);
+		}
 
-			prAisSpecBssInfo = aisGetAisSpecBssInfo(
-						prAdapter, ucBssIndex);
-			if (rsnPerformPolicySelection(prAdapter,
-				prBssDesc, ucBssIndex) && (!fgIsP2pConn)) {
-				if (prAisSpecBssInfo->fgCounterMeasure)
+		if (!fgIsP2pConn) {
+			prAisSpecBssInfo = aisGetAisSpecBssInfo(prAdapter,
+								ucBssIndex);
+			if (rsnPerformPolicySelection(prAdapter, prBssDesc,
+						      ucBssIndex)) {
+				if (prAisSpecBssInfo->fgCounterMeasure) {
 					DBGLOG(RSN, WARN,
-						"Skip while at counter measure period!!!\n");
-				else {
-					DBGLOG(RSN, INFO, "Bss RSN matched!\n");
-					prAdapter->prAisBssInfo[ucBssIndex]->
-						u4RsnSelectedGroupCipher =
-					prBssDesc->u4RsnSelectedGroupCipher;
-					prAdapter->prAisBssInfo[ucBssIndex]->
-						u4RsnSelectedPairwiseCipher =
-					prBssDesc->u4RsnSelectedPairwiseCipher;
-					prAdapter->prAisBssInfo[ucBssIndex]->
-						u4RsnSelectedAKMSuite =
-					prBssDesc->u4RsnSelectedAKMSuite;
+					       "[RSN] Skip: counter measure active\n");
+				} else {
+					DBGLOG(RSN, INFO, "[RSN] BSS RSN matched\n");
+					prAdapter->prAisBssInfo[ucBssIndex]
+						->u4RsnSelectedGroupCipher =
+						prBssDesc->u4RsnSelectedGroupCipher;
+					prAdapter->prAisBssInfo[ucBssIndex]
+						->u4RsnSelectedPairwiseCipher =
+						prBssDesc->u4RsnSelectedPairwiseCipher;
+					prAdapter->prAisBssInfo[ucBssIndex]
+						->u4RsnSelectedAKMSuite =
+						prBssDesc->u4RsnSelectedAKMSuite;
 				}
-
-			} else
-				DBGLOG(RSN, WARN, "Bss fail for RSN check\n");
-
-			/* don't change to state2 for reassociation */
-			if (prStaRec->ucStaState == STA_STATE_1) {
-				/* Update Station Record - Class 2 Flag */
-				cnmStaRecChangeState(
-					prAdapter, prStaRec, STA_STATE_2);
+			} else {
+				DBGLOG(RSN, WARN, "[RSN] BSS failed RSN check\n");
 			}
-			bssUpdateStaRecFromCfgAssoc(prAdapter, prBssDesc, prStaRec);
-
-			rStatus = assocSendReAssocReqFrame(prAdapter, prStaRec);
-			prStaRec->eAuthAssocSent = AA_SENT_ASSOC1;
 		}
 
-		if (rStatus != WLAN_STATUS_SUCCESS) {
-			/* may can't allocate msdu info, retry after timeout */
-			cnmTimerInitTimer(prAdapter,
-				&prStaRec->rTxReqDoneOrRxRespTimer,
-				(PFN_MGMT_TIMEOUT_FUNC)
-					saaFsmRunEventTxReqTimeOut,
-				(unsigned long) prStaRec);
+		/* Transition to STATE_2 for initial association only */
+		if (prStaRec->ucStaState == STA_STATE_1)
+			cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_2);
 
-			cnmTimerStartTimer(prAdapter,
-				&prStaRec->rTxReqDoneOrRxRespTimer,
-				TU_TO_MSEC(TX_AUTHENTICATION_RETRY_TIMEOUT_TU));
-		}
+		bssUpdateStaRecFromCfgAssoc(prAdapter, prBssDesc, prStaRec);
+		rStatus = assocSendReAssocReqFrame(prAdapter, prStaRec);
+		prStaRec->eAuthAssocSent = AA_SENT_ASSOC1;
+	}
 
+	/* If frame couldn't be sent, arm a retry timer */
+	if (rStatus != WLAN_STATUS_SUCCESS) {
+		cnmTimerInitTimer(prAdapter,
+				  &prStaRec->rTxReqDoneOrRxRespTimer,
+				  (PFN_MGMT_TIMEOUT_FUNC)
+				  saaFsmRunEventTxReqTimeOut,
+				  (unsigned long)prStaRec);
+		cnmTimerStartTimer(prAdapter,
+				   &prStaRec->rTxReqDoneOrRxRespTimer,
+				   TU_TO_MSEC(
+				   TX_AUTHENTICATION_RETRY_TIMEOUT_TU));
 	}
 }
+
+
+
 
 /* Add for support WEP when enable wpa3 */
 void saaSendAuthSeq3(IN struct ADAPTER *prAdapter,

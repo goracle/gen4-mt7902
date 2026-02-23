@@ -703,8 +703,9 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	prAisFsmInfo->prTargetStaRec = prStaRec;
 
-	if (prStaRec->ucStaState == STA_STATE_1)
-		cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_1);
+	prStaRec->ucStaState = STA_STATE_1;
+	cnmStaSendUpdateCmd(prAdapter, prStaRec, TRUE);
+	DBGLOG(AIS, ERROR, "[AIS-DIAG] StaRec[%u] ucStaState set to %d before SAA\n", prStaRec->ucIndex, prStaRec->ucStaState);
 
 	/* --- AUTH ALGORITHM SELECTION --- */
 	prStaRec->fgIsReAssoc = (prAisBssInfo->eConnectionState == MEDIA_STATE_CONNECTED);
@@ -2853,6 +2854,9 @@ void aisFsmRunEventAbort(IN struct ADAPTER *prAdapter,
 			prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
 		} else {
 			aisFsmInsertRequest(prAdapter, AIS_REQUEST_RECONNECT, ucBssIndex);
+			aisGetConnSettings(prAdapter, ucBssIndex)->fgIsConnReqIssued = TRUE;
+			aisGetConnSettings(prAdapter, ucBssIndex)->fgIsDisconnectedByNonRequest = FALSE;
+			aisFsmSteps(prAdapter, AIS_STATE_IDLE, ucBssIndex);
 		}
 	} else {
 		DBGLOG(AIS, ERROR, "Hardware is HALTED. Skipping reconnect. Reset required.\n");

@@ -253,25 +253,6 @@ done:
 	return status;
 }
 
-uint32_t wlanSendSetQueryUniCmd(IN struct ADAPTER *prAdapter,
-			uint8_t ucUCID,
-			u_int8_t fgSetQuery,
-			u_int8_t fgNeedResp,
-			u_int8_t fgIsOid,
-			PFN_CMD_DONE_HANDLER pfCmdDoneHandler,
-			PFN_CMD_TIMEOUT_HANDLER pfCmdTimeoutHandler,
-			uint32_t u4SetQueryInfoLen,
-			uint8_t *pucInfoBuffer, OUT void *pvSetQueryBuffer,
-			IN uint32_t u4SetQueryBufferLen)
-{
-	return wlanSendSetQueryUniCmdAdv(prAdapter,
-			ucUCID, fgSetQuery, fgNeedResp, fgIsOid,
-			pfCmdDoneHandler, pfCmdTimeoutHandler,
-			u4SetQueryInfoLen, pucInfoBuffer,
-			pvSetQueryBuffer, u4SetQueryBufferLen,
-			CMD_SEND_METHOD_ENQUEUE);
-}
-
 /*----------------------------------------------------------------------------*/
 /*!
 * \brief command packet generation utility

@@ -1624,7 +1624,8 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
     prAisFsmInfo->eCurrentState = AIS_STATE_IDLE;
     prScanInfo->eCurrentState = SCAN_STATE_IDLE;
     prAisFsmInfo->fgIsScanning = FALSE;
-    prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
+    prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+    aisGetConnSettings(prAdapter, ucBssIndex)->fgIsConnReqIssued = TRUE;
 
     DBGLOG(REQ, INFO, "[LOBOTOMY] Arch 6.18 Auth: Forcing state to IDLE\n");
 

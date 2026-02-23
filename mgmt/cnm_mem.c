@@ -662,8 +662,7 @@ struct STA_RECORD *cnmStaRecAlloc(struct ADAPTER *prAdapter,
 
 	/* 5. Sync to Hardware / WTBL Resource Allocation */
 	if (secPrivacySeekForEntry(prAdapter, prStaRec)) {
-		/* This sends the CMD_ID_ADD_STA_REC to firmware */
-		cnmStaSendUpdateCmd(prAdapter, prStaRec, FALSE);
+		/* State will be set and synced by caller after alloc */
 	} else {
 		DBGLOG(CNM, ERROR, "SAA: Failed to seek privacy entry for " MACSTR "\n", 
 			MAC2STR(prStaRec->aucMacAddr));
@@ -901,9 +900,8 @@ void cnmStaRecChangeState(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec
 	/* Do nothing when following state transitions happen,
 	 * other 6 conditions should be sync to FW, including 1-->1, 3-->3
 	 */
-	if ((ucNewState == STA_STATE_2 && prStaRec->ucStaState != STA_STATE_3)
-		|| (ucNewState == STA_STATE_1
-		&& prStaRec->ucStaState == STA_STATE_2)) {
+	if (ucNewState == STA_STATE_1
+		&& prStaRec->ucStaState == STA_STATE_2) {
 		prStaRec->ucStaState = ucNewState;
 		return;
 	}
