@@ -959,12 +959,16 @@ static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
 
 	prEventContent = (struct EVENT_ACTIVATE_STA_REC *) pucEventBuf;
 	prStaRec = cnmGetStaRecByIndex(prAdapter, prEventContent->ucStaRecIdx);
-
-	if (prStaRec && prStaRec->ucStaState == STA_STATE_3 &&
-		!kalMemCmp(&prStaRec->aucMacAddr[0],
-			&prEventContent->aucMacAddr[0], MAC_ADDR_LEN)) {
-
-		qmActivateStaRec(prAdapter, prStaRec);
+	if (!prStaRec)
+		return;
+	if (!kalMemCmp(&prStaRec->aucMacAddr[0], &prEventContent->aucMacAddr[0], MAC_ADDR_LEN)) {
+		if (prStaRec->ucStaState == STA_STATE_3) {
+			qmActivateStaRec(prAdapter, prStaRec);
+		} else if (prStaRec->ucStaState == STA_STATE_1) {
+			DBGLOG(MEM, INFO, "StaRec[%u] STATE_1 ACK from FW, firing SAA\n",
+				prStaRec->ucIndex);
+			aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
+		}
 	}
 
 }

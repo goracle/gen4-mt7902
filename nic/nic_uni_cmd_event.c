@@ -2365,15 +2365,22 @@ void nicUniCmdStaRecHandleEventPkt(IN struct ADAPTER
 	struct UNI_EVENT_CMD_RESULT *evt =
 		(struct UNI_EVENT_CMD_RESULT *)pucEventBuf;
 
-	DBGLOG(NIC, TRACE,
-		"cmd_result:ucCID=0x%x, status=%d, wlanidx=%d\n",
-		evt->u2CID, evt->u4Status, uni_cmd->ucWlanIdxL);
+	DBGLOG(NIC, INFO,
+		"[STAREC-CB] ucCID=0x%x UNI_CMD_ID_STAREC_INFO=0x%x status=%d wlanidx=%d\n",
+		evt->u2CID, UNI_CMD_ID_STAREC_INFO, evt->u4Status, uni_cmd->ucWlanIdxL);
 
 	if (evt->u2CID == UNI_CMD_ID_STAREC_INFO && evt->u4Status == 0) {
 		struct STA_RECORD *prStaRec = cnmGetStaRecByIndex(prAdapter,
 			secGetStaIdxByWlanIdx(prAdapter, uni_cmd->ucWlanIdxL));
-
-		qmActivateStaRec(prAdapter, prStaRec);
+		if (!prStaRec)
+			return;
+		if (prStaRec->ucStaState == STA_STATE_3) {
+			qmActivateStaRec(prAdapter, prStaRec);
+		} else if (prStaRec->ucStaState == STA_STATE_1) {
+			DBGLOG(NIC, INFO, "StaRec[%u] STATE_1 ACK from FW (UNI), firing SAA\n",
+				prStaRec->ucIndex);
+			aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
+		}
 	}
 }
 
@@ -2393,6 +2400,8 @@ uint32_t nicUniCmdUpdateStaRec(struct ADAPTER *ad,
 		return WLAN_STATUS_NOT_ACCEPTED;
 
 	cmd = (struct CMD_UPDATE_STA_RECORD *) info->pucInfoBuffer;
+	DBGLOG(NIC, INFO, "[STAREC-UNI] ucNeedResp=%d ucStaState=%d ucWlanIndex=%d\n",
+		cmd->ucNeedResp, cmd->ucStaState, cmd->ucWlanIndex);
 	bss = GET_BSS_INFO_BY_INDEX(ad, cmd->ucBssIndex);
 	max_cmd_len += sizeof(struct UNI_CMD_STAREC);
 	for (i = 0; i < ARRAY_SIZE(arUpdateStaRecTable); i++)

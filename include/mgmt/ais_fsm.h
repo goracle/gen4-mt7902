@@ -263,6 +263,7 @@ struct AIS_FSM_INFO {
 	struct BSS_DESC *prTargetBssDesc;	/* For destination */
 
 	struct STA_RECORD *prTargetStaRec;	/* For JOIN Abort */
+	struct MSG_SAA_FSM_START *prPendingSAAMsg;	/* Deferred until StaRec STATE_1 ACK */
 
 	uint32_t u4SleepInterval;
 
@@ -779,5 +780,7 @@ struct cfg80211_ft_event_params *
 
 void aisPreSuspendFlow(
 	IN struct ADAPTER *prAdapter);
+
+void aisFsmFirePendingSAA(struct ADAPTER *prAdapter, uint8_t ucBssIndex);
 
 #endif /* _AIS_FSM_H */

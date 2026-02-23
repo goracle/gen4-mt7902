@@ -769,7 +769,8 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	DBGLOG(AIS, INFO, "[AIS%d] Sovereign SAA Start: Seq %u\n", ucBssIndex, prJoinReqMsg->ucSeqNum);
 	
-	mboxSendMsg(prAdapter, MBOX_ID_0, (struct MSG_HDR *)prJoinReqMsg, MSG_SEND_METHOD_BUF);
+	/* Stash msg — fired from cnmStaRecHandleEventPkt once firmware ACKs STATE_1 */
+	prAisFsmInfo->prPendingSAAMsg = prJoinReqMsg;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -3961,6 +3962,10 @@ aisIndicationOfMediaStateToHost(IN struct ADAPTER *prAdapter,
 		if (eConnectionState == MEDIA_STATE_DISCONNECTED) {
 			prAisFsmInfo->prTargetBssDesc = NULL;
 			prAisFsmInfo->prTargetStaRec = NULL;
+		if (prAisFsmInfo->prPendingSAAMsg) {
+			cnmMemFree(prAdapter, prAisFsmInfo->prPendingSAAMsg);
+			prAisFsmInfo->prPendingSAAMsg = NULL;
+		}
 		}
 	} else {
 		/* NOTE: Only delay the Indication of Disconnect Event */
@@ -7624,4 +7629,16 @@ void aisPreSuspendFlow(IN struct ADAPTER *prAdapter)
 		}
 	}
 #endif
+}
+
+void aisFsmFirePendingSAA(struct ADAPTER *prAdapter, uint8_t ucBssIndex)
+{
+	struct AIS_FSM_INFO *prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+
+	if (!prAisFsmInfo || !prAisFsmInfo->prPendingSAAMsg)
+		return;
+	DBGLOG(AIS, INFO, "[AIS%d] STATE_1 ACK: firing deferred SAA msg\n", ucBssIndex);
+	mboxSendMsg(prAdapter, MBOX_ID_0,
+		(struct MSG_HDR *)prAisFsmInfo->prPendingSAAMsg, MSG_SEND_METHOD_BUF);
+	prAisFsmInfo->prPendingSAAMsg = NULL;
 }
