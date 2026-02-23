@@ -408,8 +408,6 @@ DBGLOG_MEM8(RX, WARN, (uint8_t *)prSwRfb->pvHeader - prSwRfb->u2HeaderLen, 32);
 
 
 
-
-
 void nicRxInitialize(IN struct ADAPTER *prAdapter)
 {
 	struct RX_CTRL *prRxCtrl;

@@ -1600,12 +1600,6 @@ void mtk_cfg80211_abort_scan(struct wiphy *wiphy,
 
 int mtk_cfg80211_auth(struct wiphy *wiphy, 
                       struct net_device *ndev, struct cfg80211_auth_request *req)
-# if 0
-{
-	/* LOBOTOMY: iwd owns auth via frame watch. Do nothing. */
-	return 0;
-}
-#endif
 {
     struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
     struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
@@ -1928,8 +1922,6 @@ int mtk_cfg80211_connect(struct wiphy *wiphy,
 	apply_channel_and_bssid_lock(sme, prGlueInfo, prConnSettings, ucBssIndex);
 
 	/* Step 12: Initiate the connection (The "Go" signal to Firmware) */
-
-
 	DBGLOG(REQ, INFO, "[CONN-SOV] Dispatching connection to SSID: %.*s\n", 
 	       (int)sme->ssid_len, sme->ssid);
 	

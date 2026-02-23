@@ -1039,6 +1039,26 @@ saaFsmRunEventTxDone(IN struct ADAPTER *prAdapter,
 				&prStaRec->rTxReqDoneOrRxRespTimer,
 				TU_TO_MSEC(DOT11_AUTHENTICATION_RESPONSE_TIMEOUT_TU));
 	} else {
+/* 🚀 UNION CITY PERSISTENCE HACK - VERSION 3 🚀 */
+		if (prStaRec->ucTxAuthAssocRetryCount < 20) { 
+			prStaRec->ucTxAuthAssocRetryCount++;
+			DBGLOG(SAA, WARN, "SAA: Union City Noise Override! Hard retry %d (status %d)\n", 
+				prStaRec->ucTxAuthAssocRetryCount, rTxDoneStatus);
+			
+			if (prStaRec->eAuthAssocSent == AA_SENT_AUTH3)
+				saaSendAuthSeq3(prAdapter, prStaRec);
+			else
+				saaSendAuthAssoc(prAdapter, prStaRec);
+
+			/* 🛡️ THE KEY CHANGE: Return early to prevent AIS from seeing a failure 🛡️ */
+			/* By returning here, we stop the state machine from progressing to JoinCompleteAction */
+			return WLAN_STATUS_SUCCESS; 
+		} else {
+			DBGLOG(SAA, ERROR, "SAA: 20 hard retries exhausted. Spectrum saturated.\n");
+			/* After 20 attempts, we finally let the failure propagate */
+		}
+        
+        /* Original failure logic follows if retries are exhausted */
 		if (prStaRec->eAuthAssocSent == AA_SENT_AUTH3)
 			saaSendAuthSeq3(prAdapter, prStaRec);
 		else

@@ -71,7 +71,6 @@
  */
 #include "precomp.h"
 #include "wsys_cmd_handler_fw.h"
-extern uint32_t nicUniCmdSendChPrivilege(struct ADAPTER *prAdapter, struct CMD_CH_PRIVILEGE *cmd);
 
 /*******************************************************************************
  *                              C O N S T A N T S
@@ -786,8 +785,26 @@ void cnmChMngrRequestPrivilege(struct ADAPTER
 		       "CNM: ChReq with wrong netIdx=%d\n\n",
 		       prCmdBody->ucBssIndex);
 
-	rStatus = nicUniCmdSendChPrivilege(prAdapter, prCmdBody);
-	log_dbg(CNM, ERROR, "[CNM-DIAG] nicUniCmdSendChPrivilege returned 0x%x\n", rStatus);
+	rStatus = wlanSendSetQueryCmd(prAdapter,	/* prAdapter */
+				      CMD_ID_CH_PRIVILEGE,	/* ucCID */
+				      TRUE,	/* fgSetQuery */
+				      FALSE,	/* fgNeedResp */
+				      FALSE,	/* fgIsOid */
+				      NULL,	/* pfCmdDoneHandler */
+				      NULL,	/* pfCmdTimeoutHandler */
+
+				      /* u4SetQueryInfoLen */
+				      sizeof(struct CMD_CH_PRIVILEGE),
+
+				      /* pucInfoBuffer */
+				      (uint8_t *)prCmdBody,
+
+				      NULL,	/* pvSetQueryBuffer */
+				      0	/* u4SetQueryBufferLen */
+				     );
+
+	/* ASSERT(rStatus == WLAN_STATUS_PENDING); */
+
 	cnmMemFree(prAdapter, prCmdBody);
 	cnmMemFree(prAdapter, prMsgHdr);
 }	/* end of cnmChMngrRequestPrivilege()*/
@@ -939,7 +956,6 @@ void cnmChMngrAbortPrivilege(struct ADAPTER *prAdapter,
 void cnmChMngrHandleChEvent(struct ADAPTER *prAdapter,
 			    struct WIFI_EVENT *prEvent)
 {
-	log_dbg(CNM, ERROR, "[CNM-DIAG] cnmChMngrHandleChEvent CALLED\n");
 	struct EVENT_CH_PRIVILEGE *prEventBody;
 	struct MSG_CH_GRANT *prChResp;
 	struct BSS_INFO *prBssInfo;
