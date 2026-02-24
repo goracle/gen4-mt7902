@@ -1598,74 +1598,58 @@ void mtk_cfg80211_abort_scan(struct wiphy *wiphy,
  * 5. Hardware-verified readiness instead of time-based assumptions
  */
 
-int mtk_cfg80211_auth(struct wiphy *wiphy, 
-                      struct net_device *ndev, struct cfg80211_auth_request *req)
-# if 0
+int mtk_cfg80211_auth(struct wiphy *wiphy,
+                      struct net_device *ndev,
+                      struct cfg80211_auth_request *req)
 {
-	/* LOBOTOMY: iwd owns auth via frame watch. Do nothing. */
-	return 0;
-}
-#endif
-{
-    struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
-    struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
+    struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *)wiphy_priv(wiphy);
+    struct ADAPTER *prAdapter;
+    uint8_t ucBssIndex;
     struct AIS_FSM_INFO *prAisFsmInfo;
-    struct SCAN_INFO *prScanInfo = &prAdapter->rWifiVar.rScanInfo;
-    uint32_t rStatus;
-    uint32_t u4BufLen;
-    uint8_t ucBssIndex = wlanGetBssIdx(ndev);
-    struct PARAM_CONNECT rNewSsid;
-    struct PARAM_OP_MODE rOpMode;
-    const uint8_t *pucSsidIE;
 
-    prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
-    
-    /* LOBOTOMY 1: FORCE STATE CLEARANCE */
-    prAisFsmInfo->eCurrentState = AIS_STATE_IDLE;
-    prScanInfo->eCurrentState = SCAN_STATE_IDLE;
-    prAisFsmInfo->fgIsScanning = FALSE;
-    prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
-    aisGetConnSettings(prAdapter, ucBssIndex)->fgIsConnReqIssued = TRUE;
-
-    DBGLOG(REQ, INFO, "[LOBOTOMY] Arch 6.18 Auth: Forcing state to IDLE\n");
-
-    /* LOBOTOMY 2: FORCE INFRA MODE */
-    rOpMode.ucBssIdx = ucBssIndex;
-    rOpMode.eOpMode = NET_TYPE_INFRA;
-    rStatus = kalIoctl(prGlueInfo, wlanoidSetInfrastructureMode,
-                       &rOpMode, sizeof(rOpMode),
-                       FALSE, FALSE, TRUE, &u4BufLen);
-    if (rStatus == 0x103) rStatus = 0;
-
-    /* LOBOTOMY 3: SSID EXTRACTION (Direct Pointer)
-       Instead of copying to a non-existent aucSSID buffer, we point 
-       directly into the existing IE data from req->bss. */
-    kalMemZero(&rNewSsid, sizeof(struct PARAM_CONNECT));
-    rNewSsid.pucBssid = (uint8_t *)req->bss->bssid;
-    rNewSsid.ucBssIdx = ucBssIndex;
-
-    if (req->bss && req->bss->ies) {
-        pucSsidIE = cfg80211_find_ie(WLAN_EID_SSID, req->bss->ies->data, req->bss->ies->len);
-        
-        if (pucSsidIE && pucSsidIE[1] <= 32) {
-            rNewSsid.u4SsidLen = pucSsidIE[1];
-            /* Point directly to the string after EID (1 byte) and Length (1 byte) */
-            rNewSsid.pucSsid = (uint8_t *)&pucSsidIE[2];
-            
-            DBGLOG(REQ, INFO, "[LOBOTOMY] Auth target SSID found in IEs, len=%d\n", 
-                   (int)rNewSsid.u4SsidLen);
-        }
+    if (!prGlueInfo) {
+        DBGLOG(REQ, ERROR, "[AUTH] NULL glue info\n");
+        return -EINVAL;
     }
 
-    /* LOBOTOMY 4: OVERRIDE CONNECTION REQUEST */
-    rStatus = kalIoctl(prGlueInfo, wlanoidSetConnect,
-                       (void *)&rNewSsid, sizeof(struct PARAM_CONNECT),
-                       FALSE, FALSE, FALSE, &u4BufLen);
+    prAdapter = prGlueInfo->prAdapter;
+    if (!prAdapter) {
+        DBGLOG(REQ, ERROR, "[AUTH] NULL adapter\n");
+        return -EINVAL;
+    }
 
-    DBGLOG(REQ, INFO, "[LOBOTOMY] Auth complete for " MACSTR ". Returning 0.\n",
-           MAC2STR(rNewSsid.pucBssid));
+    ucBssIndex = wlanGetBssIdx(ndev);
+    prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+    if (!prAisFsmInfo) {
+        DBGLOG(REQ, ERROR, "[AUTH] NULL AIS FSM for bss=%d\n", ucBssIndex);
+        return -EINVAL;
+    }
 
-    return 0; 
+    DBGLOG(REQ, INFO,
+        "[AUTH] cfg80211_auth called: bss=%d AIS_state=%d target=" MACSTR "\n",
+        ucBssIndex, prAisFsmInfo->eCurrentState,
+        MAC2STR(req->bss->bssid));
+
+    /*
+     * Under iwd on 6.18+, cfg80211_connect already drove the full
+     * AIS FSM join sequence including auth frame TX.  cfg80211_auth
+     * is a redundant call from iwd's SME layer for open/PSK networks
+     * and must not restart the state machine or overwrite the BSSID.
+     *
+     * For SAE (WPA3), iwd uses external-auth via cfg80211_external_auth,
+     * not this path.  So this callback is always a no-op for us.
+     */
+    if (prAisFsmInfo->eCurrentState >= AIS_STATE_REQ_CHANNEL_JOIN) {
+        DBGLOG(REQ, INFO,
+            "[AUTH] AIS already in join sequence (state=%d), ignoring redundant auth cb\n",
+            prAisFsmInfo->eCurrentState);
+        return 0;
+    }
+
+    DBGLOG(REQ, WARN,
+        "[AUTH] Called outside join sequence (state=%d) — no-op\n",
+        prAisFsmInfo->eCurrentState);
+    return 0;
 }
 
 /* Add .disassoc method to avoid kernel WARN_ON when insmod wlan.ko */
@@ -3078,84 +3062,76 @@ int mtk_cfg80211_set_power_mgmt(struct wiphy *wiphy,
  * Returns: 0 on success, -EOPNOTSUPP for unsupported frame types
  */
 int mtk_cfg80211_mgmt_frame_register(struct wiphy *wiphy,
-                                      struct wireless_dev *wdev,
-                                      u16 frame_type,
-                                      bool reg)
+				     struct wireless_dev *wdev,
+				     u16 frame_type,
+				     bool reg)
 {
-    struct GLUE_INFO *prGlueInfo;
+	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *)wiphy_priv(wiphy);
 
-    /* ====================================================================
-     * SOV-1: VALIDATION
-     * ==================================================================== */
-    prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
-    if (!prGlueInfo) {
-        DBGLOG(INIT, ERROR, "[FRAME-REG] NULL glue info\n");
-        return -EIO;
-    }
+	if (!prGlueInfo) {
+		DBGLOG(INIT, ERROR, "[FRAME-REG] NULL glue info\n");
+		return -EIO;
+	}
 
-    DBGLOG(INIT, TRACE,
-           "[FRAME-REG] type=0x%04x %s\n",
-           frame_type, reg ? "REGISTER" : "UNREGISTER");
+	DBGLOG(INIT, INFO, "[FRAME-REG] type=0x%04x %s\n",
+		frame_type, reg ? "REGISTER" : "UNREGISTER");
 
-    /* ====================================================================
-     * SOV-2: UPDATE LOCAL FILTER BITMASK
-     * This is pure kernel state - no firmware interaction yet
-     * ==================================================================== */
-    switch (frame_type) {
-    case MAC_FRAME_PROBE_REQ:
-        if (reg) {
-            prGlueInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_PROBE_REQ;
-            DBGLOG(INIT, TRACE, "[FRAME-REG] Probe Request filtering enabled\n");
-        } else {
-            prGlueInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_PROBE_REQ;
-            DBGLOG(INIT, TRACE, "[FRAME-REG] Probe Request filtering disabled\n");
-        }
-        break;
+	switch (frame_type) {
+	case MAC_FRAME_PROBE_REQ:
+		if (reg)
+			prGlueInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_PROBE_REQ;
+		else
+			prGlueInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_PROBE_REQ;
+		break;
 
-    case MAC_FRAME_ACTION:
-        if (reg) {
-            prGlueInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_ACTION_FRAME;
-            DBGLOG(INIT, TRACE, "[FRAME-REG] Action frame filtering enabled\n");
-        } else {
-            prGlueInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_ACTION_FRAME;
-            DBGLOG(INIT, TRACE, "[FRAME-REG] Action frame filtering disabled\n");
-        }
-        break;
+	case MAC_FRAME_ACTION:
+		if (reg)
+			prGlueInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_ACTION_FRAME;
+		else
+			prGlueInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_ACTION_FRAME;
+		break;
 
-    default:
-        /*
-         * CRITICAL: Return -EOPNOTSUPP (not -EINVAL) for unsupported types.
-         * This is the polite way to tell cfg80211/iwd "we don't handle this".
-         * -EINVAL would be interpreted as "invalid request" rather than
-         * "not supported by hardware".
-         */
-        DBGLOG(INIT, INFO,
-               "[FRAME-REG] Frame type 0x%04x not supported\n",
-               frame_type);
-        return -EOPNOTSUPP;
-    }
+	case MAC_FRAME_AUTH:
+		/* iwd SME mode registers a watch on auth frames (0x00b0) so it
+		 * can handle auth via frame injection.  Auth RX is already
+		 * relayed to cfg80211 by the driver RX path, so no filter bit
+		 * needs to change — just ack the registration so iwd proceeds. */
+		if (reg)
+			prGlueInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_AUTH;
+		else
+			prGlueInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_AUTH;
+		break;
 
-    /* ====================================================================
-     * SOV-3: TRIGGER FILTER APPLICATION
-     * Schedule the filter to be applied to firmware when convenient
-     * ==================================================================== */
-    if (prGlueInfo->prAdapter) {
-        set_bit(GLUE_FLAG_FRAME_FILTER_AIS_BIT, &prGlueInfo->ulFlag);
-        wake_up_interruptible(&prGlueInfo->waitq);
-        DBGLOG(INIT, TRACE,
-               "[FRAME-REG] Filter update scheduled (bitmask=0x%x)\n",
-               prGlueInfo->u4OsMgmtFrameFilter);
-    }
+	case MAC_FRAME_ASSOC_REQ:
+		if (reg)
+			prGlueInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_ASSOC_REQ;
+		else
+			prGlueInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_ASSOC_REQ;
+		break;
 
-    /*
-     * SOVEREIGNTY GUARANTEE: Always return 0 for supported types
-     * 
-     * We've updated the local filter bitmask. The actual application
-     * to firmware happens asynchronously. Even if firmware is dead,
-     * cfg80211 now knows we're "registered" for these frames, and
-     * when firmware comes back, the filter will be applied.
-     */
-    return 0;
+	default:
+		/* Not a frame type we filter in hardware. Return -EOPNOTSUPP
+		 * (not -EINVAL) so cfg80211 knows this is a capability gap,
+		 * not a malformed request. */
+		DBGLOG(INIT, INFO,
+			"[FRAME-REG] type=0x%04x not supported, returning -EOPNOTSUPP\n",
+			frame_type);
+		return -EOPNOTSUPP;
+	}
+
+	/* Schedule async filter application to firmware. */
+	if (prGlueInfo->prAdapter) {
+		set_bit(GLUE_FLAG_FRAME_FILTER_AIS_BIT, &prGlueInfo->ulFlag);
+		wake_up_interruptible(&prGlueInfo->waitq);
+		DBGLOG(INIT, INFO,
+			"[FRAME-REG] Filter update scheduled (bitmask=0x%08x)\n",
+			prGlueInfo->u4OsMgmtFrameFilter);
+	} else {
+		DBGLOG(INIT, WARN,
+			"[FRAME-REG] Adapter NULL, filter bitmask updated but not pushed to firmware\n");
+	}
+
+	return 0;
 }
 
 
