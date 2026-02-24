@@ -272,6 +272,7 @@ static const struct ACTION_FRAME_SIZE_MAP arActionFrameReservedLen[] = {
 	 sizeof(struct WMM_ACTION_TSPEC_FRAME)},
 };
 
+
 /*******************************************************************************
  *                                 M A C R O S
  *******************************************************************************
@@ -2230,6 +2231,7 @@ static void nicRxCheckWakeupReason(struct ADAPTER *prAdapter,
 
 static PROCESS_RX_UNI_EVENT_FUNCTION arUniEventTable[UNI_EVENT_ID_NUM] = {
 	[0 ... UNI_EVENT_ID_NUM - 1] = NULL,
+	[0x01] = uniEventRxAuth, // <-- add this line
 	[UNI_EVENT_ID_SCAN_DONE] = nicUniEventScanDone,
 	[UNI_EVENT_ID_CNM] = nicUniEventChMngrHandleChEvent,
 	[UNI_EVENT_ID_MBMC] = nicUniEventMbmcHandleEvent,
@@ -2336,6 +2338,32 @@ void nicUniEventScanDone(struct ADAPTER *ad, struct WIFI_UNI_EVENT *evt)
 	scnEventScanDone(ad, &legacy, TRUE);
 }
 
+void uniEventRxAuth(
+    IN struct ADAPTER *prAdapter,
+    IN struct WIFI_UNI_EVENT *prEvent)
+{
+    struct SW_RFB rfb;
+
+    DBGLOG(RX, INFO,
+        "[UNI-AUTH] EID=0x%02X SEQ=%u LEN=%u\n",
+        prEvent->ucEID,
+        prEvent->ucSeqNum,
+        prEvent->u2PacketLength);
+
+    /* Dump first 32 bytes for diagnostics */
+    for (int i = 0; i < prEvent->u2PacketLength && i < 32; i++)
+        DBGLOG(RX, INFO, "%02x ", prEvent->aucBuffer[i]);
+
+    DBGLOG(RX, INFO, "\n");
+
+    /* Wrap UNI event buffer as SW_RFB */
+    kalMemZero(&rfb, sizeof(struct SW_RFB));
+    rfb.pvHeader = prEvent->aucBuffer;
+    rfb.u2PacketLen = prEvent->u2PacketLength;
+
+    /* Pass directly to AAA FSM */
+    aaaFsmRunEventRxAuth(prAdapter, &rfb);
+}
 
 
 

@@ -1606,4 +1606,7 @@ void
 nicEventCSIData(IN struct ADAPTER *prAdapter, IN struct WIFI_EVENT *prEvent);
 #endif
 
+
+void uniEventRxAuth(IN struct ADAPTER *prAdapter, IN struct WIFI_UNI_EVENT *prEvent);
+
 #endif /* _NIC_RX_H */

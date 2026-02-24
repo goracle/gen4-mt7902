@@ -1435,10 +1435,6 @@ aisHandleState_SEARCH(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 		 * join steps and move straight to the required channel join.
 		 */
 		DBGLOG(AIS, INFO, "[AIS%d] Sovereign Join: Transitioning to REQ_CHANNEL_JOIN\n", ucBssIndex);
-		if (!prAisFsmInfo->fgIsCfg80211Connecting) {
-			DBGLOG(AIS, INFO, "[AIS%d] SEARCH: No cfg80211 request, waiting\n", ucBssIndex);
-			return AIS_STATE_WAIT_FOR_NEXT_SCAN;
-		}
 		return AIS_STATE_REQ_CHANNEL_JOIN;
 	}
 

@@ -240,6 +240,23 @@ void saaSendAuthAssoc(IN struct ADAPTER *prAdapter,
 #endif
 		}
 
+
+
+{
+    struct AIS_FSM_INFO *prAisFsmInfo =
+        aisGetAisFsmInfo(prAdapter, ucBssIndex);
+    DBGLOG(SAA, INFO,
+        "[SAA] Auth TX: fgIsChannelGranted=%d fgIsChannelRequested=%d\n",
+        prAisFsmInfo->fgIsChannelGranted,
+        prAisFsmInfo->fgIsChannelRequested);
+}
+
+DBGLOG(SAA, INFO,
+    "[SAA] Auth TX: ucWlanIndex=%d ucStaState=%d\n",
+    prStaRec->ucWlanIndex,
+    prStaRec->ucStaState);
+
+
 #if !CFG_SUPPORT_AAA
 		rStatus = authSendAuthFrame(prAdapter, prStaRec, u2AuthTransSN);
 #else

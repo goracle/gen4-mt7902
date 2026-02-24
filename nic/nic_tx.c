@@ -3740,6 +3740,7 @@ uint8_t nicTxGetWlanIdx(struct ADAPTER *prAdapter,
 		ucWlanIndex = prAdapter->ucTxDefaultWlanIndex;
 	}
 
+	DBGLOG(TX, INFO, "[WIDX] bss=%u sta=%u wlanIdx=%u\n", ucBssIdx, ucStaRecIdx, ucWlanIndex);
 	return ucWlanIndex;
 }
 
