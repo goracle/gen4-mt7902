@@ -1641,7 +1641,8 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		ucBssIndex, prAisFsmInfo->eCurrentState,
 		req->auth_type, MAC2STR(req->bss->bssid));
 
-	if (prAisFsmInfo->eCurrentState >= AIS_STATE_REQ_CHANNEL_JOIN) {
+	if (prAisFsmInfo->eCurrentState == AIS_STATE_REQ_CHANNEL_JOIN ||
+		prAisFsmInfo->eCurrentState == AIS_STATE_JOIN) {
 		DBGLOG(REQ, INFO, "[AUTH] already in join (state=%d), ignoring\n",
 			prAisFsmInfo->eCurrentState);
 		return 0;

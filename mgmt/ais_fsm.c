@@ -709,7 +709,7 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	//prStaRec->ucStaState = STA_STATE_1;
 
-	cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_1);
+	prStaRec->ucStaState = STA_STATE_1;
 	DBGLOG(AIS, INFO,
 	       "[AIS-DIAG] StaRec[%u] -> STATE_1 requested\n",
 	       prStaRec->ucIndex);
@@ -781,10 +781,14 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 	prConnSettings->fgIsConnInitialized = TRUE;
 #endif
 
-	DBGLOG(AIS, INFO, "[AIS%d] Sovereign SAA Start: Seq %u\n", ucBssIndex, prJoinReqMsg->ucSeqNum);
-	
-	mboxSendMsg(prAdapter, MBOX_ID_0,
-		(struct MSG_HDR *)prJoinReqMsg, MSG_SEND_METHOD_BUF);
+	if (prAisFsmInfo->prPendingSAAMsg)
+		cnmMemFree(prAdapter, prAisFsmInfo->prPendingSAAMsg);
+	prAisFsmInfo->prPendingSAAMsg = prJoinReqMsg;
+
+	DBGLOG(AIS, INFO, "[AIS%d] Sovereign SAA deferred: Seq %u, awaiting STATE_1 FW ACK\n",
+		ucBssIndex, prJoinReqMsg->ucSeqNum);
+
+	cnmStaSendUpdateCmd(prAdapter, prStaRec, TRUE);
 }
 
 /*----------------------------------------------------------------------------*/
