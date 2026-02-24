@@ -607,10 +607,13 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
         if (u2TransactionSeqNum == 0)
             u2TransactionSeqNum = 1;
 
+        pfTxDoneHandler = saaFsmRunEventTxDone;
+
         DBGLOG(SAA, INFO,
-               "AUTH TX (STA): BSS=%u WIDX=%u\n",
+               "AUTH TX (STA): BSS=%u WIDX=%u StaRecIdx=%u\n",
                ucFinalBssIndex,
-               ucFinalWlanIndex);
+               ucFinalWlanIndex,
+               prStaRec->ucIndex);
 
     } else {
 
@@ -659,7 +662,7 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
     TX_SET_MMPDU(prAdapter,
                  prMsduInfo,
                  ucFinalBssIndex,
-                 ucFinalWlanIndex,
+                 (prStaRec ? prStaRec->ucIndex : ucFinalWlanIndex),
                  WLAN_MAC_MGMT_HEADER_LEN,
                  WLAN_MAC_MGMT_HEADER_LEN + u2PayloadLen,
                  pfTxDoneHandler,
@@ -683,9 +686,10 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
     /* ------------------------------------------------------------------ */
 
     DBGLOG(TX, INFO,
-           "AUTH TX FINAL: BSS=%u WIDX=%u Len=%u\n",
+           "AUTH TX FINAL: BSS=%u WIDX=%u StaRecIdx=%u Len=%u\n",
            ucFinalBssIndex,
            ucFinalWlanIndex,
+           (prStaRec ? prStaRec->ucIndex : 0xFF),
            prMsduInfo->u2FrameLength);
 
     /* ------------------------------------------------------------------ */
@@ -717,6 +721,7 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
     return WLAN_STATUS_SUCCESS;
 }
 
+
 #endif /* !CFG_SUPPORT_AAA */
 
 /*----------------------------------------------------------------------------*/
@@ -744,7 +749,7 @@ uint32_t authCheckTxAuthFrame(IN struct ADAPTER *prAdapter,
 
 	ASSERT(prMsduInfo);
 
-	prAuthFrame = (struct WLAN_AUTH_FRAME *)(prMsduInfo->prPacket);
+	prAuthFrame = (struct WLAN_AUTH_FRAME *)((unsigned long)(prMsduInfo->prPacket) + MAC_TX_RESERVED_FIELD);
 	ASSERT(prAuthFrame);
 
 	prStaRec = cnmGetStaRecByIndex(prAdapter, prMsduInfo->ucStaRecIndex);

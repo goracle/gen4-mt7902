@@ -783,8 +783,8 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	DBGLOG(AIS, INFO, "[AIS%d] Sovereign SAA Start: Seq %u\n", ucBssIndex, prJoinReqMsg->ucSeqNum);
 	
-	/* Stash msg — fired from cnmStaRecHandleEventPkt once firmware ACKs STATE_1 */
-	prAisFsmInfo->prPendingSAAMsg = prJoinReqMsg;
+	mboxSendMsg(prAdapter, MBOX_ID_0,
+		(struct MSG_HDR *)prJoinReqMsg, MSG_SEND_METHOD_BUF);
 }
 
 /*----------------------------------------------------------------------------*/
