@@ -444,135 +444,107 @@ void bssDetermineApBssInfoPhyTypeSet(IN struct ADAPTER *prAdapter,
  */
 /*---------------------------------------------------------------------------*/
 struct STA_RECORD *bssCreateStaRecFromBssDesc(IN struct ADAPTER *prAdapter,
-					      IN enum ENUM_STA_TYPE eStaType,
-					      IN uint8_t ucBssIndex,
-					      IN struct BSS_DESC *prBssDesc)
+		IN enum ENUM_STA_TYPE eStaType,
+		IN uint8_t ucBssIndex,
+		IN struct BSS_DESC *prBssDesc)
 {
 	struct STA_RECORD *prStaRec;
 	uint8_t ucNonHTPhyTypeSet;
 	struct CONNECTION_SETTINGS *prConnSettings;
 
-	ASSERT(prBssDesc);
+	if (!prAdapter) {
+		DBGLOG(BSS, ERROR, "[BSS] prAdapter is NULL\n");
+		return NULL;
+	}
+	if (!prBssDesc) {
+		DBGLOG(BSS, ERROR, "[BSS] prBssDesc is NULL\n");
+		return NULL;
+	}
 
 	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
-
-	/* 4 <1> Get a valid STA_RECORD_T */
-	prStaRec =
-	    cnmGetStaRecByAddress(prAdapter, ucBssIndex, prBssDesc->aucSrcAddr);
-	if (!prStaRec) {
-		prStaRec =
-		    cnmStaRecAlloc(prAdapter, eStaType, ucBssIndex,
-				   prBssDesc->aucSrcAddr);
-
-		if (!prStaRec) {
-			DBGLOG(BSS, WARN,
-			       "STA_REC entry is full, cannot acquire new entry for ["
-			       MACSTR "]!!\n", MAC2STR(prBssDesc->aucSrcAddr));
-			ASSERT(FALSE);
-			return NULL;
-		}
-
-		prStaRec->ucStaState = STA_STATE_1;
-		prStaRec->ucJoinFailureCount = 0;
-		/* TODO(Kevin): If this is an old entry,
-		 * we may also reset the ucJoinFailureCount to 0.
-		 */
+	if (!prConnSettings) {
+		DBGLOG(BSS, ERROR, "[BSS] prConnSettings is NULL for BSS[%u]\n",
+		       ucBssIndex);
+		return NULL;
 	}
-	/* 4 <2> Update information from BSS_DESC_T to current P_STA_RECORD_T */
-	prStaRec->u2CapInfo = prBssDesc->u2CapInfo;
 
+	/* Free any stale StaRec for this BSSID.
+	 * Reusing a stale record risks inheriting a garbage ucWlanIndex
+	 * from a prior failed join, which causes auth frames to be sent
+	 * on the wrong wlan index and silently dropped by firmware.
+	 */
+	prStaRec = cnmGetStaRecByAddress(prAdapter, ucBssIndex,
+					 prBssDesc->aucSrcAddr);
+	if (prStaRec) {
+		DBGLOG(BSS, INFO,
+		       "[BSS] Freeing stale StaRec[%u] wlanIdx=%u for " MACSTR
+		       " before fresh alloc\n",
+		       prStaRec->ucIndex, prStaRec->ucWlanIndex,
+		       MAC2STR(prBssDesc->aucSrcAddr));
+		cnmStaRecFree(prAdapter, prStaRec);
+		prStaRec = NULL;
+	}
+
+	prStaRec = cnmStaRecAlloc(prAdapter, eStaType, ucBssIndex,
+				  prBssDesc->aucSrcAddr);
+	if (!prStaRec) {
+		DBGLOG(BSS, ERROR,
+		       "[BSS] STA_REC table full, cannot alloc for [" MACSTR
+		       "]\n",
+		       MAC2STR(prBssDesc->aucSrcAddr));
+		return NULL;
+	}
+
+	prStaRec->ucStaState = STA_STATE_1;
+	prStaRec->ucJoinFailureCount = 0;
+
+	DBGLOG(BSS, INFO,
+	       "[BSS] Allocated StaRec[%u] wlanIdx=%u for [" MACSTR
+	       "] BSS[%u]\n",
+	       prStaRec->ucIndex, prStaRec->ucWlanIndex,
+	       MAC2STR(prBssDesc->aucSrcAddr), ucBssIndex);
+
+	/* Populate capabilities from the BSS descriptor */
+	prStaRec->u2CapInfo = prBssDesc->u2CapInfo;
 	prStaRec->u2OperationalRateSet = prBssDesc->u2OperationalRateSet;
 	prStaRec->u2BSSBasicRateSet = prBssDesc->u2BSSBasicRateSet;
 
-#if 1
 	bssDetermineStaRecPhyTypeSet(prAdapter, prBssDesc, prStaRec);
-#else
-	prStaRec->ucPhyTypeSet = prBssDesc->ucPhyTypeSet;
 
-	if (IS_STA_IN_AIS(prStaRec)) {
-		if (!
-		    ((prConnSettings->eEncStatus ==
-		      ENUM_ENCRYPTION3_ENABLED)
-		     || (prConnSettings->eEncStatus ==
-			 ENUM_ENCRYPTION3_KEY_ABSENT)
-		     || (prConnSettings->eEncStatus ==
-			 ENUM_ENCRYPTION_DISABLED)
-		     || (prAdapter->prGlueInfo->u2WSCAssocInfoIELen)
-#if CFG_SUPPORT_WAPI
-		     || (prAdapter->prGlueInfo->u2WapiAssocInfoIESz)
-#endif
-)) {
-			DBGLOG(BSS, INFO,
-			       "Ignore the HT Bit for TKIP as pairwise cipher configed!\n");
-			prStaRec->ucPhyTypeSet &= ~PHY_TYPE_BIT_HT;
-		}
-	}
+	ucNonHTPhyTypeSet = prStaRec->ucDesiredPhyTypeSet & PHY_TYPE_SET_802_11ABG;
 
-	prStaRec->ucDesiredPhyTypeSet =
-	    prStaRec->ucPhyTypeSet & prAdapter->rWifiVar.ucAvailablePhyTypeSet;
-#endif
-
-	ucNonHTPhyTypeSet =
-	    prStaRec->ucDesiredPhyTypeSet & PHY_TYPE_SET_802_11ABG;
-
-	/* Check for Target BSS's non HT Phy Types */
 	if (ucNonHTPhyTypeSet) {
-
-		if (ucNonHTPhyTypeSet & PHY_TYPE_BIT_ERP) {
+		if (ucNonHTPhyTypeSet & PHY_TYPE_BIT_ERP)
 			prStaRec->ucNonHTBasicPhyType = PHY_TYPE_ERP_INDEX;
-		} else if (ucNonHTPhyTypeSet & PHY_TYPE_BIT_OFDM) {
+		else if (ucNonHTPhyTypeSet & PHY_TYPE_BIT_OFDM)
 			prStaRec->ucNonHTBasicPhyType = PHY_TYPE_OFDM_INDEX;
-		} else {/* if (ucNonHTPhyTypeSet & PHY_TYPE_HR_DSSS_INDEX) */
-
+		else
 			prStaRec->ucNonHTBasicPhyType = PHY_TYPE_HR_DSSS_INDEX;
-		}
-
 		prStaRec->fgHasBasicPhyType = TRUE;
 	} else {
-		/* Use mandatory for 11N only BSS */
-		ASSERT(prStaRec->ucPhyTypeSet & PHY_TYPE_SET_802_11N);
-
-		{
-			/* TODO(Kevin): which value should we set
-			 *    for 11n ? ERP ?
-			 */
-			prStaRec->ucNonHTBasicPhyType = PHY_TYPE_HR_DSSS_INDEX;
+		if (!(prStaRec->ucPhyTypeSet & PHY_TYPE_SET_802_11N)) {
+			DBGLOG(BSS, ERROR,
+			       "[BSS] StaRec[%u]: no non-HT and no HT phy type set (ucPhyTypeSet=0x%x)\n",
+			       prStaRec->ucIndex, prStaRec->ucPhyTypeSet);
 		}
-
+		prStaRec->ucNonHTBasicPhyType = PHY_TYPE_HR_DSSS_INDEX;
 		prStaRec->fgHasBasicPhyType = FALSE;
 	}
 
-	/* Update non HT Desired Rate Set */
 	prStaRec->u2DesiredNonHTRateSet =
-	    (prStaRec->
-	     u2OperationalRateSet & prConnSettings->u2DesiredNonHTRateSet);
+		prStaRec->u2OperationalRateSet &
+		prConnSettings->u2DesiredNonHTRateSet;
 
-	/* 4 <3> Update information from BSS_DESC_T to current P_STA_RECORD_T */
-	if (IS_AP_STA(prStaRec)) {
-		/* do not need to parse IE for DTIM,
-		 * which have been parsed before inserting into struct BSS_DESC
-		 */
-		if (prBssDesc->ucDTIMPeriod)
-			prStaRec->ucDTIMPeriod = prBssDesc->ucDTIMPeriod;
-		else
-			prStaRec->ucDTIMPeriod = 0;
-		/* Means that TIM was not parsed. */
+	if (IS_AP_STA(prStaRec))
+		prStaRec->ucDTIMPeriod = prBssDesc->ucDTIMPeriod;
 
-	}
-	/* 4 <4> Update default value */
 	prStaRec->fgDiagnoseConnection = FALSE;
 
-	/* 4 <5> Update default value for other Modules */
-	/* Determine WMM related parameters for STA_REC */
 	mqmProcessScanResult(prAdapter, prBssDesc, prStaRec);
-
-	/* 4 <6> Update Tx Rate */
-	/* Update default Tx rate */
 	nicTxUpdateStaRecDefaultRate(prAdapter, prStaRec);
 
 	return prStaRec;
-
-}				/* end of bssCreateStaRecFromBssDesc() */
+}
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 /*---------------------------------------------------------------------------*/

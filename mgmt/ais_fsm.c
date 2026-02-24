@@ -703,8 +703,22 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	prAisFsmInfo->prTargetStaRec = prStaRec;
 
-	prStaRec->ucStaState = STA_STATE_1;
-	cnmStaSendUpdateCmd(prAdapter, prStaRec, TRUE);
+
+
+
+
+	//prStaRec->ucStaState = STA_STATE_1;
+
+	cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_1);
+	DBGLOG(AIS, INFO,
+	       "[AIS-DIAG] StaRec[%u] -> STATE_1 requested\n",
+	       prStaRec->ucIndex);
+
+
+
+
+
+	//cnmStaSendUpdateCmd(prAdapter, prStaRec, TRUE); //cnmStaRecChangeState already sent it
 	DBGLOG(AIS, ERROR, "[AIS-DIAG] StaRec[%u] ucStaState set to %d before SAA\n", prStaRec->ucIndex, prStaRec->ucStaState);
 
 	/* --- AUTH ALGORITHM SELECTION --- */

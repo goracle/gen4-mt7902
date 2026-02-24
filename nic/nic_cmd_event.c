@@ -5893,24 +5893,28 @@ void nicUniEventChMngrHandleChEvent(struct ADAPTER *ad,
 		DBGLOG(CNM, INFO, "Tag(%d, %d)\n", TAG_ID(tag), TAG_LEN(tag));
 
 		switch (TAG_ID(tag)) {
-		case UNI_EVENT_CNM_TAG_CH_PRIVILEGE_GRANT: {
+
+		    case UNI_EVENT_CNM_TAG_CH_PRIVILEGE_GRANT: {
 			struct UNI_EVENT_CNM_CH_PRIVILEGE_GRANT *grant =
-				(struct UNI_EVENT_CNM_CH_PRIVILEGE_GRANT *)tag;
+			    (struct UNI_EVENT_CNM_CH_PRIVILEGE_GRANT *)tag;
 			struct EVENT_CH_PRIVILEGE *legacy;
 			struct WIFI_EVENT *prEvent;
+			uint32_t size =
+			    sizeof(struct WIFI_EVENT) +
+			    sizeof(struct EVENT_CH_PRIVILEGE);
 
-			prEvent = (struct WIFI_EVENT *)kalMemAlloc(
-					sizeof(struct WIFI_EVENT) +
-					sizeof(struct EVENT_CH_PRIVILEGE),
-					VIR_MEM_TYPE);
+			prEvent = kalMemAlloc(size, VIR_MEM_TYPE);
 			if (!prEvent) {
-				DBGLOG(NIC, ERROR,
-				       "Allocate prEvent failed!\n");
-				return;
+			    DBGLOG(NIC, ERROR, "Allocate prEvent failed!\n");
+			    return;
 			}
 
-			legacy = (struct EVENT_CH_PRIVILEGE *)
-				prEvent->aucBuffer;
+			kalMemZero(prEvent, size);
+
+			prEvent->u2PacketLength = size;
+			prEvent->ucEID = EVENT_ID_CH_PRIVILEGE;
+
+			legacy = (struct EVENT_CH_PRIVILEGE *)prEvent->aucBuffer;
 
 			legacy->ucBssIndex = grant->ucBssIndex;
 			legacy->ucTokenID = grant->ucTokenID;
@@ -5927,11 +5931,10 @@ void nicUniEventChMngrHandleChEvent(struct ADAPTER *ad,
 
 			cnmChMngrHandleChEvent(ad, prEvent);
 
-			kalMemFree(prEvent, VIR_MEM_TYPE,
-				sizeof(struct WIFI_EVENT) +
-				sizeof(struct EVENT_CH_PRIVILEGE));
-		}
-			break;
+			kalMemFree(prEvent, VIR_MEM_TYPE, size);
+		    }
+		    break;
+
 		case UNI_EVENT_CNM_TAG_GET_CHANNEL_INFO:
 			break;
 		case UNI_EVENT_CNM_TAG_GET_BSS_INFO:

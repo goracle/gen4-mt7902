@@ -2179,20 +2179,21 @@ u_int32_t rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode(
 	u_int32_t u4CountryCode
 	)
 {
-	const struct ieee80211_regdomain *pRegdom = &regdom_us;
+  //const struct ieee80211_regdomain *pRegdom = &regdom_us;
 
 	/* * DE-FANGED: 
 	 * We ignore the incoming u4CountryCode and the local string search.
 	 * We point directly to the hardware-unrestricted 'regdom_us' struct.
 	 */
-	DBGLOG(RLM, INFO, "DE-FANGED: Direct regdom_us injection. Ignoring CC 0x%04X\n", 
+	DBGLOG(RLM, INFO, "not applying custom regulatory, using country code 0x%04X\n", 
 		u4CountryCode);
 
 	/* Apply the US (FCC) regulatory rules to the kernel wiphy */
-	kalApplyCustomRegulatory(pWiphy, pRegdom);
+	//kalApplyCustomRegulatory(pWiphy, pRegdom);
 
 	/* Return 'US' (0x5553) so the caller updates the adapter state correctly */
-	return 0x5553;
+	//return value seems discarded
+	return 0;
 }
 #else
 u_int32_t rlmDomainUpdateRegdomainFromaLocalDataBaseByCountryCode(

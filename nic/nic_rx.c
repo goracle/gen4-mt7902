@@ -2018,9 +2018,13 @@ void nicRxProcessMgmtPacket(IN struct ADAPTER *prAdapter,
 
 /* 0x3801 Bypass: Frame was already relayed above. Skip internal processing. */
         if (prSwRfb->ucPacketType == RX_PKT_TYPE_SW_DEFINED) {
-            DBGLOG(RX, INFO, "[0x3801] Bypassing internal processing for kernel-handled frame\n");
-            nicRxReturnRFB(prAdapter, prSwRfb);
-            return;
+            if (u2TxFrameCtrl == MAC_FRAME_BEACON ||
+                u2TxFrameCtrl == MAC_FRAME_PROBE_RSP) {
+                DBGLOG(RX, INFO, "[0x3801] Bypassing beacon/probe-rsp\n");
+                nicRxReturnRFB(prAdapter, prSwRfb);
+                return;
+            }
+            DBGLOG(RX, INFO, "[0x3801] subtype=0x%02x FC=0x%04x passing to apfnProcessRxMgtFrame\n", ucSubtype, u2TxFrameCtrl);
         }
         if ((prGlueInfo == NULL) || (prGlueInfo->u4ReadyFlag == 0)) {
             /* glue not ready, fall through to return RFB */
@@ -2368,63 +2372,121 @@ void uniEventRxAuth(
 
 
 void nicRxProcessUniEventPacket(IN struct ADAPTER *prAdapter,
-			     IN OUT struct SW_RFB *prSwRfb)
+                                IN OUT struct SW_RFB *prSwRfb)
 {
-	struct mt66xx_chip_info *prChipInfo;
-	struct CMD_INFO *prCmdInfo;
-	struct WIFI_UNI_EVENT *prEvent;
+    struct mt66xx_chip_info *prChipInfo;
+    struct CMD_INFO *prCmdInfo;
+    struct WIFI_UNI_EVENT *prEvent;
 
-	ASSERT(prAdapter);
-	ASSERT(prSwRfb);
-	prChipInfo = prAdapter->chip_info;
-	prEvent = (struct WIFI_UNI_EVENT *)
-			(prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
+    ASSERT(prAdapter);
+    ASSERT(prSwRfb);
 
-	if (IS_UNI_UNSOLICIT_EVENT(prEvent)) {
-	  if (!(arUniEventTable[GET_UNI_EVENT_ID(prEvent)]))
-	    DBGLOG(RX, WARN, "[UNI-DROP] Unhandled uni event ID=0x%02x\n", GET_UNI_EVENT_ID(prEvent));
-	  arUniEventTable[GET_UNI_EVENT_ID(prEvent)](prAdapter, prEvent);
-	} else {
-		prCmdInfo = nicGetPendingCmdInfo(prAdapter,
-						 prEvent->ucSeqNum);
+    prChipInfo = prAdapter->chip_info;
 
-		if (prCmdInfo != NULL) {
-			if (prCmdInfo->pfCmdDoneHandler) {
-    if (prCmdInfo->pfCmdDoneHandler) {
-        prCmdInfo->pfCmdDoneHandler(
-					prAdapter, prCmdInfo,
-					prEvent->aucBuffer);
+    prEvent = (struct WIFI_UNI_EVENT *)
+        (prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
+
+    if (IS_UNI_UNSOLICIT_EVENT(prEvent)) {
+
+        uint8_t rawEid = prEvent->ucEID;
+        uint8_t eid = GET_UNI_EVENT_ID(prEvent);
+
+        if (!(arUniEventTable[eid])) {
+
+            DBGLOG(RX, WARN,
+                   "[UNI-DROP] Unhandled UNI event: RAW_EID=0x%02X ID=0x%02X SEQ=%u LEN=%u\n",
+                   rawEid,
+                   eid,
+                   prEvent->ucSeqNum,
+                   prEvent->u2PacketLength);
+
+            /* Header preview (first 16 bytes) */
+            if (prEvent->u2PacketLength >= 16) {
+                uint32_t *p = (uint32_t *)prEvent->aucBuffer;
+
+                DBGLOG(RX, INFO,
+                       "[UNI-DUMP] HDR: %08x %08x %08x %08x\n",
+                       p[0], p[1], p[2], p[3]);
+            }
+
+            /* Bounded payload dump */
+            uint16_t dumpLen = prEvent->u2PacketLength;
+            if (dumpLen > 128)
+                dumpLen = 128;
+
+            DBGLOG_MEM8(RX, INFO,
+                        prEvent->aucBuffer,
+                        dumpLen);
+        }
+
+        /* Call handler if present */
+        if (arUniEventTable[eid])
+            arUniEventTable[eid](prAdapter, prEvent);
+
+    } else {
+
+        prCmdInfo = nicGetPendingCmdInfo(prAdapter,
+                                         prEvent->ucSeqNum);
+
+        if (prCmdInfo != NULL) {
+
+            if (prCmdInfo->pfCmdDoneHandler) {
+
+                prCmdInfo->pfCmdDoneHandler(
+                    prAdapter,
+                    prCmdInfo,
+                    prEvent->aucBuffer);
+
+            } else if (prCmdInfo->fgIsOid) {
+
+                kalOidComplete(prAdapter->prGlueInfo,
+                               prCmdInfo->fgSetQuery,
+                               0,
+                               WLAN_STATUS_SUCCESS);
+            }
+
+            /* return prCmdInfo */
+            cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+
+        } else {
+
+            DBGLOG(RX, INFO,
+                   "UNHANDLED RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
+                   prEvent->ucEID,
+                   prEvent->ucSeqNum,
+                   prEvent->u2PacketLength);
+
+            /* Header preview */
+            if (prEvent->u2PacketLength >= 16) {
+                uint32_t *p = (uint32_t *)prEvent->aucBuffer;
+
+                DBGLOG(RX, INFO,
+                       "[CMD-DUMP] HDR: %08x %08x %08x %08x\n",
+                       p[0], p[1], p[2], p[3]);
+            }
+
+            uint16_t dumpLen = prEvent->u2PacketLength;
+            if (dumpLen > 128)
+                dumpLen = 128;
+
+            DBGLOG_MEM8(RX, INFO,
+                        prEvent->aucBuffer,
+                        dumpLen);
+        }
     }
+
+    /* Reset Chip NoAck flag */
+    if (prAdapter->fgIsChipNoAck) {
+        DBGLOG_LIMITED(RX, WARN,
+                       "Got response from chip, clear NoAck flag!\n");
+        WARN_ON(TRUE);
+    }
+
+    prAdapter->ucOidTimeoutCount = 0;
+    prAdapter->fgIsChipNoAck = FALSE;
+
+    nicRxReturnRFB(prAdapter, prSwRfb);
 }
-			else if (prCmdInfo->fgIsOid)
-				kalOidComplete(
-					prAdapter->prGlueInfo,
-					prCmdInfo->fgSetQuery,
-					0,
-					WLAN_STATUS_SUCCESS);
-
-			/* return prCmdInfo */
-			cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
-		} else {
-			DBGLOG(RX, INFO,
-				"UNHANDLED RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
-			  prEvent->ucEID, prEvent->ucSeqNum,
-			  prEvent->u2PacketLength);
-		}
-	}
-
-	/* Reset Chip NoAck flag */
-	if (prAdapter->fgIsChipNoAck) {
-		DBGLOG_LIMITED(RX, WARN,
-		       "Got response from chip, clear NoAck flag!\n");
-		WARN_ON(TRUE);
-	}
-	prAdapter->ucOidTimeoutCount = 0;
-	prAdapter->fgIsChipNoAck = FALSE;
-
-	nicRxReturnRFB(prAdapter, prSwRfb);
-}
-
 
 
 

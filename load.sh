@@ -31,6 +31,7 @@ sleep 2
 log "🚀 Loading module from $MODULE_PATH..."
 sudo dmesg -C
 sudo insmod "$MODULE_PATH"
+sudo dmesg > /home/dan/builds/gen4-mt7902/mt7902_dmesg.log
 
 # 4. Wait for interface to appear
 log "⏳ Waiting for interface..."

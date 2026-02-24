@@ -9828,9 +9828,6 @@ uint32_t wlanCfgInit(IN struct ADAPTER *prAdapter,
 		DBGLOG(INIT, INFO, "wifi config error %u\n", __LINE__);
 
 #endif
-	/*load default value because kalMemZero in this function*/
-	wlanLoadDefaultCustomerSetting(prAdapter);
-
 	/* Parse the pucConfigBuf */
 	if (pucConfigBuf && (u4ConfigBufLen > 0))
 #if CFG_SUPPORT_EASY_DEBUG
@@ -9839,6 +9836,10 @@ uint32_t wlanCfgInit(IN struct ADAPTER *prAdapter,
 #else
 		wlanCfgParse(prAdapter, pucConfigBuf, u4ConfigBufLen);
 #endif
+	/*load default value because kalMemZero in this function*/
+	wlanLoadDefaultCustomerSetting(prAdapter);
+
+
 	return WLAN_STATUS_SUCCESS;
 }
 

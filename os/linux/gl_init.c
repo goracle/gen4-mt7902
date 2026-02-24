@@ -161,19 +161,22 @@ struct WLANDEV_INFO {
  */
 
 static const struct ieee80211_regdomain mt79xx_regdom_us = {
-    .n_reg_rules = 3,
+    .n_reg_rules = 4,
     .alpha2 = "US",
     .reg_rules = {
+        /* 2.4 GHz - Corrected gain from 0 to 2 */
+        REG_RULE(2402, 2472, 40, 2, 3000, 0),
 
-        /* 2.4 GHz */
-        REG_RULE(2402, 2472, 40, 0, 3000, 0),
+        /* 5 GHz UNII-1 */
+        REG_RULE(5150, 5250, 80, 2, 2300, 0),
 
-        /* 5 GHz UNII-1 + UNII-3 */
-        REG_RULE(5170, 5250, 80, 0, 2300, 0),
-        REG_RULE(5735, 5850, 80, 0, 3000, 0),
+        /* 5 GHz UNII-2 (DFS) - Flag set to 0 to bypass header error */
+        REG_RULE(5250, 5725, 160, 2, 2400, 0),
+
+        /* 5 GHz UNII-3 */
+        REG_RULE(5725, 5850, 80, 2, 3000, 0),
     },
 };
-
 
 
 
@@ -3128,15 +3131,15 @@ static void wlanCreateWirelessDevice(void)
 	/* 9) Register our regulatory notifier BEFORE registration so cfg80211 will call back into us */
 	prWiphy->reg_notifier = mt79xx_reg_notifier;
 
-	/* 10) Conservative regulatory flags: declare driver-managed reg domain but avoid STRICT by default */
-	prWiphy->regulatory_flags = REGULATORY_CUSTOM_REG | REGULATORY_DISABLE_BEACON_HINTS;
-	//prWiphy->regulatory_flags = REGULATORY_DISABLE_BEACON_HINTS;
+/* 10) Simplified regulatory flags to avoid kernel rejection */
+/* Remove REGULATORY_CUSTOM_REG for the initial register call */
+prWiphy->regulatory_flags = REGULATORY_DISABLE_BEACON_HINTS;
 
-	/* If you have/declare a custom regdomain object, you may apply it here via wiphy_apply_custom_regulatory().
-	 * NOTE: do not attempt to write into non-existent wiphy fields (eg reg_alpha2) — use helpers. */
+/* COMMENT THIS OUT temporarily to ensure the module loads */
+// wiphy_apply_custom_regulatory(prWiphy, &regdom_us);
 
-	wiphy_apply_custom_regulatory(prWiphy, &regdom_us);
-	//regulatory_hint(prWiphy, "US");
+/* Use the standard hint instead, which is safer during probe */
+regulatory_hint(prWiphy, "US");
 
 
 	/* 11) Register the wiphy with cfg80211 */

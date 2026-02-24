@@ -443,6 +443,23 @@ DBGLOG(TX, INFO,
        prMsduInfo->ucFixedRate);
 
 
+	{
+		uint8_t *pucFrame = (uint8_t *)((unsigned long)prMsduInfo->prPacket +
+					MAC_TX_RESERVED_FIELD);
+		DBGLOG(SAA, INFO,
+			"[AUTH-DUMP] frame bytes: %02x %02x %02x %02x %02x %02x %02x %02x "
+			"%02x %02x %02x %02x %02x %02x %02x %02x "
+			"%02x %02x %02x %02x %02x %02x %02x %02x "
+			"%02x %02x %02x %02x %02x %02x\n",
+			pucFrame[0],  pucFrame[1],  pucFrame[2],  pucFrame[3],
+			pucFrame[4],  pucFrame[5],  pucFrame[6],  pucFrame[7],
+			pucFrame[8],  pucFrame[9],  pucFrame[10], pucFrame[11],
+			pucFrame[12], pucFrame[13], pucFrame[14], pucFrame[15],
+			pucFrame[16], pucFrame[17], pucFrame[18], pucFrame[19],
+			pucFrame[20], pucFrame[21], pucFrame[22], pucFrame[23],
+			pucFrame[24], pucFrame[25], pucFrame[26], pucFrame[27],
+			pucFrame[28], pucFrame[29]);
+	}
 	nicTxEnqueueMsdu(prAdapter, prMsduInfo);
 
 	return WLAN_STATUS_SUCCESS;
@@ -483,7 +500,7 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
                   uint16_t u2TransactionSeqNum,
                   uint16_t u2StatusCode)
 {
-    struct MSDU_INFO *prMsduInfo;
+    struct MSDU_INFO *prMsduInfo = NULL;
     struct BSS_INFO *prBssInfo = NULL;
     PFN_TX_DONE_HANDLER pfTxDoneHandler = NULL;
 
@@ -494,8 +511,11 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
     uint16_t u2EstimatedFrameLen;
     uint16_t u2EstimatedExtraIELen = 0;
     uint16_t u2PayloadLen;
-    uint16_t u2AuthAlgNum = 0; /* Open System */
-    uint8_t  ucFinalBssIndex;
+    uint16_t u2AuthAlgNum = 0;
+
+    uint8_t ucFinalBssIndex;
+    uint8_t ucFinalWlanIndex = 0;
+
     uint32_t i;
 
     DBGLOG(SAA, INFO,
@@ -503,12 +523,22 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
            u2TransactionSeqNum, u2StatusCode);
 
     /* ------------------------------------------------------------------ */
-    /* 1. Resolve authoritative BSS index                                 */
+    /* 1. Resolve authoritative BSS + WLAN index                          */
     /* ------------------------------------------------------------------ */
 
     ucFinalBssIndex = prStaRec ?
                       prStaRec->ucBssIndex :
                       ucBssIndex;
+
+    if (prStaRec) {
+        ucFinalWlanIndex = prStaRec->ucWlanIndex;
+
+        if (ucFinalWlanIndex == 0) {
+            DBGLOG(SAA, ERROR,
+                   "AUTH TX: STA path with invalid WLAN index 0\n");
+            return WLAN_STATUS_FAILURE;
+        }
+    }
 
     /* ------------------------------------------------------------------ */
     /* 2. Estimate frame length                                           */
@@ -553,7 +583,7 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
                     MAC_TX_RESERVED_FIELD);
 
     /* ------------------------------------------------------------------ */
-    /* 4. Determine addresses and transaction sequence                    */
+    /* 4. Determine addresses                                             */
     /* ------------------------------------------------------------------ */
 
     if (prStaRec) {
@@ -566,7 +596,9 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
             DBGLOG(SAA, ERROR,
                    "AUTH TX: invalid BSS index %u\n",
                    ucFinalBssIndex);
-            return WLAN_STATUS_RESOURCES;
+
+            cnmMgtPktFree(prAdapter, prMsduInfo);
+            return WLAN_STATUS_FAILURE;
         }
 
         pucTransmitAddr = prBssInfo->aucOwnMacAddr;
@@ -578,7 +610,7 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
         DBGLOG(SAA, INFO,
                "AUTH TX (STA): BSS=%u WIDX=%u\n",
                ucFinalBssIndex,
-               prStaRec->ucWlanIndex);
+               ucFinalWlanIndex);
 
     } else {
 
@@ -627,7 +659,7 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
     TX_SET_MMPDU(prAdapter,
                  prMsduInfo,
                  ucFinalBssIndex,
-                 prStaRec ? prStaRec->ucWlanIndex : 0,
+                 ucFinalWlanIndex,
                  WLAN_MAC_MGMT_HEADER_LEN,
                  WLAN_MAC_MGMT_HEADER_LEN + u2PayloadLen,
                  pfTxDoneHandler,
@@ -650,36 +682,33 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
     /* 7. Diagnostics                                                     */
     /* ------------------------------------------------------------------ */
 
-    {
-        struct WLAN_AUTH_FRAME_DBG {
-            uint16_t u2FrameCtrl;
-            uint16_t u2Duration;
-            uint8_t  aucDestAddr[6];
-            uint8_t  aucSrcAddr[6];
-            uint8_t  aucBSSID[6];
-            uint16_t u2SeqCtrl;
-        } __packed;
-
-        struct WLAN_AUTH_FRAME_DBG *pAuth =
-            (struct WLAN_AUTH_FRAME_DBG *)pucTxFrame;
-
-        DBGLOG(SAA, INFO,
-               "AUTH FRAME: FC=0x%04x SA=%pM DA=%pM BSSID=%pM\n",
-               pAuth->u2FrameCtrl,
-               pAuth->aucSrcAddr,
-               pAuth->aucDestAddr,
-               pAuth->aucBSSID);
-
-        DBGLOG(TX, INFO,
-               "AUTH TX: WIDX=%u FrameLen=%u\n",
-               prMsduInfo->ucWlanIndex,
-               prMsduInfo->u2FrameLength);
-    }
+    DBGLOG(TX, INFO,
+           "AUTH TX FINAL: BSS=%u WIDX=%u Len=%u\n",
+           ucFinalBssIndex,
+           ucFinalWlanIndex,
+           prMsduInfo->u2FrameLength);
 
     /* ------------------------------------------------------------------ */
     /* 8. Enqueue                                                         */
     /* ------------------------------------------------------------------ */
 
+	{
+		uint8_t *pucFrame = (uint8_t *)((unsigned long)prMsduInfo->prPacket +
+					MAC_TX_RESERVED_FIELD);
+		DBGLOG(SAA, INFO,
+			"[AUTH-DUMP] frame bytes: %02x %02x %02x %02x %02x %02x %02x %02x "
+			"%02x %02x %02x %02x %02x %02x %02x %02x "
+			"%02x %02x %02x %02x %02x %02x %02x %02x "
+			"%02x %02x %02x %02x %02x %02x\n",
+			pucFrame[0],  pucFrame[1],  pucFrame[2],  pucFrame[3],
+			pucFrame[4],  pucFrame[5],  pucFrame[6],  pucFrame[7],
+			pucFrame[8],  pucFrame[9],  pucFrame[10], pucFrame[11],
+			pucFrame[12], pucFrame[13], pucFrame[14], pucFrame[15],
+			pucFrame[16], pucFrame[17], pucFrame[18], pucFrame[19],
+			pucFrame[20], pucFrame[21], pucFrame[22], pucFrame[23],
+			pucFrame[24], pucFrame[25], pucFrame[26], pucFrame[27],
+			pucFrame[28], pucFrame[29]);
+	}
     nicTxEnqueueMsdu(prAdapter, prMsduInfo);
 
     DBGLOG(SAA, INFO,
