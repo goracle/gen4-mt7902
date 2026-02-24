@@ -5469,8 +5469,6 @@ void kalScanDone(IN struct GLUE_INFO *prGlueInfo,
      * will be TRUE and this drives the IDLE->SEARCH transition.
      * If nothing is pending, this drives the clean IDLE power-down.
      */
-    if (prAisFsmInfo)
-        aisFsmSteps(prAdapter, prAisFsmInfo->eCurrentState, ucBssIndex);
 }
 
 

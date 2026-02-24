@@ -1777,8 +1777,7 @@ aisHandleState_SCAN_FAMILY(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	prScanReqMsg->ucSeqNum       = ++prAisFsmInfo->ucSeqNumOfScanReq;
 	prScanReqMsg->ucBssIndex     = prAisBssInfo->ucBssIndex;
 
-	if (prAisFsmInfo->u2SeqNumOfScanReport == AIS_SCN_REPORT_SEQ_NOT_SET)
-		prAisFsmInfo->u2SeqNumOfScanReport = (uint16_t)prScanReqMsg->ucSeqNum;
+	prAisFsmInfo->u2SeqNumOfScanReport = (uint16_t)prScanReqMsg->ucSeqNum;
 
 #if CFG_SUPPORT_802_11K
 	/* 802.11k may override everything; send immediately if so. */

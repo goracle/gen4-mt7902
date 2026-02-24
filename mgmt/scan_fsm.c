@@ -866,12 +866,11 @@ void scnEventScanDone(IN struct ADAPTER *prAdapter,
 
     DBGLOG(SCN, INFO, "[LOBOTOMY SUCCESS] Reported %u entries to iwd/cfg80211\n", u4IndicateNum);
 
-    /* Close the cfg80211 scan request so iwd sees results. */
+    /* Notify AIS via mailbox — aisFsmRunEventScanDone will call kalScanDone */
     {
         uint8_t ucBssIndex = prScanInfo->rScanParam.ucBssIndex;
-        struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
-        if (prGlueInfo)
-            kalScanDone(prGlueInfo, ucBssIndex, WLAN_STATUS_SUCCESS);
+        scnFsmGenerateScanDoneMsg(prAdapter,
+            prScanDone->ucSeqNum, ucBssIndex, SCAN_STATUS_DONE);
     }
 }
 

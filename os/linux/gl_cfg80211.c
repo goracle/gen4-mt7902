@@ -1599,58 +1599,109 @@ void mtk_cfg80211_abort_scan(struct wiphy *wiphy,
  */
 
 int mtk_cfg80211_auth(struct wiphy *wiphy,
-                      struct net_device *ndev,
-                      struct cfg80211_auth_request *req)
+		      struct net_device *ndev,
+		      struct cfg80211_auth_request *req)
 {
-    struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *)wiphy_priv(wiphy);
-    struct ADAPTER *prAdapter;
-    uint8_t ucBssIndex;
-    struct AIS_FSM_INFO *prAisFsmInfo;
+	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *)wiphy_priv(wiphy);
+	struct ADAPTER *prAdapter;
+	struct AIS_FSM_INFO *prAisFsmInfo;
+	struct CONNECTION_SETTINGS *prConnSettings;
+	struct IEEE_802_11_MIB *prMib;
+	struct PARAM_CONNECT rNewSsid;
+	uint8_t aucSsid[32];
+	const u8 *ssid_ie;
+	uint32_t rStatus, u4BufLen;
+	uint8_t ucBssIndex;
+	enum ENUM_PARAM_AUTH_MODE eAuthMode;
+	enum ENUM_WEP_STATUS eEncStatus;
 
-    if (!prGlueInfo) {
-        DBGLOG(REQ, ERROR, "[AUTH] NULL glue info\n");
-        return -EINVAL;
-    }
+	if (!prGlueInfo) {
+		DBGLOG(REQ, ERROR, "[AUTH] NULL glue info\n");
+		return -EINVAL;
+	}
 
-    prAdapter = prGlueInfo->prAdapter;
-    if (!prAdapter) {
-        DBGLOG(REQ, ERROR, "[AUTH] NULL adapter\n");
-        return -EINVAL;
-    }
+	prAdapter = prGlueInfo->prAdapter;
+	if (!prAdapter) {
+		DBGLOG(REQ, ERROR, "[AUTH] NULL adapter\n");
+		return -EINVAL;
+	}
 
-    ucBssIndex = wlanGetBssIdx(ndev);
-    prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
-    if (!prAisFsmInfo) {
-        DBGLOG(REQ, ERROR, "[AUTH] NULL AIS FSM for bss=%d\n", ucBssIndex);
-        return -EINVAL;
-    }
+	ucBssIndex = wlanGetBssIdx(ndev);
+	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
+	prMib = aisGetMib(prAdapter, ucBssIndex);
 
-    DBGLOG(REQ, INFO,
-        "[AUTH] cfg80211_auth called: bss=%d AIS_state=%d target=" MACSTR "\n",
-        ucBssIndex, prAisFsmInfo->eCurrentState,
-        MAC2STR(req->bss->bssid));
+	if (!prAisFsmInfo || !prConnSettings || !prMib) {
+		DBGLOG(REQ, ERROR, "[AUTH] NULL FSM/settings for bss=%d\n", ucBssIndex);
+		return -EINVAL;
+	}
 
-    /*
-     * Under iwd on 6.18+, cfg80211_connect already drove the full
-     * AIS FSM join sequence including auth frame TX.  cfg80211_auth
-     * is a redundant call from iwd's SME layer for open/PSK networks
-     * and must not restart the state machine or overwrite the BSSID.
-     *
-     * For SAE (WPA3), iwd uses external-auth via cfg80211_external_auth,
-     * not this path.  So this callback is always a no-op for us.
-     */
-    if (prAisFsmInfo->eCurrentState >= AIS_STATE_REQ_CHANNEL_JOIN) {
-        DBGLOG(REQ, INFO,
-            "[AUTH] AIS already in join sequence (state=%d), ignoring redundant auth cb\n",
-            prAisFsmInfo->eCurrentState);
-        return 0;
-    }
+	DBGLOG(REQ, INFO,
+		"[AUTH] called: bss=%d state=%d auth_type=%d target=" MACSTR "\n",
+		ucBssIndex, prAisFsmInfo->eCurrentState,
+		req->auth_type, MAC2STR(req->bss->bssid));
 
-    DBGLOG(REQ, WARN,
-        "[AUTH] Called outside join sequence (state=%d) — no-op\n",
-        prAisFsmInfo->eCurrentState);
-    return 0;
+	if (prAisFsmInfo->eCurrentState >= AIS_STATE_REQ_CHANNEL_JOIN) {
+		DBGLOG(REQ, INFO, "[AUTH] already in join (state=%d), ignoring\n",
+			prAisFsmInfo->eCurrentState);
+		return 0;
+	}
+
+	switch (req->auth_type) {
+	case NL80211_AUTHTYPE_SAE:
+		eAuthMode = AUTH_MODE_WPA3_SAE;
+		eEncStatus = ENUM_ENCRYPTION3_ENABLED;
+		break;
+	case NL80211_AUTHTYPE_OPEN_SYSTEM:
+	default:
+		eAuthMode = AUTH_MODE_WPA2_PSK;
+		eEncStatus = ENUM_ENCRYPTION3_ENABLED;
+		break;
+	}
+
+	kalIoctl(prGlueInfo, wlanoidSetAuthMode,
+		&eAuthMode, sizeof(eAuthMode),
+		FALSE, FALSE, FALSE, &u4BufLen);
+
+	kalIoctl(prGlueInfo, wlanoidSetEncryptionStatus,
+		&eEncStatus, sizeof(eEncStatus),
+		FALSE, FALSE, FALSE, &u4BufLen);
+
+	/* Extract SSID from BSS IEs into local buffer before RCU unlock */
+	kalMemZero(aucSsid, sizeof(aucSsid));
+	kalMemZero(&rNewSsid, sizeof(rNewSsid));
+	rcu_read_lock();
+	ssid_ie = cfg80211_find_ie(WLAN_EID_SSID,
+		rcu_dereference(req->bss->ies)->data,
+		rcu_dereference(req->bss->ies)->len);
+	if (ssid_ie && ssid_ie[1] <= 32) {
+		kalMemCopy(aucSsid, ssid_ie + 2, ssid_ie[1]);
+		rNewSsid.u4SsidLen = ssid_ie[1];
+	}
+	rcu_read_unlock();
+
+	rNewSsid.pucSsid = aucSsid;
+	rNewSsid.pucBssid = (uint8_t *)req->bss->bssid;
+	rNewSsid.pucBssidHint = NULL;
+	rNewSsid.u4CenterFreq = req->bss->channel ? req->bss->channel->center_freq : 0;
+	rNewSsid.ucBssIdx = ucBssIndex;
+
+	DBGLOG(REQ, INFO, "[AUTH] connect: SSID='%.*s' BSSID=" MACSTR " freq=%u\n",
+		rNewSsid.u4SsidLen, aucSsid,
+		MAC2STR(req->bss->bssid), rNewSsid.u4CenterFreq);
+
+	rStatus = kalIoctl(prGlueInfo, wlanoidSetConnect,
+		(void *)&rNewSsid, sizeof(struct PARAM_CONNECT),
+		FALSE, FALSE, FALSE, &u4BufLen);
+
+	if (rStatus != WLAN_STATUS_SUCCESS && rStatus != 0x103) {
+		DBGLOG(REQ, ERROR, "[AUTH] wlanoidSetConnect failed: 0x%x\n", rStatus);
+		return -EINVAL;
+	}
+
+	return 0;
 }
+
 
 /* Add .disassoc method to avoid kernel WARN_ON when insmod wlan.ko */
 /*
