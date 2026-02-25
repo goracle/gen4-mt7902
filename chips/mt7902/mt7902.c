@@ -296,7 +296,7 @@ uint8_t mt7902SetRxRingHwAddr(
 
 
 
-bool mt7902LiteWfdmaAllocRxRing(
+bool mt7902LiteWfdmaAllocRxRing(// idk, fam
 	struct GLUE_INFO *prGlueInfo,
 	bool fgAllocMem)
 {
@@ -325,6 +325,31 @@ bool mt7902LiteWfdmaAllocRxRing(
 	}
 	return true;
 }
+
+bool mt7902WfdmaAllocRxRing(struct GLUE_INFO *prGlueInfo, bool fgAllocMem)
+{
+	uint32_t i;
+
+	/* * 1. DO NOT re-allocate TX rings here. halWpdmaAllocRing already 
+	 * allocates them. Re-allocating them with different sizes without 
+	 * freeing the old buffer causes severe DMA memory corruption.
+	 */
+
+	/* * 2. Allocate additional RX Rings (Rings 2 and above).
+	 * Rings 0 (Data) and 1 (Event) are already allocated by halWpdmaAllocRing. 
+	 */
+	for (i = 2; i < NUM_OF_RX_RING; i++) {
+		uint32_t u4Sz = (i < 3) ? 512 : 16;
+		
+		if (!halWpdmaAllocRxRing(prGlueInfo, i, u4Sz, 
+					RXD_SIZE, CFG_RX_MAX_PKT_SIZE, fgAllocMem))
+			return false;
+	}
+
+	return true;
+}
+
+
 
 void mt7902Connac2xProcessTxInterrupt(
 	struct ADAPTER *prAdapter)
@@ -1483,7 +1508,7 @@ struct BUS_INFO mt7902_bus_info = {
 	.DmaShdlInit = mt7902DmashdlInit,
 	.DmaShdlReInit = mt7902DmashdlReInit,
 	.setRxRingHwAddr = mt7902SetRxRingHwAddr,
-	.wfdmaAllocRxRing = mt7902LiteWfdmaAllocRxRing,
+	.wfdmaAllocRxRing = mt7902WfdmaAllocRxRing,
 #if CFG_SUPPORT_PCIE_ASPM_IMPROVE
 	.configPcieASPM = mt7961ConfigPcieASPM,
 	.setCTSbyRate = mt7961SetCTSbyRate,

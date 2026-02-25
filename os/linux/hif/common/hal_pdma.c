@@ -2340,6 +2340,7 @@ void halWpdmaInitRxRing(IN struct GLUE_INFO *prGlueInfo)
 
 	/* reset all RX Ring register */
 	for (i = 0; i < NUM_OF_RX_RING; i++) {
+	  DBGLOG(HAL, TRACE, "HAL: Initializing RX Ring %d\n", i); // ADD THIS
 		prRxRing = &prHifInfo->RxRing[i];
 		if (prBusInfo->setRxRingHwAddr)
 			rv = prBusInfo->setRxRingHwAddr(prRxRing, prBusInfo, i);

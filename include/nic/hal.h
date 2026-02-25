@@ -1313,6 +1313,11 @@ u_int8_t halWpdmaWaitIdle(struct GLUE_INFO *prGlueInfo,
 bool halWpdmaAllocRxRing(struct GLUE_INFO *prGlueInfo, uint32_t u4Num,
 			 uint32_t u4Size, uint32_t u4DescSize,
 			 uint32_t u4BufSize, bool fgAllocMem);
+/* os/linux/hif/common/include/hif_pdma.h */
+bool halWpdmaAllocTxRing(struct GLUE_INFO *prGlueInfo, uint32_t u4Num,
+			 uint32_t u4Size, uint32_t u4DescSize,
+			 bool fgAllocMem);
+
 uint8_t halRingDataSelectByWmmIndex(
 	IN struct ADAPTER *prAdapter,
 	IN uint8_t ucWmmIndex);

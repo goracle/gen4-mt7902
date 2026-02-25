@@ -296,18 +296,22 @@ static const struct ACTION_FRAME_SIZE_MAP arActionFrameReservedLen[] = {
  * @return (none)
  */
 /*----------------------------------------------------------------------------*/
-
+#include <linux/types.h>
+#include <linux/kernel.h>
 static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb)
 {
 	struct GLUE_INFO *prGlueInfo;
 	struct wiphy *wiphy;
 	struct ieee80211_channel *chan;
 	struct cfg80211_bss *bss;
-	uint8_t *pucRawFrame;
-	uint16_t u2FrameLen;
+	uint8_t *chosen = NULL;
+	uint8_t *candidates[3];
+	uint8_t *buf_start, *buf_end;
+	size_t u2FrameLen = 0;
 	int i4Freq;
 	uint8_t ucChnl, ucFC;
-	uint16_t u2Cap, u2BeaconInt;
+	uint16_t u2Cap = 0, u2BeaconInt = 0;
+	int i;
 
 	if (!prAdapter || !prSwRfb)
 		return -EINVAL;
@@ -317,38 +321,145 @@ static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *pr
 	    !prGlueInfo->prDevHandler->ieee80211_ptr)
 		return -ENODEV;
 
-	/* MT scan-offload prepends an 8-byte firmware header before the real
-	 * 802.11 frame. pvHeader itself is already offset forward by u2HeaderLen
-	 * into the payload, so we back up by u2HeaderLen then skip the 8-byte
-	 * MT header to land on the real FC field. */
-	pucRawFrame = (uint8_t *)prSwRfb->pvHeader - prSwRfb->u2HeaderLen + 8;
-	u2FrameLen  = prSwRfb->u2PacketLen + prSwRfb->u2HeaderLen - 8;
-	ucChnl      = prSwRfb->ucChnlNum;
-
-	if (!pucRawFrame || u2FrameLen < 36)
+	/* Build the buffer window we were given:
+	 *  - pvHeader points somewhere into the firmware buffer (maybe already
+	 *    adjusted by u2HeaderLen). The valid buffer region is:
+	 *      [ pvHeader - u2HeaderLen,  pvHeader + u2PacketLen )
+	 */
+	if (!prSwRfb->pvHeader || prSwRfb->u2PacketLen == 0) {
+		DBGLOG(RX, WARN, "[RELAY] invalid pvHeader/u2PacketLen\n");
 		return -EINVAL;
-
-	ucFC = pucRawFrame[0];
-
-
-DBGLOG(RX, WARN, "[RELAY-RAW] pvHeader=%p u2HeaderLen=%u u2PacketLen=%u\n",
-    prSwRfb->pvHeader, prSwRfb->u2HeaderLen, prSwRfb->u2PacketLen);
-DBGLOG_MEM8(RX, WARN, (uint8_t *)prSwRfb->pvHeader - prSwRfb->u2HeaderLen, 32);
-
-
-
-	DBGLOG(RX, INFO, "[RELAY] FC=0x%02x Ch=%u pktlen=%u BSSID=%pM\n",
-		ucFC, ucChnl, u2FrameLen, pucRawFrame + 16);
-
-	/* Parse SSID from IEs for logging */
-	if (u2FrameLen > 38 && pucRawFrame[36] == 0x00) {
-		uint8_t ssid_len = pucRawFrame[37];
-		char ssid_str[33] = {0};
-		if (ssid_len > 0 && ssid_len <= 32)
-			kalMemCopy(ssid_str, pucRawFrame + 38, ssid_len);
-		DBGLOG(RX, INFO, "[RELAY] SSID='%s' len=%u\n", ssid_str, ssid_len);
 	}
 
+	buf_start = (uint8_t *)prSwRfb->pvHeader - prSwRfb->u2HeaderLen;
+	buf_end   = (uint8_t *)prSwRfb->pvHeader + prSwRfb->u2PacketLen;
+
+	/* Candidate frame starts to try (in order of preference):
+	 * 1) buf_start + 8  (original scan-offload assumption)
+	 * 2) buf_start      (maybe pvHeader already pointed to FC)
+	 * 3) pvHeader       (pvHeader itself is the start)
+	 */
+	candidates[0] = buf_start + 8;
+	candidates[1] = buf_start;
+	candidates[2] = (uint8_t *)prSwRfb->pvHeader;
+
+	DBGLOG(RX, WARN, "[RELAY-RAW] pvHeader=%p u2HeaderLen=%u u2PacketLen=%u\n",
+	       prSwRfb->pvHeader, prSwRfb->u2HeaderLen, prSwRfb->u2PacketLen);
+	DBGLOG_MEM8(RX, WARN, buf_start, 64);
+
+	/* Helper: validate a candidate pointer looks like a real 802.11 beacon/probe
+	 * - candidate lies inside the provided buffer region
+	 * - there is at least the minimum fixed header+fixed fields (36 bytes)
+	 * - FC byte is a plausible mgmt FC (beacon 0x80 or probe resp 0x50)
+	 * - BSSID (offset 16) is inside buffer
+	 * - IEs parse cleanly (sum of IE lengths fits in remaining length)
+	 */
+	for (i = 0; i < ARRAY_SIZE(candidates); i++) {
+		uint8_t *p = candidates[i];
+		size_t remaining;
+		uint8_t *ies;
+		size_t ie_rem;
+		bool ok = false;
+
+		if (!p)
+			continue;
+		if (p < buf_start || p + 36 > buf_end) /* need at least 36 bytes */
+			continue;
+
+		/* available frame length from this candidate */
+		remaining = buf_end - p;
+		/* plausible FC? beacon (0x80) or probe resp (0x50) or probe req(0x40) rarely */
+		if (remaining < 1)
+			continue;
+		ucFC = p[0];
+		if (!(ucFC == 0x80 || ucFC == 0x50 || ucFC == 0x40))
+			continue;
+
+		/* BSSID must be fully inside buffer */
+		if (p + 16 + 6 > buf_end)
+			continue;
+
+		/* fixed fields: beacon interval (offset 32..33), capability (34..35) exist? */
+		if (remaining < 36)
+			continue;
+
+		/* parse IEs to ensure IE lengths fit inside remaining */
+		ies = p + 36;
+		ie_rem = remaining - 36;
+		while (ie_rem >= 2) {
+		  uint8_t id = ies[0];
+		  uint8_t len = ies[1];
+		  DBGLOG(RX, INFO, "IE id=%u len=%u\n", id, len);
+			if (len > ie_rem - 2) {
+				/* malformed IE -> candidate invalid */
+				ok = false;
+				break;
+			}
+			/* move to next IE */
+			ies += 2 + len;
+			ie_rem -= 2 + len;
+			ok = true;
+		}
+		/* if IE region is exactly exhausted or had at least one valid IE, accept */
+		if (ok || ie_rem == 0) {
+			chosen = p;
+			u2FrameLen = remaining;
+			ucFC = p[0];
+			break;
+		}
+	}
+
+	/* If none of the candidates validated, fall back to original calculation but log heavily. */
+	if (!chosen) {
+		DBGLOG(RX, WARN, "[RELAY] could not find sane frame start among candidates\n");
+		DBGLOG_MEM8(RX, WARN, buf_start, 128);
+		/* fallback to previous behavior (best-effort) */
+		chosen = buf_start + 8;
+		/* compute length as original did; guard arithmetic */
+		if ((uint8_t *)prSwRfb->pvHeader + prSwRfb->u2PacketLen > chosen)
+			u2FrameLen = (size_t)((uint8_t *)prSwRfb->pvHeader + prSwRfb->u2PacketLen - chosen);
+		else
+			return -EINVAL;
+		/* require minimum */
+		if (u2FrameLen < 36) {
+			DBGLOG(RX, WARN, "[RELAY] fallback frame too small (%zu)\n", u2FrameLen);
+			return -EINVAL;
+		}
+		ucFC = chosen[0];
+	}
+
+	/* Basic length sanity */
+	if (u2FrameLen < 36)
+		return -EINVAL;
+
+	ucChnl = prSwRfb->ucChnlNum;
+
+	DBGLOG(RX, INFO, "[RELAY] chosen=%p FC=0x%02x Ch=%u pktlen=%zu BSSID=%pM\n",
+	       chosen, ucFC, ucChnl, u2FrameLen, chosen + 16);
+
+	/* Parse SSID from IEs for logging — search IE list properly rather than assuming fixed offsets */
+	{
+		uint8_t *ies = chosen + 36;
+		size_t ie_rem = u2FrameLen - 36;
+		while (ie_rem >= 2) {
+			uint8_t id = ies[0];
+			uint8_t len = ies[1];
+			if (len > ie_rem - 2)
+				break;
+			if (id == 0) { /* SSID */
+				char ssid_str[33] = {0};
+				uint8_t ssid_len = len > 32 ? 32 : len;
+				if (ssid_len)
+					kalMemCopy(ssid_str, ies + 2, ssid_len);
+				DBGLOG(RX, INFO, "[RELAY] SSID='%s' len=%u\n", ssid_str, ssid_len);
+				break;
+			}
+			ies += 2 + len;
+			ie_rem -= 2 + len;
+		}
+	}
+
+	/* compute frequency */
 	if (ucChnl <= 14)
 		i4Freq = 2407 + (ucChnl * 5);
 	else if (ucChnl >= 36 && ucChnl <= 177)
@@ -363,17 +474,19 @@ DBGLOG_MEM8(RX, WARN, (uint8_t *)prSwRfb->pvHeader - prSwRfb->u2HeaderLen, 32);
 		return -EINVAL;
 	}
 
-	u2BeaconInt = le16_to_cpu(*(uint16_t *)(pucRawFrame + 32));
-	u2Cap       = le16_to_cpu(*(uint16_t *)(pucRawFrame + 34));
+	/* Read beacon fixed fields safely */
+	u2BeaconInt = le16_to_cpu(*(uint16_t *)(chosen + 32));
+	u2Cap       = le16_to_cpu(*(uint16_t *)(chosen + 34));
 
+	/* Inform cfg80211 */
 	rcu_read_lock();
 	bss = cfg80211_inform_bss(wiphy, chan,
 		(ucFC == 0x80) ? CFG80211_BSS_FTYPE_BEACON : CFG80211_BSS_FTYPE_PRESP,
-		pucRawFrame + 16,           /* BSSID */
-		0,                          /* TSF */
+		chosen + 16,           /* BSSID */
+		0,                     /* TSF */
 		u2Cap,
 		u2BeaconInt,
-		pucRawFrame + 36,           /* IEs */
+		chosen + 36,           /* IEs */
 		(size_t)(u2FrameLen - 36),
 		DBM_TO_MBM(-50),
 		GFP_ATOMIC);
@@ -381,24 +494,28 @@ DBGLOG_MEM8(RX, WARN, (uint8_t *)prSwRfb->pvHeader - prSwRfb->u2HeaderLen, 32);
 
 	if (bss) {
 		cfg80211_put_bss(wiphy, bss);
-		DBGLOG(RX, INFO, "[RELAY] BSS OK BSSID=%pM SSID logged above\n",
-			pucRawFrame + 16);
+		DBGLOG(RX, INFO, "[RELAY] BSS OK BSSID=%pM SSID logged above\n", chosen + 16);
 	} else {
 		DBGLOG(RX, WARN, "[RELAY] cfg80211_inform_bss returned NULL\n");
 	}
 
-	/* Also populate internal rBSSDescList so AIS SEARCH finds candidates.
-	 * pvHeader normally points into raw firmware buffer with 8-byte MT header
-	 * prepended. Swap it to pucRawFrame (already corrected) so scanAddToBssDesc
-	 * reads the real BSSID/SSID, then restore after. */
+	/* Populate internal rBSSDescList: swap pvHeader -> chosen and restore afterwards */
 	{
 		void *pvSavedHeader = prSwRfb->pvHeader;
 		uint16_t u2SavedHeaderLen = prSwRfb->u2HeaderLen;
 		uint16_t u2SavedPacketLen = prSwRfb->u2PacketLen;
-		prSwRfb->pvHeader = pucRawFrame;
+
+		prSwRfb->pvHeader = chosen;
 		prSwRfb->u2HeaderLen = 0;
-		prSwRfb->u2PacketLen = u2FrameLen;
+
+		/* clamp to size_t if it exceeds uint16_t range (defensive) */
+		if (u2FrameLen > U16_MAX)
+			prSwRfb->u2PacketLen = U16_MAX;
+		else
+			prSwRfb->u2PacketLen = (uint16_t)u2FrameLen;
+
 		scanProcessBeaconAndProbeResp(prAdapter, prSwRfb);
+
 		prSwRfb->pvHeader = pvSavedHeader;
 		prSwRfb->u2HeaderLen = u2SavedHeaderLen;
 		prSwRfb->u2PacketLen = u2SavedPacketLen;
@@ -406,7 +523,6 @@ DBGLOG_MEM8(RX, WARN, (uint8_t *)prSwRfb->pvHeader - prSwRfb->u2HeaderLen, 32);
 
 	return 0;
 }
-
 
 
 
@@ -2219,7 +2335,6 @@ static void nicRxCheckWakeupReason(struct ADAPTER *prAdapter,
 
 static PROCESS_RX_UNI_EVENT_FUNCTION arUniEventTable[UNI_EVENT_ID_NUM] = {
 	[0 ... UNI_EVENT_ID_NUM - 1] = NULL,
-	[0x01] = uniEventRxAuth, // <-- add this line
 	[UNI_EVENT_ID_SCAN_DONE] = nicUniEventScanDone,
 	[UNI_EVENT_ID_CNM] = nicUniEventChMngrHandleChEvent,
 	[UNI_EVENT_ID_MBMC] = nicUniEventMbmcHandleEvent,
@@ -2324,33 +2439,6 @@ void nicUniEventScanDone(struct ADAPTER *ad, struct WIFI_UNI_EVENT *evt)
 				legacy.aucChannelMDRDYCnt[i]);
 	}
 	scnEventScanDone(ad, &legacy, TRUE);
-}
-
-void uniEventRxAuth(
-    IN struct ADAPTER *prAdapter,
-    IN struct WIFI_UNI_EVENT *prEvent)
-{
-    struct SW_RFB rfb;
-
-    DBGLOG(RX, INFO,
-        "[UNI-AUTH] EID=0x%02X SEQ=%u LEN=%u\n",
-        prEvent->ucEID,
-        prEvent->ucSeqNum,
-        prEvent->u2PacketLength);
-
-    /* Dump first 32 bytes for diagnostics */
-    for (int i = 0; i < prEvent->u2PacketLength && i < 32; i++)
-        DBGLOG(RX, INFO, "%02x ", prEvent->aucBuffer[i]);
-
-    DBGLOG(RX, INFO, "\n");
-
-    /* Wrap UNI event buffer as SW_RFB */
-    kalMemZero(&rfb, sizeof(struct SW_RFB));
-    rfb.pvHeader = prEvent->aucBuffer;
-    rfb.u2PacketLen = prEvent->u2PacketLength;
-
-    /* Pass directly to AAA FSM */
-    aaaFsmRunEventRxAuth(prAdapter, &rfb);
 }
 
 

@@ -964,45 +964,15 @@ static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
         (struct EVENT_ACTIVATE_STA_REC *)pucEventBuf;
     struct STA_RECORD *prStaRec;
 
-    /* Defensive lookup: ensure the StaRec index is valid. */
     prStaRec = cnmGetStaRecByIndex(prAdapter, prEventContent->ucStaRecIdx);
     if (!prStaRec)
         return;
 
-    /* Ensure the event matches the StaRec's MAC (memcmp == 0 => equal) */
     if (kalMemCmp(prStaRec->aucMacAddr, prEventContent->aucMacAddr, MAC_ADDR_LEN) != 0)
         return;
 
-    /*
-     * NOTE:
-     * The event indicates the firmware has progressed the WTBL for this STA.
-     * We must only fire SAA (send auth/assoc management frames) when firmware
-     * has reached the final "fully armed" state (STATE_3). Sending auth earlier
-     * races firmware and leads to UNI_TXDONE status=33.
-     */
     switch (prStaRec->ucStaState) {
-    case STA_STATE_3:
-        /* Fully armed already — ensure QM is active and Tx is allowed. */
-        DBGLOG(CNM, INFO,
-               "StaRec[%u] FW ACK state=3, ensure QM active + TX_ALLOWED\n",
-               prStaRec->ucIndex);
-
-        /* qmActivateStaRec is safe to call idempotently. */
-        qmActivateStaRec(prAdapter, prStaRec);
-
-        /* Allow TX for this STA (management + data as appropriate). */
-        qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
-
-        DBGLOG(CNM, WARN, "FORCE TX_ALLOWED sta=%u state=%u\n",
-               prStaRec->ucIndex, prStaRec->ucStaState);
-        break;
-
     case STA_STATE_1:
-        /*
-         * STATE_1 ACK: firmware allocated WTBL entry.
-         * Advance driver state to STATE_2 and wait for subsequent FW ACK(s).
-         * Do NOT activate QM, set TX_ALLOWED, or fire SAA here.
-         */
         DBGLOG(MEM, INFO,
                "StaRec[%u] FW ACK state=1, advancing to STATE_2\n",
                prStaRec->ucIndex);
@@ -1010,24 +980,27 @@ static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
         break;
 
     case STA_STATE_2:
-        /*
-         * STATE_2 ACK: firmware has progressed further; advance to STATE_3.
-         * Only after moving to STATE_3 do we activate QM, allow TX and fire SAA.
-         */
         DBGLOG(MEM, INFO,
                "StaRec[%u] FW ACK state=2, advancing to STATE_3 and enabling TX + SAA\n",
                prStaRec->ucIndex);
-
         cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_3);
-
-        /* Activate QoS/Tx path for this STA */
         qmActivateStaRec(prAdapter, prStaRec);
-
-        /* Allow TX now that WTBL is fully prepared */
         qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
-
-        /* Fire any pending SAA (auth/assoc) now that firmware is ready */
         aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
+        break;
+
+    case STA_STATE_3:
+        /*
+         * FW confirms STATE_3 cmd receipt. QM was already armed and SAA
+         * already fired in the STATE_2 handler. Do NOT call qmActivateStaRec
+         * here — it deactivates then reactivates, bouncing TxAllowed 1->0->1
+         * while an auth frame may be in-flight, causing UNI_TXDONE status=33.
+         * Just ensure TxAllowed is pinned high.
+         */
+        DBGLOG(CNM, INFO,
+               "StaRec[%u] FW ACK state=3, confirming TX_ALLOWED\n",
+               prStaRec->ucIndex);
+        qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
         break;
 
     default:

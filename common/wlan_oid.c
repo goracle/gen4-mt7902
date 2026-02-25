@@ -1296,7 +1296,6 @@ uint32_t wlanoidSetConnect(IN struct ADAPTER *prAdapter,
 }
 
 
-#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 uint32_t
 wlanoidSendAuthAssoc(IN struct ADAPTER *prAdapter,
 		IN void *pvSetBuffer, IN uint32_t u4SetBufferLen,
@@ -1331,15 +1330,25 @@ wlanoidSendAuthAssoc(IN struct ADAPTER *prAdapter,
 					ucBssIndex,
 					pAddr);
 
+
+#if (CFG_SUPPORT_SUPPLICANT_SME == 1) /* skip SAA FSM */
+	prStaRec->eAuthAssocSent = AA_SENT_NONE;
+	/* If the supplicant is handling SME, don't auto-fire here. 
+	   The OID wlanoidSendAuthAssoc will handle it. */
+	DBGLOG(SAA, INFO, "[SAA] Suppressing auto-auth for ["MACSTR"] - waiting for supplicant OID\n", 
+	       MAC2STR(prStaRec->aucMacAddr));
+	// saaSendAuthAssoc(prAdapter, prStaRec); <-- Comment this out
+#else
+
 	if (prStaRec)
 		saaSendAuthAssoc(prAdapter, prStaRec);
 	else
 		DBGLOG(REQ, WARN,
 			"can't send auth since can't find StaRec\n");
 
+#endif
 	return WLAN_STATUS_SUCCESS;
 }
-#endif
 
 /*----------------------------------------------------------------------------*/
 /*!

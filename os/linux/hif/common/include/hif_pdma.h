@@ -63,12 +63,60 @@
  *                              C O N S T A N T S
  *******************************************************************************
  */
+
+
+
+
+
+// mt7902 block
+#if defined(MT7922)
+/* Max Rx ring size */
+#define RX_RING_SIZE				1024
+/* Data Rx ring */
+#define RX_RING0_SIZE				1024
+#elif defined(MT7961) || defined(MT7902)
+/* Max Rx ring size */
+#define RX_RING_SIZE				512
+/* Data Rx ring */
+#define RX_RING0_SIZE				512
+#else
+/* Max Rx ring size */
+#define RX_RING_SIZE				256
+/* Data Rx ring */
+#define RX_RING0_SIZE				256
+#endif
+
+/* Event/MSDU_report Rx ring */
+#if defined(MT7902) || defined(MT7961)
+/* MT7902 requires 512 for Ring 1 per Linux upstream patch */
+#define RX_RING1_SIZE 				512
+#else
+#define RX_RING1_SIZE 				16
+#endif
+
+/* WFDMA1 Ring Configuration */
 #define NUM_OF_WFDMA1_TX_RING			0
 #define NUM_OF_WFDMA1_RX_RING			0
 
-#if (CFG_SUPPORT_CONNAC2X == 1 || CFG_SUPPORT_CONNAC3X == 1)
+#if defined(MT7902)
+/* MT7902 is CONNAC2X but has no WA TX Ring (has_mcu_wa = false) */
 #undef NUM_OF_WFDMA1_TX_RING
-#define NUM_OF_WFDMA1_TX_RING			1  /* WA CMD Ring */
+#define NUM_OF_WFDMA1_TX_RING			0
+#undef NUM_OF_WFDMA1_RX_RING
+#define NUM_OF_WFDMA1_RX_RING			5
+#elif (CFG_SUPPORT_CONNAC2X == 1 || CFG_SUPPORT_CONNAC3X == 1)
+#undef NUM_OF_WFDMA1_TX_RING
+#define NUM_OF_WFDMA1_TX_RING			1  /* WA CMD Ring for other chips */
+#undef NUM_OF_WFDMA1_RX_RING
+#define NUM_OF_WFDMA1_RX_RING			5
+#endif
+//end mt7902 block
+
+
+
+
+
+#if (CFG_SUPPORT_CONNAC2X == 1 || CFG_SUPPORT_CONNAC3X == 1)
 #undef NUM_OF_WFDMA1_RX_RING
 #define NUM_OF_WFDMA1_RX_RING			5
 #endif /* CFG_SUPPORT_CONNAC2X == 1 || CFG_SUPPORT_CONNAC3X == 1 */
@@ -87,22 +135,6 @@
 #define TX_RING_SIZE				256
 #endif
 
-#if defined(MT7922)
-/* Max Rx ring size */
-#define RX_RING_SIZE				1024
-
-/* Data Rx ring */
-#define RX_RING0_SIZE				1024
-#else
-/* Max Rx ring size */
-#define RX_RING_SIZE				256
-
-/* Data Rx ring */
-#define RX_RING0_SIZE				256
-#endif
-
-/* Event/MSDU_report Rx ring */
-#define RX_RING1_SIZE				16
 
 /* TXD_SIZE = TxD + TxInfo */
 #define TXD_SIZE					16
@@ -236,34 +268,30 @@ enum ENUM_TX_RING_IDX {
 };
 
 /* sw defined rx ring idx */
+/* sw defined rx ring idx */
 enum ENUM_RX_RING_IDX {
-	RX_RING_DATA_IDX_0 = 0,  /*Rx Data */
-	RX_RING_EVT_IDX_1,
-#if (CFG_SUPPORT_CONNAC3X == 0)
-	WFDMA0_RX_RING_IDX_2,  /* Band0 TxFreeDoneEvent */
-	WFDMA0_RX_RING_IDX_3,  /* Band1 TxFreeDoneEvent  */
-	WFDMA1_RX_RING_IDX_0,  /* WM Event */
-	WFDMA1_RX_RING_IDX_1,  /*WA Band 0 Event*/
-	WFDMA1_RX_RING_IDX_2,  /*WA Band 1 Event*/
-#else
-	RX_RING_DATA1_IDX_2,
-	RX_RING_TXDONE0_IDX_3,
-	RX_RING_TXDONE1_IDX_4,
-	RX_RING_DATA2_IDX_5,
-	RX_RING_TXDONE2_IDX_6,
-	RX_RING_WAEVT0_IDX_5,
-	RX_RING_WAEVT1_IDX_6,
-#endif
-#if (CFG_SUPPORT_CONNAC3X == 1)
-/* Aliases for cmm_asic_connac2x.c compatibility */
+	RX_RING_DATA_IDX_0 = 0,    /* Standard Data */
+	RX_RING_EVT_IDX_1,         /* MCU Event / TX Done */
+	RX_RING_DATA1_IDX_2,       /* WFDMA1_RX_RING_0 (WM Event) */
+	RX_RING_TXDONE0_IDX_3,     /* WFDMA0_RX_RING_2 (Band0 TxFree) */
+	RX_RING_TXDONE1_IDX_4,     /* WFDMA0_RX_RING_3 (Band1 TxFree) */
+	RX_RING_DATA2_IDX_5,       /* WFDMA1_RX_RING_1 (WA Event 0) */
+	RX_RING_TXDONE2_IDX_6,     /* WFDMA1_RX_RING_2 (WA Event 1) */
+
+	/* Aliases for CONNAC3X symbols that share the same indices */
+#define RX_RING_WAEVT0_IDX_5  RX_RING_DATA2_IDX_5
+#define RX_RING_WAEVT1_IDX_6  RX_RING_TXDONE2_IDX_6
+
+	RX_RING_MAX,
+};
+/* Legacy/MT7902 Compatibility Aliases */
+/* These satisfy code that still uses the WFDMA naming convention */
 #define WFDMA0_RX_RING_IDX_2  RX_RING_TXDONE0_IDX_3
 #define WFDMA0_RX_RING_IDX_3  RX_RING_TXDONE1_IDX_4
 #define WFDMA1_RX_RING_IDX_0  RX_RING_DATA1_IDX_2
-#define WFDMA1_RX_RING_IDX_1  RX_RING_WAEVT0_IDX_5
-#define WFDMA1_RX_RING_IDX_2  RX_RING_WAEVT1_IDX_6
-#endif
-	RX_RING_MAX,
-};
+#define WFDMA1_RX_RING_IDX_1  RX_RING_DATA2_IDX_5
+#define WFDMA1_RX_RING_IDX_2  RX_RING_TXDONE2_IDX_6
+
 
 /* hw defined tx ring idx */
 enum ENUM_HW_WFDMA0_TX_RING_IDX {
