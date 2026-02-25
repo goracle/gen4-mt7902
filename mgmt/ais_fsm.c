@@ -7649,6 +7649,12 @@ void aisFsmFirePendingSAA(struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	DBGLOG(AIS, INFO,
 	       "[AIS%d] STATE_1 ACK confirmed: StaRec[%u] ucStaState=%u firing SAA\n",
 	       ucBssIndex, prStaRec->ucIndex, prStaRec->ucStaState);
+
+	/* StaRec was already activated by cnmStaRecHandleEventPkt on STATE_2 ACK.
+	 * Do NOT call qmActivateStaRec here — it deactivates+reactivates, nuking
+	 * the TX descriptor templates and causing DP_IN_FW (status=33) on auth.
+	 */
+
 	mboxSendMsg(prAdapter, MBOX_ID_0,
 		(struct MSG_HDR *)prAisFsmInfo->prPendingSAAMsg,
 		MSG_SEND_METHOD_BUF);

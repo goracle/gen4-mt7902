@@ -3334,8 +3334,8 @@ nicTxProcessUniTxDoneEvent(struct ADAPTER *ad, struct UNI_EVENT_TX_DONE *e)
 		return NULL;
 
 	DBGLOG(TX, INFO,
-		"UNI_TXDONE status=%u widx=%u sn=%u\n",
-		e->ucStatus, e->ucWlanIndex, e->u2SequenceNumber);
+		"UNI_TXDONE status=%u widx=%u pid=%u sn=%u\n",
+		e->ucStatus, e->ucWlanIndex, e->ucPacketSeq, e->u2SequenceNumber);
 
 	prMsduInfo = nicGetPendingTxMsduInfo(ad, e->ucWlanIndex, e->ucPacketSeq);
 	if (!prMsduInfo) {
@@ -3345,7 +3345,11 @@ nicTxProcessUniTxDoneEvent(struct ADAPTER *ad, struct UNI_EVENT_TX_DONE *e)
 		return NULL;
 	}
 
-	saaFsmRunEventTxDone(ad, prMsduInfo, (enum ENUM_TX_RESULT_CODE)e->ucStatus);
+	/* DO NOT call saaFsmRunEventTxDone here.
+	 * The caller (nicTxProcessTxDoneEvent) calls pfTxDoneHandler on the
+	 * returned MSDU_INFO -- calling SAA here AND there is a double-fire
+	 * that causes two retries per TX_DONE and premature join failure.
+	 */
 
 	return prMsduInfo;
 }
