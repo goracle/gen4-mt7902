@@ -72,6 +72,7 @@
  *******************************************************************************
  */
 #include "precomp.h"
+#include "nic_uni_cmd_event.h"
 
 /*******************************************************************************
  *                              C O N S T A N T S
@@ -962,17 +963,17 @@ static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
 	if (!prStaRec)
 		return;
 	if (!kalMemCmp(&prStaRec->aucMacAddr[0], &prEventContent->aucMacAddr[0], MAC_ADDR_LEN)) {
-		if (prStaRec->ucStaState == STA_STATE_3) {
+	  if (prStaRec->ucStaState == STA_STATE_3){
 			qmActivateStaRec(prAdapter, prStaRec);
-		} else if (prStaRec->ucStaState == STA_STATE_1) {
-			DBGLOG(MEM, INFO, "StaRec[%u] STATE_1 ACK from FW, firing SAA\n",
-				prStaRec->ucIndex);
-			aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
-		}
+qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
+DBGLOG(CNM, WARN, "FORCE TX_ALLOWED sta=%u state=%u\n",
+       prStaRec->ucIndex, prStaRec->ucStaState);
+	  }
+		else
+			DBGLOG(MEM, INFO, "StaRec[%u] FW ACK state=%u (no-op)\n",
+			       prStaRec->ucIndex, prStaRec->ucStaState);
 	}
-
 }
-
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief

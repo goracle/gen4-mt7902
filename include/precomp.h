@@ -127,7 +127,6 @@
 #include "nic_cmd_event.h"
 #include "nic_ext_cmd_event.h"
 #ifdef CFG_SUPPORT_UNIFIED_COMMAND
-#include "nic_uni_cmd_event.h"
 #endif
 
 /* Dependency:  nic_cmd_event.h (P_EVENT_CONNECTION_STATUS) */
@@ -142,6 +141,11 @@
 #if (CFG_SUPPORT_CONNAC3X == 1)
 #include "nic_connac3x_tx.h"
 #endif
+
+
+#include "nic_rx.h"
+#include "nic_uni_cmd_event.h"
+
 #include "nic_tx.h"
 #include "nic_txd_v1.h"
 #include "nic_txd_v2.h"
@@ -159,7 +163,6 @@
 #include "nic_connac3x_rx.h"
 #endif
 /* Dependency:  hif_rx.h (P_HIF_RX_HEADER_T) */
-#include "nic_rx.h"
 
 #include "nic_umac.h"
 

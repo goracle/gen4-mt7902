@@ -2672,6 +2672,9 @@ struct UNI_EVENT_TX_DONE {
 	uint32_t     u4Timestamp;
 	/** (SW) Reference to _ENUM_TXS_APPLIED_FLAG_T */
 	uint32_t     u4AppliedFlag;
+  
+
+
 } __KAL_ATTRIB_PACKED__;
 
 /* BF event (0x33) */

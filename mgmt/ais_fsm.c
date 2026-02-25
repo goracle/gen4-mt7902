@@ -665,9 +665,6 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 	struct STA_RECORD *prStaRec;
 	struct MSG_SAA_FSM_START *prJoinReqMsg;
 	struct GL_WPA_INFO *prWpaInfo;
-#if (CFG_SUPPORT_HE_ER == 1)
-	//struct WIFI_VAR *prWifiVar = &prAdapter->rWifiVar;
-#endif
 
 	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
 	prAisBssInfo = aisGetAisBssInfo(prAdapter, ucBssIndex);
@@ -677,10 +674,7 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	ASSERT(prBssDesc);
 
-	/* --- ARCH SOVEREIGNTY: BSSID LOCK --- 
-	 * We bind the BSSID to the descriptor provided by the search state.
-	 * This prevents any "last second" pivots to a different band.
-	 */
+	/* BSSID lock */
 	prBssDesc->fgIsConnecting = TRUE;
 	COPY_MAC_ADDR(prAisBssInfo->aucBSSID, prBssDesc->aucBSSID);
 
@@ -689,46 +683,32 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 #endif
 
 	DBGLOG(AIS, INFO, "[AIS%d] JOIN Sovereign: BSSID " MACSTR " on CH %d (%s)\n",
-	       ucBssIndex, MAC2STR(prAisBssInfo->aucBSSID), 
-	       prBssDesc->ucChannelNum, (prBssDesc->eBand == BAND_5G) ? "5GHz" : "2.4GHz");
+	       ucBssIndex, MAC2STR(prAisBssInfo->aucBSSID),
+	       prBssDesc->ucChannelNum,
+	       (prBssDesc->eBand == BAND_5G) ? "5GHz" : "2.4GHz");
 
-	/* Setup the Station Record (Hardware Context) */
 	prStaRec = bssCreateStaRecFromBssDesc(prAdapter, STA_TYPE_LEGACY_AP,
 					      prAisBssInfo->ucBssIndex, prBssDesc);
-
 	if (!prStaRec) {
-		DBGLOG(AIS, ERROR, "[AIS%d] Sovereign Join Failed: prStaRec creation failed.\n", ucBssIndex);
+		DBGLOG(AIS, ERROR, "[AIS%d] StaRec creation failed.\n", ucBssIndex);
 		return;
 	}
 
 	prAisFsmInfo->prTargetStaRec = prStaRec;
 
+	/* Activate StaRec and sync to FW fire-and-forget.
+	 * CMD queue and TX queue are ordered — FW will process the StaRec
+	 * update before it sees the auth frame, so no ACK round-trip needed.
+	 */
+	qmActivateStaRec(prAdapter, prStaRec);
+	cnmStaSendUpdateCmd(prAdapter, prStaRec, FALSE);
 
-
-
-
-	//prStaRec->ucStaState = STA_STATE_1;
-
-	prStaRec->ucStaState = STA_STATE_1;
-	DBGLOG(AIS, INFO,
-	       "[AIS-DIAG] StaRec[%u] -> STATE_1 requested\n",
-	       prStaRec->ucIndex);
-
-
-
-
-
-	//cnmStaSendUpdateCmd(prAdapter, prStaRec, TRUE); //cnmStaRecChangeState already sent it
-	DBGLOG(AIS, ERROR, "[AIS-DIAG] StaRec[%u] ucStaState set to %d before SAA\n", prStaRec->ucIndex, prStaRec->ucStaState);
-
-	/* --- AUTH ALGORITHM SELECTION --- */
+	/* Auth algorithm */
 	prStaRec->fgIsReAssoc = (prAisBssInfo->eConnectionState == MEDIA_STATE_CONNECTED);
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-	/* In Sovereign Mode, we strictly trust the Supplicant's choice of Auth Algorithm */
 	prAisFsmInfo->ucAvailableAuthTypes = (uint8_t) prWpaInfo->u4AuthAlg;
 #else
-	/* Internal fallback for non-SME connections (rare in modern Arch/Linux) */
 	if (prConnSettings->eAuthMode == AUTH_MODE_SHARED)
 		prAisFsmInfo->ucAvailableAuthTypes = (uint8_t) AUTH_TYPE_SHARED_KEY;
 	else
@@ -736,14 +716,13 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 #endif
 
 	prAisSpecificBssInfo->ucRoamingAuthTypes = prAisFsmInfo->ucAvailableAuthTypes;
-	prStaRec->ucTxAuthAssocRetryLimit = (prStaRec->fgIsReAssoc) ? 
+	prStaRec->ucTxAuthAssocRetryLimit = prStaRec->fgIsReAssoc ?
 		TX_AUTH_ASSOCI_RETRY_LIMIT_FOR_ROAMING : TX_AUTH_ASSOCI_RETRY_LIMIT;
 
 	/* Sync bands */
 	prAisBssInfo->eBand = prBssDesc->eBand;
 	prAisBssInfo->ucPrimaryChannel = prBssDesc->ucChannelNum;
 
-	/* Determine the specific Auth Algorithm Number for this attempt */
 	if (prAisFsmInfo->ucAvailableAuthTypes & (uint8_t) AUTH_TYPE_SAE)
 		prStaRec->ucAuthAlgNum = (uint8_t) AUTH_ALGORITHM_NUM_SAE;
 	else if (prAisFsmInfo->ucAvailableAuthTypes & (uint8_t) AUTH_TYPE_FAST_BSS_TRANSITION)
@@ -753,18 +732,17 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 	else if (prAisFsmInfo->ucAvailableAuthTypes & (uint8_t) AUTH_TYPE_SHARED_KEY)
 		prStaRec->ucAuthAlgNum = (uint8_t) AUTH_ALGORITHM_NUM_SHARED_KEY;
 	else {
-		DBGLOG(AIS, ERROR, "[AIS%d] No valid Auth Type found! (Available: %d)\n",
+		DBGLOG(AIS, ERROR, "[AIS%d] No valid Auth Type (available: %d)\n",
 		       ucBssIndex, prAisFsmInfo->ucAvailableAuthTypes);
 		return;
 	}
 
-	/* Ensure SSID is locked to the descriptor we are joining */
 	if (prBssDesc->ucSSIDLen)
 		COPY_SSID(prConnSettings->aucSSID, prConnSettings->ucSSIDLen,
 			  prBssDesc->aucSSID, prBssDesc->ucSSIDLen);
 
-	/* Trigger the SAA (Station Authentication & Association) FSM */
-	prJoinReqMsg = (struct MSG_SAA_FSM_START *)cnmMemAlloc(prAdapter, RAM_TYPE_MSG, sizeof(struct MSG_SAA_FSM_START));
+	prJoinReqMsg = (struct MSG_SAA_FSM_START *) cnmMemAlloc(prAdapter,
+				RAM_TYPE_MSG, sizeof(struct MSG_SAA_FSM_START));
 	if (!prJoinReqMsg)
 		return;
 
@@ -774,21 +752,21 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	nicRxClearFrag(prAdapter, prStaRec);
 
-	/* Commit ownership to cfg80211 */
 	prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
-	
 #if CFG_SUPPORT_SUPPLICANT_SME
 	prConnSettings->fgIsConnInitialized = TRUE;
 #endif
 
+	/* Clear any stale pending msg */
 	if (prAisFsmInfo->prPendingSAAMsg)
 		cnmMemFree(prAdapter, prAisFsmInfo->prPendingSAAMsg);
-	prAisFsmInfo->prPendingSAAMsg = prJoinReqMsg;
+	prAisFsmInfo->prPendingSAAMsg = NULL;
 
-	DBGLOG(AIS, INFO, "[AIS%d] Sovereign SAA deferred: Seq %u, awaiting STATE_1 FW ACK\n",
-		ucBssIndex, prJoinReqMsg->ucSeqNum);
+	DBGLOG(AIS, INFO, "[AIS%d] Firing SAA directly: Seq %u BSSID " MACSTR "\n",
+	       ucBssIndex, prJoinReqMsg->ucSeqNum, MAC2STR(prBssDesc->aucBSSID));
 
-	cnmStaSendUpdateCmd(prAdapter, prStaRec, TRUE);
+	mboxSendMsg(prAdapter, MBOX_ID_0, (struct MSG_HDR *) prJoinReqMsg,
+		    MSG_SEND_METHOD_BUF);
 }
 
 /*----------------------------------------------------------------------------*/

@@ -1897,6 +1897,8 @@ uint32_t nicTxGetFreeCmdCount(IN struct ADAPTER *prAdapter);
 uint32_t nicTxGetDataPageCount(IN struct ADAPTER *prAdapter,
 	IN uint32_t u4FrameLength, IN u_int8_t fgIncludeDesc);
 
+struct MSDU_INFO *nicTxProcessUniTxDoneEvent(struct ADAPTER *ad, struct UNI_EVENT_TX_DONE *e);
+
 uint32_t nicTxGetCmdPageCount(IN struct ADAPTER *prAdapter,
 	IN struct CMD_INFO *prCmdInfo);
 

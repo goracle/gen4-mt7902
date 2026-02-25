@@ -71,6 +71,7 @@
  *******************************************************************************
  */
 #include "precomp.h"
+#include "nic_uni_cmd_event.h"
 #include "que_mgt.h"
 #if CFG_SUPPORT_NAN
 #include "nan_txm.h"
@@ -3315,21 +3316,77 @@ u_int8_t nicTxProcessMngPacket(IN struct ADAPTER *prAdapter,
 	return TRUE;
 }
 
-void nicTxProcessTxDoneEvent(IN struct ADAPTER *prAdapter,
-			     IN struct WIFI_EVENT *prEvent)
+
+
+/* --- nicTxProcessUniTxDoneEvent
+ * Parse a proper UNI_EVENT_TX_DONE (caller must ensure the struct passed in
+ * is correctly populated) and return the pending MSDU_INFO pointer that was
+ * matched (or NULL if none). The caller is responsible for freeing/returning
+ * the MSDU_INFO as appropriate.
+ */
+
+struct MSDU_INFO *
+nicTxProcessUniTxDoneEvent(struct ADAPTER *ad, struct UNI_EVENT_TX_DONE *e)
+{
+	struct MSDU_INFO *prMsduInfo = NULL;
+
+	if (!ad || !e)
+		return NULL;
+
+	DBGLOG(TX, INFO,
+		"UNI_TXDONE status=%u widx=%u sn=%u\n",
+		e->ucStatus, e->ucWlanIndex, e->u2SequenceNumber);
+
+	prMsduInfo = nicGetPendingTxMsduInfo(ad, e->ucWlanIndex, e->ucPacketSeq);
+	if (!prMsduInfo) {
+		DBGLOG(TX, WARN,
+			"UNI_TXDONE: no pending MSDU for WIDX:%u PID:%u\n",
+			e->ucWlanIndex, e->ucPacketSeq);
+		return NULL;
+	}
+
+	saaFsmRunEventTxDone(ad, prMsduInfo, (enum ENUM_TX_RESULT_CODE)e->ucStatus);
+
+	return prMsduInfo;
+}
+
+
+void
+nicTxProcessTxDoneEvent(IN struct ADAPTER *prAdapter,
+			IN struct WIFI_EVENT *prEvent)
 {
 	struct EVENT_TX_DONE *prTxDone;
-	struct MSDU_INFO *prMsduInfo;
+	struct MSDU_INFO *prMsduInfo = NULL;
 	struct TX_CTRL *prTxCtrl = &prAdapter->rTxCtrl;
 
-	uint8_t *apucBandwidt[4] = {
-		(uint8_t *)"20", (uint8_t *)"40",
-		(uint8_t *)"80", (uint8_t *)"160/80+80"};
+	if (!prAdapter || !prEvent)
+		return;
 
-	prTxDone = (struct EVENT_TX_DONE *) (prEvent->aucBuffer);
+	prTxDone = (struct EVENT_TX_DONE *)prEvent->aucBuffer;
+
+	struct UNI_EVENT_TX_DONE uni = {0};
+
+	uni.ucPacketSeq      = prTxDone->ucPacketSeq;
+	uni.ucStatus         = prTxDone->ucStatus;
+	uni.u2SequenceNumber = prTxDone->u2SequenceNumber;
+	uni.ucWlanIndex      = prTxDone->ucWlanIndex;
+	uni.ucTxCount        = prTxDone->ucTxCount;
+	uni.u2TxRate         = prTxDone->u2TxRate;
+	uni.ucFlag           = prTxDone->ucFlag;
+	uni.ucTid            = prTxDone->ucTid;
+	uni.ucRspRate        = prTxDone->ucRspRate;
+	uni.ucRateTableIdx   = prTxDone->ucRateTableIdx;
+	uni.ucBandwidth      = prTxDone->ucBandwidth;
+	uni.ucTxPower        = prTxDone->ucTxPower;
+	uni.ucFlushReason    = prTxDone->ucFlushReason;
+	uni.aucReserved0[0]  = prTxDone->aucReserved0[0];
+	uni.u4TxDelay        = prTxDone->u4TxDelay;
+	uni.u4Timestamp      = prTxDone->u4Timestamp;
+	uni.u4AppliedFlag    = prTxDone->u4AppliedFlag;
+
+	prMsduInfo = nicTxProcessUniTxDoneEvent(prAdapter, &uni);
 
 	if (prTxDone->ucFlag & BIT(TXS_WITH_ADVANCED_INFO)) {
-		/* Tx Done with advanced info */
 		if (prTxDone->ucStatus != 0)
 			DBGLOG_LIMITED(NIC, INFO,
 				"EVENT_ID_TX_DONE WIDX:PID[%u:%u] Status[%u:%s] SN[%u] TID[%u] CNT[%u] Flush[%u]\n",
@@ -3346,150 +3403,58 @@ void nicTxProcessTxDoneEvent(IN struct ADAPTER *prAdapter,
 				apucTxResultStr[prTxDone->ucStatus],
 				prTxDone->u2SequenceNumber, prTxDone->ucTid,
 				prTxDone->ucTxCount, prTxDone->ucFlushReason);
-
-		if (prTxDone->ucFlag & BIT(TXS_IS_EXIST)) {
-			uint8_t ucNss, ucStbc;
-			int8_t icTxPwr;
-			uint32_t *pu4RawTxs;
-
-			pu4RawTxs = (uint32_t *)&prTxDone->aucRawTxS[0];
-
-			ucNss = (prTxDone->u2TxRate & TX_DESC_NSTS_MASK) >>
-				TX_DESC_NSTS_OFFSET;
-			ucNss += 1;
-			ucStbc = (prTxDone->u2TxRate & TX_DESC_STBC) ?
-								TRUE : FALSE;
-
-			if (ucStbc)
-				ucNss /= 2;
-
-			if (prTxDone->ucStatus != 0)
-				DBGLOG_LIMITED(NIC, INFO,
-					"||RATE[0x%04x] BW[%s] NSS[%u] ArIdx[%u] RspRate[0x%02x]\n",
-					prTxDone->u2TxRate,
-					apucBandwidt[prTxDone->ucBandwidth],
-					ucNss,
-					prTxDone->ucRateTableIdx,
-					prTxDone->ucRspRate);
-			else
-				DBGLOG(NIC, TRACE,
-					"||RATE[0x%04x] BW[%s] NSS[%u] ArIdx[%u] RspRate[0x%02x]\n",
-					prTxDone->u2TxRate,
-					apucBandwidt[prTxDone->ucBandwidth],
-					ucNss,
-					prTxDone->ucRateTableIdx,
-					prTxDone->ucRspRate);
-			icTxPwr = (int8_t)prTxDone->ucTxPower;
-			if (icTxPwr & BIT(6))
-				icTxPwr |= BIT(7);
-
-			if (prTxDone->ucStatus != 0)
-				DBGLOG_LIMITED(NIC, INFO,
-					"||AMPDU[%u] PS[%u] IBF[%u] EBF[%u] TxPwr[%d%sdBm] TSF[%u] TxDelay[%uus]\n",
-					prTxDone->u4AppliedFlag &
-					BIT(TX_FRAME_IN_AMPDU_FORMAT) ?
-						TRUE : FALSE,
-					prTxDone->u4AppliedFlag &
-					BIT(TX_FRAME_PS_BIT) ? TRUE : FALSE,
-					prTxDone->u4AppliedFlag &
-					BIT(TX_FRAME_IMP_BF) ? TRUE : FALSE,
-					prTxDone->u4AppliedFlag &
-					BIT(TX_FRAME_EXP_BF) ? TRUE : FALSE,
-					icTxPwr / 2, icTxPwr & BIT(0) ?
-						".5" : "",
-					prTxDone->u4Timestamp,
-					prTxDone->u4TxDelay);
-			else
-				DBGLOG(NIC, TRACE,
-					"||AMPDU[%u] PS[%u] IBF[%u] EBF[%u] TxPwr[%d%sdBm] TSF[%u] TxDelay[%uus]\n",
-					prTxDone->u4AppliedFlag &
-					BIT(TX_FRAME_IN_AMPDU_FORMAT) ?
-						TRUE : FALSE,
-					prTxDone->u4AppliedFlag &
-					BIT(TX_FRAME_PS_BIT) ? TRUE : FALSE,
-					prTxDone->u4AppliedFlag &
-					BIT(TX_FRAME_IMP_BF) ? TRUE : FALSE,
-					prTxDone->u4AppliedFlag &
-					BIT(TX_FRAME_EXP_BF) ? TRUE : FALSE,
-					icTxPwr / 2, icTxPwr & BIT(0) ?
-						".5" : "",
-					prTxDone->u4Timestamp,
-					prTxDone->u4TxDelay);
-#ifndef CFG_SUPPORT_UNIFIED_COMMAND
-			if (prTxDone->ucStatus != 0)
-				DBGLOG_LIMITED(NIC, INFO,
-					"TxS[%08x %08x %08x %08x %08x %08x %08x]\n",
-					*pu4RawTxs,
-					*(pu4RawTxs + 1), *(pu4RawTxs + 2),
-					*(pu4RawTxs + 3), *(pu4RawTxs + 4),
-					*(pu4RawTxs + 5), *(pu4RawTxs + 6));
-			else
-				DBGLOG(NIC, TRACE,
-					"TxS[%08x %08x %08x %08x %08x %08x %08x]\n",
-					*pu4RawTxs,
-					*(pu4RawTxs + 1), *(pu4RawTxs + 2),
-					*(pu4RawTxs + 3), *(pu4RawTxs + 4),
-					*(pu4RawTxs + 5), *(pu4RawTxs + 6));
-#endif
-		}
 	} else {
 		DBGLOG(NIC, TRACE,
-		       "EVENT_ID_TX_DONE WIDX:PID[%u:%u] Status[%u:%s] SN[%u]\n",
-		       prTxDone->ucWlanIndex, prTxDone->ucPacketSeq,
-		       prTxDone->ucStatus,
-		       apucTxResultStr[prTxDone->ucStatus],
-		       prTxDone->u2SequenceNumber);
+			"EVENT_ID_TX_DONE WIDX:PID[%u:%u] Status[%u:%s] SN[%u]\n",
+			prTxDone->ucWlanIndex, prTxDone->ucPacketSeq,
+			prTxDone->ucStatus,
+			apucTxResultStr[prTxDone->ucStatus],
+			prTxDone->u2SequenceNumber);
 	}
 
-	/* call related TX Done Handler */
+	if (prMsduInfo) {
+		prMsduInfo->pfTxDoneHandler(prAdapter, prMsduInfo,
+			(enum ENUM_TX_RESULT_CODE)(prTxDone->ucStatus));
+
+		if (prMsduInfo->eSrc == TX_PACKET_MGMT) {
+			cnmMgtPktFree(prAdapter, prMsduInfo);
+		} else {
+			nicTxFreePacket(prAdapter, prMsduInfo, FALSE);
+			nicTxReturnMsduInfo(prAdapter, prMsduInfo);
+		}
+
+		if (prTxDone->ucStatus == 0 &&
+		    prMsduInfo->ucBssIndex < MAX_BSSID_NUM)
+			GET_CURRENT_SYSTIME(&prTxCtrl->u4LastTxTime[prMsduInfo->ucBssIndex]);
+
+		return;
+	}
+
 	prMsduInfo = nicGetPendingTxMsduInfo(prAdapter,
 					     prTxDone->ucWlanIndex,
 					     prTxDone->ucPacketSeq);
 
-#if CFG_SUPPORT_802_11V_TIMING_MEASUREMENT
-	DBGLOG(NIC, TRACE,
-	       "EVENT_ID_TX_DONE u4TimeStamp = %x u2AirDelay = %x\n",
-	       prTxDone->au4Reserved1, prTxDone->au4Reserved2);
-
-	wnmReportTimingMeas(prAdapter, prMsduInfo->ucStaRecIndex,
-			    prTxDone->au4Reserved1,
-			    prTxDone->au4Reserved1 + prTxDone->au4Reserved2);
-#endif
-
-#if CFG_SUPPORT_WIFI_SYSDVT
-	if (is_frame_test(prAdapter, 1) != 0) {
-		prAdapter->auto_dvt->txs.received_pid = prTxDone->ucPacketSeq;
-		receive_del_txs_queue(prTxDone->u2SequenceNumber,
-			prTxDone->ucPacketSeq, prTxDone->ucWlanIndex,
-			prTxDone->u4Timestamp);
-		DBGLOG(REQ, LOUD,
-			"Done receive_del_txs_queue pid=%d timestamp=%d\n",
-			prTxDone->ucPacketSeq, prTxDone->u4Timestamp);
-	}
-#endif
-
 	if (prMsduInfo) {
 		prMsduInfo->pfTxDoneHandler(prAdapter, prMsduInfo,
-	    (enum ENUM_TX_RESULT_CODE) (prTxDone->ucStatus));
+			(enum ENUM_TX_RESULT_CODE)(prTxDone->ucStatus));
 
 		if (prMsduInfo->eSrc == TX_PACKET_MGMT)
 			cnmMgtPktFree(prAdapter, prMsduInfo);
-#if defined(_HIF_PCIE) || defined(_HIF_AXI)
-		else if (prMsduInfo->prToken)
-			prMsduInfo->pfTxDoneHandler = NULL;
-#endif
 		else {
 			nicTxFreePacket(prAdapter, prMsduInfo, FALSE);
 			nicTxReturnMsduInfo(prAdapter, prMsduInfo);
 		}
 
 		if (prTxDone->ucStatus == 0 &&
-			prMsduInfo->ucBssIndex < MAX_BSSID_NUM)
-			GET_CURRENT_SYSTIME(
-				&prTxCtrl->u4LastTxTime
-				[prMsduInfo->ucBssIndex]);
+		    prMsduInfo->ucBssIndex < MAX_BSSID_NUM)
+			GET_CURRENT_SYSTIME(&prTxCtrl->u4LastTxTime[prMsduInfo->ucBssIndex]);
+	} else {
+		DBGLOG(NIC, WARN, "TXDONE: no pending MSDU for WIDX:%u PID/SN:%u/%u\n",
+			prTxDone->ucWlanIndex, prTxDone->ucPacketSeq,
+			prTxDone->u2SequenceNumber);
 	}
 }
+
 
 /*----------------------------------------------------------------------------*/
 /*!

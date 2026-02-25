@@ -1825,94 +1825,78 @@ void nicRxProcessDataPacket(IN struct ADAPTER *prAdapter,
 	}
 }
 
+/*
+ * nicRxProcessEventPacket - Process a received Wi-Fi event packet
+ *
+ * Note: EVENT_TX_DONE and UNI_EVENT_TX_DONE handlers are sufficient, 
+ * especially with the added BSS and STA idx parameters.
+ */
 void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
-			     IN OUT struct SW_RFB *prSwRfb)
+                             IN OUT struct SW_RFB *prSwRfb)
 {
-	struct mt66xx_chip_info *prChipInfo;
-	struct CMD_INFO *prCmdInfo;
-	struct WIFI_EVENT *prEvent;
-	uint32_t u4Idx, u4Size;
+    struct mt66xx_chip_info *prChipInfo;
+    struct CMD_INFO *prCmdInfo;
+    struct WIFI_EVENT *prEvent;
+    uint32_t u4Idx, u4Size;
 
-	prChipInfo = prAdapter->chip_info;
+    ASSERT(prAdapter);
+    ASSERT(prSwRfb);
 
-	prEvent = (struct WIFI_EVENT *)
-			(prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
-	DBGLOG(RX, WARN, "[EVT-PTR] pucRecvBuff=%p rxd_size=%u byteCount=%u prEvent=%p\n",
-		prSwRfb->pucRecvBuff, prChipInfo->rxd_size, prSwRfb->u2RxByteCount, prEvent);
-	DBGLOG_MEM8(RX, WARN, prSwRfb->pucRecvBuff, prSwRfb->u2RxByteCount);
+    prChipInfo = prAdapter->chip_info;
+    prEvent = (struct WIFI_EVENT *)(prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
 
-	ASSERT(prAdapter);
-	ASSERT(prSwRfb);
+    DBGLOG(RX, WARN, "[EVT-PTR] pucRecvBuff=%p rxd_size=%u byteCount=%u prEvent=%p\n",
+           prSwRfb->pucRecvBuff, prChipInfo->rxd_size, prSwRfb->u2RxByteCount, prEvent);
+    DBGLOG_MEM8(RX, WARN, prSwRfb->pucRecvBuff, prSwRfb->u2RxByteCount);
 
+    DBGLOG(RX, WARN, "[EVT-DUMP] EID=0x%02x SEQ=%u LEN=%u\n",
+           prEvent->ucEID, prEvent->ucSeqNum, prEvent->u2PacketLength);
+    DBGLOG_MEM8(NIC, WARN, (uint8_t *)prEvent, min((uint32_t)prEvent->u2PacketLength, 64));
 
-	DBGLOG(RX, WARN, "[EVT-DUMP] EID=0x%02x SEQ=%u LEN=%u\n", prEvent->ucEID, prEvent->ucSeqNum, prEvent->u2PacketLength);
-	DBGLOG_MEM8(NIC, WARN, (uint8_t *)prEvent, min((uint32_t)prEvent->u2PacketLength, (uint32_t)64));
-if (prEvent->ucEID != EVENT_ID_DEBUG_MSG
-	    && prEvent->ucEID != EVENT_ID_ASSERT_DUMP) {
-		DBGLOG(NIC, TRACE,
-			"RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
-			prEvent->ucEID, prEvent->ucSeqNum,
-			prEvent->u2PacketLength);
-	}
+    if (prEvent->ucEID != EVENT_ID_DEBUG_MSG && prEvent->ucEID != EVENT_ID_ASSERT_DUMP) {
+        DBGLOG(NIC, TRACE, "RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
+               prEvent->ucEID, prEvent->ucSeqNum, prEvent->u2PacketLength);
+    }
 
-	/* Event handler table */
-	u4Size = sizeof(arEventTable) / sizeof(struct
-					       RX_EVENT_HANDLER);
+    /* Try to find a handler in the event table */
+    u4Size = sizeof(arEventTable) / sizeof(struct RX_EVENT_HANDLER);
+    for (u4Idx = 0; u4Idx < u4Size; u4Idx++) {
+        if (prEvent->ucEID == arEventTable[u4Idx].eEID) {
+            arEventTable[u4Idx].pfnHandler(prAdapter, prEvent);
+            nicRxReturnRFB(prAdapter, prSwRfb);
+            return;
+        }
+    }
 
-	for (u4Idx = 0; u4Idx < u4Size; u4Idx++) {
-		if (prEvent->ucEID == arEventTable[u4Idx].eEID) {
-			arEventTable[u4Idx].pfnHandler(prAdapter, prEvent);
+    /* Event not found in table, check for pending CMD */
+    prCmdInfo = nicGetPendingCmdInfo(prAdapter, prEvent->ucSeqNum);
+    if (prCmdInfo) {
+        if (prCmdInfo->pfCmdDoneHandler) {
+            DBGLOG(RX, WARN, "[CMD-DONE] EID=0x%02x SEQ=%u handler=%ps\n",
+                   prEvent->ucEID, prEvent->ucSeqNum, prCmdInfo->pfCmdDoneHandler);
+            DBGLOG(RX, WARN, "Found pending CMD: ID=0x%x Handler=%ps\n",
+                   prCmdInfo->ucCID, prCmdInfo->pfCmdDoneHandler);
 
-			break;
-		}
-	}
+            prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo, prEvent->aucBuffer);
+        } else if (prCmdInfo->fgIsOid) {
+            kalOidComplete(prAdapter->prGlueInfo, prCmdInfo->fgSetQuery, 0, WLAN_STATUS_SUCCESS);
+        }
 
-	/* Event cannot be found in event handler table, use default action */
-	if (u4Idx >= u4Size) {
-		prCmdInfo = nicGetPendingCmdInfo(prAdapter,
-						 prEvent->ucSeqNum);
+        cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+    } else {
+        DBGLOG(RX, TRACE, "UNHANDLED RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
+               prEvent->ucEID, prEvent->ucSeqNum, prEvent->u2PacketLength);
+    }
 
-		if (prCmdInfo != NULL) {
-			if (prCmdInfo->pfCmdDoneHandler) {
-				DBGLOG(RX, WARN, "[CMD-DONE] EID=0x%02x SEQ=%u handler=%ps\n",
-					prEvent->ucEID, prEvent->ucSeqNum,
-					prCmdInfo->pfCmdDoneHandler);
+    /* Reset chip NoAck flag */
+    if (prAdapter->fgIsChipNoAck) {
+        DBGLOG(RX, WARN, "Got response from chip, clear NoAck flag!\n");
+        WARN_ON(TRUE);
+    }
+    prAdapter->ucOidTimeoutCount = 0;
+    prAdapter->fgIsChipNoAck = FALSE;
 
-
-				DBGLOG(RX, WARN, "Found pending CMD: ID=0x%x Handler=%ps\n", 
-				       prCmdInfo->ucCID, prCmdInfo->pfCmdDoneHandler);
-
-				prCmdInfo->pfCmdDoneHandler(
-					prAdapter, prCmdInfo,
-					prEvent->aucBuffer);
-			}
-			else if (prCmdInfo->fgIsOid)
-				kalOidComplete(
-					prAdapter->prGlueInfo,
-					prCmdInfo->fgSetQuery,
-					0,
-					WLAN_STATUS_SUCCESS);
-
-			/* return prCmdInfo */
-			cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
-		} else {
-			DBGLOG(RX, TRACE,
-				"UNHANDLED RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
-			  prEvent->ucEID, prEvent->ucSeqNum,
-			  prEvent->u2PacketLength);
-		}
-	}
-
-	/* Reset Chip NoAck flag */
-	if (prAdapter->fgIsChipNoAck) {
-		DBGLOG(RX, WARN,
-		       "Got response from chip, clear NoAck flag!\n");
-		WARN_ON(TRUE);
-	}
-	prAdapter->ucOidTimeoutCount = 0;
-	prAdapter->fgIsChipNoAck = FALSE;
-
-	nicRxReturnRFB(prAdapter, prSwRfb);
+    nicRxReturnRFB(prAdapter, prSwRfb);
 }
 
 /*----------------------------------------------------------------------------*/
