@@ -2164,7 +2164,7 @@ uint32_t nicUniCmdStaRecTagBasic(struct ADAPTER *ad,
 	tag->u2Tag = UNI_CMD_STAREC_TAG_BASIC;
 	tag->u2Length = sizeof(*tag);
 	tag->u4ConnectionType = nicUniCmdStaRecConnType(ad, cmd->ucStaType);
-	tag->ucConnectionState = STATE_CONNECTED;
+	tag->ucConnectionState = cmd->ucStaState >= STA_STATE_2 ? STATE_CONNECTED : 0;
 	tag->ucIsQBSS = cmd->ucIsQoS;
 	tag->u2AID = cmd->u2AssocId;
 	COPY_MAC_ADDR(tag->aucPeerMacAddr, cmd->aucMacAddr);

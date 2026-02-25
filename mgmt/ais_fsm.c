@@ -762,11 +762,13 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 		cnmMemFree(prAdapter, prAisFsmInfo->prPendingSAAMsg);
 	prAisFsmInfo->prPendingSAAMsg = NULL;
 
-	DBGLOG(AIS, INFO, "[AIS%d] Firing SAA directly: Seq %u BSSID " MACSTR "\n",
+	DBGLOG(AIS, INFO, "[AIS%d] Deferring SAA until StaRec STATE_2 ACK: Seq %u BSSID " MACSTR "\n",
 	       ucBssIndex, prJoinReqMsg->ucSeqNum, MAC2STR(prBssDesc->aucBSSID));
-
-	mboxSendMsg(prAdapter, MBOX_ID_0, (struct MSG_HDR *) prJoinReqMsg,
-		    MSG_SEND_METHOD_BUF);
+	prStaRec->fgIsValid = FALSE;
+	prAisFsmInfo->prPendingSAAMsg = prJoinReqMsg;
+	/* Send STATE_2 directly so firmware WTBL is ready before auth frame TX */
+	prStaRec->ucStaState = STA_STATE_2;
+	cnmStaSendUpdateCmd(prAdapter, prStaRec, TRUE);
 }
 
 /*----------------------------------------------------------------------------*/
@@ -7639,17 +7641,6 @@ void aisFsmFirePendingSAA(struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 
 	prMsg = (struct MSG_SAA_FSM_START *)prAisFsmInfo->prPendingSAAMsg;
 	prStaRec = prMsg->prStaRec;
-
-	if (prStaRec && !prStaRec->fgIsValid) {
-		DBGLOG(AIS, INFO, "[AIS%d] StaRec[%u] needs FW sync, deferring SAA until STATE_1 ACK\n",
-			ucBssIndex, prStaRec->ucIndex);
-		qmActivateStaRec(prAdapter, prStaRec);
-		prStaRec->ucStaState = STA_STATE_1;
-		/* Send CMD with fgNeedResp=TRUE so FW ACK triggers aisFsmFirePendingSAA */
-		cnmStaSendUpdateCmd(prAdapter, prStaRec, TRUE);
-		/* SAA will be fired from cnmStaRecHandleEventPkt on FW ACK */
-		return;
-	}
 
 	DBGLOG(AIS, INFO, "[AIS%d] STATE_1 ACK: firing deferred SAA msg\n", ucBssIndex);
 	mboxSendMsg(prAdapter, MBOX_ID_0,

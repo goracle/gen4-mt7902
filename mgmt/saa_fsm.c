@@ -206,12 +206,11 @@ void saaSendAuthAssoc(IN struct ADAPTER *prAdapter,
 		 * here, that function has guards that can skip the firmware
 		 * sync depending on current state.
 		 */
-		if (prStaRec->ucStaState != STA_STATE_1) {
-			DBGLOG(SAA, WARN,
-			       "[SAA] Auth at unexpected StaState:%d, forcing STATE_1\n",
+	if (prStaRec->ucStaState != STA_STATE_2) {
+			DBGLOG(SAA, INFO,
+			       "[SAA] Auth: bumping StaState %d -> STATE_2 for FW WTBL\n",
 			       prStaRec->ucStaState);
-			prStaRec->ucStaState = STA_STATE_1;
-			cnmStaSendUpdateCmd(prAdapter, prStaRec, FALSE);
+			cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_2);
 		}
 
 		if (!fgIsP2pConn && prConnSettings) {
