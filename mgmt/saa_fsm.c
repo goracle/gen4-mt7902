@@ -206,12 +206,7 @@ void saaSendAuthAssoc(IN struct ADAPTER *prAdapter,
 		 * here, that function has guards that can skip the firmware
 		 * sync depending on current state.
 		 */
-	if (prStaRec->ucStaState != STA_STATE_2) {
-			DBGLOG(SAA, INFO,
-			       "[SAA] Auth: bumping StaState %d -> STATE_2 for FW WTBL\n",
-			       prStaRec->ucStaState);
-			cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_2);
-		}
+	/* STATE_1 is correct for auth -- firmware needs STATE_1 in WTBL to accept auth frames */
 
 		if (!fgIsP2pConn && prConnSettings) {
 			uint32_t u4AuthAlg =
@@ -1845,7 +1840,20 @@ uint32_t saaFsmRunEventRxDeauth(IN struct ADAPTER *prAdapter,
         /* Only proceed if we are actually connected or connecting */
         if (kalGetMediaStateIndicated(prGlueInfo, ucBssIndex) == MEDIA_STATE_CONNECTED ||
             prStaRec->ucStaState > STA_STATE_1) {
-            
+
+            /* Drop stale deauth from AP session cleanup: if we are in STATE_2
+             * but have not yet exchanged any auth frames, this deauth arrived
+             * from a previous session and must not tear down the new attempt. */
+            if (prStaRec->ucStaState == STA_STATE_2 &&
+                prStaRec->eAuthAssocState == AA_STATE_IDLE &&
+                prStaRec->eAuthAssocSent == AA_SENT_NONE) {
+                DBGLOG(SAA, INFO,
+                    "[SAA] Deauth RX: stale pre-auth deauth from " MACSTR
+                    " -- dropping (STATE_2, no auth sent)\n",
+                    MAC2STR(prDeauthFrame->aucSrcAddr));
+                return WLAN_STATUS_SUCCESS;
+            }
+
             /* Validate if this Deauth is from the AP we care about */
             if (authProcessRxDeauthFrame(prSwRfb, prStaRec->aucMacAddr, &prStaRec->u2ReasonCode) 
                 == WLAN_STATUS_SUCCESS) {

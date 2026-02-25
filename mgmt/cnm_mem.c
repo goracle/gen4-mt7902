@@ -967,20 +967,19 @@ static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
 	if (!prStaRec)
 		return;
 	if (!kalMemCmp(&prStaRec->aucMacAddr[0], &prEventContent->aucMacAddr[0], MAC_ADDR_LEN)) {
-	  if (prStaRec->ucStaState == STA_STATE_3) {
+		if (prStaRec->ucStaState == STA_STATE_3) {
 			qmActivateStaRec(prAdapter, prStaRec);
-qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
-DBGLOG(CNM, WARN, "FORCE TX_ALLOWED sta=%u state=%u\n",
-       prStaRec->ucIndex, prStaRec->ucStaState);
-	  } else if (prStaRec->ucStaState == STA_STATE_1 ||
-	             prStaRec->ucStaState == STA_STATE_2) {
-			DBGLOG(MEM, INFO, "StaRec[%u] FW ACK state=%u, firing pending SAA\n",
+			qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
+			DBGLOG(CNM, WARN, "FORCE TX_ALLOWED sta=%u state=%u\n",
 			       prStaRec->ucIndex, prStaRec->ucStaState);
+		} else if (prStaRec->ucStaState == STA_STATE_1) {
+			DBGLOG(MEM, INFO, "StaRec[%u] FW ACK state=1, firing pending SAA\n",
+			       prStaRec->ucIndex);
 			aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
-	  } else {
+		} else {
 			DBGLOG(MEM, INFO, "StaRec[%u] FW ACK state=%u (no-op)\n",
 			       prStaRec->ucIndex, prStaRec->ucStaState);
-	  }
+		}
 	}
 }
 /*----------------------------------------------------------------------------*/

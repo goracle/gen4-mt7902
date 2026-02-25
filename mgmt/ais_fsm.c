@@ -700,8 +700,6 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 	 * CMD queue and TX queue are ordered — FW will process the StaRec
 	 * update before it sees the auth frame, so no ACK round-trip needed.
 	 */
-	qmActivateStaRec(prAdapter, prStaRec);
-	cnmStaSendUpdateCmd(prAdapter, prStaRec, FALSE);
 
 	/* Auth algorithm */
 	prStaRec->fgIsReAssoc = (prAisBssInfo->eConnectionState == MEDIA_STATE_CONNECTED);
@@ -762,12 +760,11 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 		cnmMemFree(prAdapter, prAisFsmInfo->prPendingSAAMsg);
 	prAisFsmInfo->prPendingSAAMsg = NULL;
 
-	DBGLOG(AIS, INFO, "[AIS%d] Deferring SAA until StaRec STATE_2 ACK: Seq %u BSSID " MACSTR "\n",
+	DBGLOG(AIS, INFO, "[AIS%d] Deferring SAA until StaRec STATE_1 ACK: Seq %u BSSID " MACSTR "\n",
 	       ucBssIndex, prJoinReqMsg->ucSeqNum, MAC2STR(prBssDesc->aucBSSID));
 	prStaRec->fgIsValid = FALSE;
 	prAisFsmInfo->prPendingSAAMsg = prJoinReqMsg;
-	/* Send STATE_2 directly so firmware WTBL is ready before auth frame TX */
-	prStaRec->ucStaState = STA_STATE_2;
+	/* ucStaState is already STA_STATE_1 from bssCreateStaRecFromBssDesc -- keep it */
 	cnmStaSendUpdateCmd(prAdapter, prStaRec, TRUE);
 }
 
@@ -7642,8 +7639,18 @@ void aisFsmFirePendingSAA(struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	prMsg = (struct MSG_SAA_FSM_START *)prAisFsmInfo->prPendingSAAMsg;
 	prStaRec = prMsg->prStaRec;
 
-	DBGLOG(AIS, INFO, "[AIS%d] STATE_1 ACK: firing deferred SAA msg\n", ucBssIndex);
+	if (!prStaRec || !prStaRec->fgIsInUse) {
+		DBGLOG(AIS, WARN, "[AIS%d] FirePendingSAA: StaRec gone\n", ucBssIndex);
+		cnmMemFree(prAdapter, prAisFsmInfo->prPendingSAAMsg);
+		prAisFsmInfo->prPendingSAAMsg = NULL;
+		return;
+	}
+
+	DBGLOG(AIS, INFO,
+	       "[AIS%d] STATE_1 ACK confirmed: StaRec[%u] ucStaState=%u firing SAA\n",
+	       ucBssIndex, prStaRec->ucIndex, prStaRec->ucStaState);
 	mboxSendMsg(prAdapter, MBOX_ID_0,
-		(struct MSG_HDR *)prAisFsmInfo->prPendingSAAMsg, MSG_SEND_METHOD_BUF);
+		(struct MSG_HDR *)prAisFsmInfo->prPendingSAAMsg,
+		MSG_SEND_METHOD_BUF);
 	prAisFsmInfo->prPendingSAAMsg = NULL;
 }
