@@ -993,35 +993,33 @@ saaFsmRunEventTxDone(IN struct ADAPTER *prAdapter,
 				    prAdapter->rWifiVar.u4StatsLogDuration);
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-	/* Ignore the unmatched TX done*/
+	/* Ignore unmatched TX done events */
 	if ((prStaRec->eAuthAssocSent >= AA_SENT_AUTH1) &&
-		(prStaRec->eAuthAssocSent <= AA_SENT_AUTH4)) {
-		if (authCheckTxAuthFrame(prAdapter,
-			prMsduInfo, prStaRec->eAuthAssocSent) !=
+	    (prStaRec->eAuthAssocSent <= AA_SENT_AUTH4)) {
+		if (authCheckTxAuthFrame(prAdapter, prMsduInfo,
+					 prStaRec->eAuthAssocSent) !=
 						WLAN_STATUS_SUCCESS)
 			return WLAN_STATUS_SUCCESS;
 	} else if (prStaRec->eAuthAssocSent == AA_SENT_ASSOC1) {
-		if (assocCheckTxReAssocReqFrame(
-			prAdapter, prMsduInfo) !=
-				WLAN_STATUS_SUCCESS)
+		if (assocCheckTxReAssocReqFrame(prAdapter, prMsduInfo) !=
+						WLAN_STATUS_SUCCESS)
 			return WLAN_STATUS_SUCCESS;
 	} else {
-		DBGLOG(SAA, WARN, "unexpected sent frame = %d\n", prStaRec->eAuthAssocSent);
+		DBGLOG(SAA, WARN, "unexpected sent frame = %d\n",
+		       prStaRec->eAuthAssocSent);
 		return WLAN_STATUS_SUCCESS;
 	}
 
 	cnmTimerStopTimer(prAdapter, &prStaRec->rTxReqDoneOrRxRespTimer);
 
 	if (rTxDoneStatus == TX_RESULT_SUCCESS) {
-		/* Reset the driver's built-in retry counter on success */
-		prStaRec->ucTxAuthAssocRetryCount = 0; 
-
+		prStaRec->ucTxAuthAssocRetryCount = 0;
 		cnmTimerInitTimer(prAdapter,
 			&prStaRec->rTxReqDoneOrRxRespTimer,
 			(PFN_MGMT_TIMEOUT_FUNC) saaFsmRunEventRxRespTimeOut,
 			(unsigned long) prStaRec);
-		
-		if (prAdapter->prGlueInfo->rWpaInfo[prStaRec->ucBssIndex].u4AuthAlg & AUTH_TYPE_SAE)
+		if (prAdapter->prGlueInfo->rWpaInfo[prStaRec->ucBssIndex].u4AuthAlg
+		    & AUTH_TYPE_SAE)
 			cnmTimerStartTimer(prAdapter,
 				&prStaRec->rTxReqDoneOrRxRespTimer,
 				TU_TO_MSEC(DOT11_RSNA_SAE_RETRANS_PERIOD_TU));
@@ -1030,6 +1028,24 @@ saaFsmRunEventTxDone(IN struct ADAPTER *prAdapter,
 				&prStaRec->rTxReqDoneOrRxRespTimer,
 				TU_TO_MSEC(DOT11_AUTHENTICATION_RESPONSE_TIMEOUT_TU));
 	} else {
+		/*
+		 * TX failed. Check for the WTBL-not-armed flush signature:
+		 * status=33 (life timeout) with sn=0xFFFF means FW discarded
+		 * the frame before the WTBL entry was committed. This should
+		 * not happen with the cnmStaRecHandleEventPkt STATE_3 gate, but
+		 * if it does, do NOT burn the retry budget — the STATE_3 ACK
+		 * handler will re-fire SAA via aisFsmFirePendingSAA once the
+		 * WTBL is actually ready.
+		 */
+		if (rTxDoneStatus == TX_RESULT_LIFE_TIMEOUT &&
+		    prMsduInfo->ucTxSeqNum == 0xFF &&
+		    prStaRec->ucStaState < STA_STATE_3) {
+			DBGLOG(SAA, WARN,
+			       "[SAA] WTBL-flush detected (status=33 sn=0xFF"
+			       " state=%u) — retry deferred to STATE_3 ACK\n",
+			       prStaRec->ucStaState);
+			return WLAN_STATUS_SUCCESS;
+		}
 		if (prStaRec->eAuthAssocSent == AA_SENT_AUTH3)
 			saaSendAuthSeq3(prAdapter, prStaRec);
 		else
@@ -1041,9 +1057,6 @@ saaFsmRunEventTxDone(IN struct ADAPTER *prAdapter,
 	switch (prStaRec->eAuthAssocState) {
 	case SAA_STATE_SEND_AUTH1:
 		{
-		/* Strictly check the outgoing frame is matched with
-		 * current AA STATE
-		 */
 		if (authCheckTxAuthFrame(prAdapter, prMsduInfo,
 					 AUTH_TRANSACTION_SEQ_1) !=
 					 WLAN_STATUS_SUCCESS)
@@ -1051,32 +1064,23 @@ saaFsmRunEventTxDone(IN struct ADAPTER *prAdapter,
 
 		if (rTxDoneStatus == TX_RESULT_SUCCESS) {
 			eNextState = SAA_STATE_WAIT_AUTH2;
-
 			cnmTimerStopTimer(prAdapter,
 				&prStaRec->rTxReqDoneOrRxRespTimer);
-
 			cnmTimerInitTimer(prAdapter,
 			    &prStaRec->rTxReqDoneOrRxRespTimer,
-			    (PFN_MGMT_TIMEOUT_FUNC)
-			    saaFsmRunEventRxRespTimeOut,
+			    (PFN_MGMT_TIMEOUT_FUNC) saaFsmRunEventRxRespTimeOut,
 			    (unsigned long) prStaRec);
 			if (prAdapter->prGlueInfo->
 				rWpaInfo[prStaRec->ucBssIndex].u4AuthAlg
 							& AUTH_TYPE_SAE)
 				cnmTimerStartTimer(prAdapter,
 					&prStaRec->rTxReqDoneOrRxRespTimer,
-					TU_TO_MSEC(
-					DOT11_RSNA_SAE_RETRANS_PERIOD_TU));
+					TU_TO_MSEC(DOT11_RSNA_SAE_RETRANS_PERIOD_TU));
 			else
 				cnmTimerStartTimer(prAdapter,
 				    &prStaRec->rTxReqDoneOrRxRespTimer,
-				    TU_TO_MSEC(
-				    DOT11_AUTHENTICATION_RESPONSE_TIMEOUT_TU));
+				    TU_TO_MSEC(DOT11_AUTHENTICATION_RESPONSE_TIMEOUT_TU));
 		}
-
-		/* if TX was successful, change to next state.
-		 * if TX was failed, do retry if possible.
-		 */
 		saaFsmSteps(prAdapter, prStaRec, eNextState,
 			    (struct SW_RFB *) NULL);
 		}
@@ -1084,83 +1088,59 @@ saaFsmRunEventTxDone(IN struct ADAPTER *prAdapter,
 
 	case SAA_STATE_SEND_AUTH3:
 		{
-			/* Strictly check the outgoing frame is matched with
-			 * current JOIN STATE
-			 */
-			if (authCheckTxAuthFrame(prAdapter, prMsduInfo,
-						 AUTH_TRANSACTION_SEQ_3) !=
-						 WLAN_STATUS_SUCCESS)
-				break;
+		if (authCheckTxAuthFrame(prAdapter, prMsduInfo,
+					 AUTH_TRANSACTION_SEQ_3) !=
+					 WLAN_STATUS_SUCCESS)
+			break;
 
-			if (rTxDoneStatus == TX_RESULT_SUCCESS) {
-				eNextState = SAA_STATE_WAIT_AUTH4;
-
-				cnmTimerStopTimer(prAdapter,
-				      &prStaRec->rTxReqDoneOrRxRespTimer);
-
-				cnmTimerInitTimer(prAdapter,
-				      &prStaRec->rTxReqDoneOrRxRespTimer,
-				      (PFN_MGMT_TIMEOUT_FUNC)
-				      saaFsmRunEventRxRespTimeOut,
-				      (unsigned long) prStaRec);
-
-				cnmTimerStartTimer(prAdapter,
-				    &prStaRec->rTxReqDoneOrRxRespTimer,
-				    TU_TO_MSEC(
-				    DOT11_AUTHENTICATION_RESPONSE_TIMEOUT_TU));
-			}
-
-			/* if TX was successful, change to next state.
-			 * if TX was failed, do retry if possible.
-			 */
-			saaFsmSteps(prAdapter, prStaRec, eNextState,
-				    (struct SW_RFB *) NULL);
+		if (rTxDoneStatus == TX_RESULT_SUCCESS) {
+			eNextState = SAA_STATE_WAIT_AUTH4;
+			cnmTimerStopTimer(prAdapter,
+				&prStaRec->rTxReqDoneOrRxRespTimer);
+			cnmTimerInitTimer(prAdapter,
+			      &prStaRec->rTxReqDoneOrRxRespTimer,
+			      (PFN_MGMT_TIMEOUT_FUNC) saaFsmRunEventRxRespTimeOut,
+			      (unsigned long) prStaRec);
+			cnmTimerStartTimer(prAdapter,
+			    &prStaRec->rTxReqDoneOrRxRespTimer,
+			    TU_TO_MSEC(DOT11_AUTHENTICATION_RESPONSE_TIMEOUT_TU));
+		}
+		saaFsmSteps(prAdapter, prStaRec, eNextState,
+			    (struct SW_RFB *) NULL);
 		}
 		break;
 
 	case SAA_STATE_SEND_ASSOC1:
 		{
-			/* Strictly check the outgoing frame is matched with
-			 * current SAA STATE
-			 */
-			if (assocCheckTxReAssocReqFrame(prAdapter, prMsduInfo)
-				!= WLAN_STATUS_SUCCESS)
-				break;
+		if (assocCheckTxReAssocReqFrame(prAdapter, prMsduInfo) !=
+					WLAN_STATUS_SUCCESS)
+			break;
 
-			if (rTxDoneStatus == TX_RESULT_SUCCESS) {
-				eNextState = SAA_STATE_WAIT_ASSOC2;
-
-				cnmTimerStopTimer(prAdapter,
-						  &prStaRec->
-						  rTxReqDoneOrRxRespTimer);
-
-				cnmTimerInitTimer(prAdapter,
-				      &prStaRec->rTxReqDoneOrRxRespTimer,
-				      (PFN_MGMT_TIMEOUT_FUNC)
-					saaFsmRunEventRxRespTimeOut,
-				      (unsigned long) prStaRec);
-
-				cnmTimerStartTimer(prAdapter,
-				      &(prStaRec->rTxReqDoneOrRxRespTimer),
-				      TU_TO_MSEC(
-				      DOT11_ASSOCIATION_RESPONSE_TIMEOUT_TU));
-			}
-
-			/* if TX was successful, change to next state.
-			 * if TX was failed, do retry if possible.
-			 */
-			saaFsmSteps(prAdapter, prStaRec, eNextState,
-				    (struct SW_RFB *) NULL);
+		if (rTxDoneStatus == TX_RESULT_SUCCESS) {
+			eNextState = SAA_STATE_WAIT_ASSOC2;
+			cnmTimerStopTimer(prAdapter,
+					  &prStaRec->rTxReqDoneOrRxRespTimer);
+			cnmTimerInitTimer(prAdapter,
+			      &prStaRec->rTxReqDoneOrRxRespTimer,
+			      (PFN_MGMT_TIMEOUT_FUNC) saaFsmRunEventRxRespTimeOut,
+			      (unsigned long) prStaRec);
+			cnmTimerStartTimer(prAdapter,
+			      &(prStaRec->rTxReqDoneOrRxRespTimer),
+			      TU_TO_MSEC(DOT11_ASSOCIATION_RESPONSE_TIMEOUT_TU));
+		}
+		saaFsmSteps(prAdapter, prStaRec, eNextState,
+			    (struct SW_RFB *) NULL);
 		}
 		break;
 
 	default:
-		break;		/* Ignore other cases */
+		break;
 	}
 #endif
 	return WLAN_STATUS_SUCCESS;
 
-}				/* end of saaFsmRunEventTxDone() */
+}	/* end of saaFsmRunEventTxDone() */
+
 
 /*----------------------------------------------------------------------------*/
 /*!

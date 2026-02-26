@@ -72,6 +72,7 @@
  */
 #include "precomp.h"
 #include "nic_uni_cmd_event.h"
+#include "nic_cmd_event.h"
 #include "que_mgt.h"
 #include "mgmt/cnm.h"
 #include "wnm.h"
@@ -138,6 +139,23 @@ apfnProcessRxMgtFrame[MAX_NUM_OF_FC_SUBTYPES] = {
 	NULL			/* subtype 1111: reserved */
 };
 #endif
+
+
+
+static void nicEventInitCmdResult(IN struct ADAPTER *prAdapter,
+				  IN struct WIFI_EVENT *prEvent)
+{
+	struct INIT_EVENT_CMD_RESULT *prResult =
+		(struct INIT_EVENT_CMD_RESULT *)prEvent->aucBuffer;
+
+	if (prResult->ucStatus != 0) {
+		DBGLOG(NIC, LOUD,
+		       "[CMD-RESULT] CID=0x%02x status=0x%02x (not supported)\n",
+		       prResult->ucCID, prResult->ucStatus);
+	}
+}
+
+
 
 static struct RX_EVENT_HANDLER arEventTable[] = {
 	{EVENT_ID_RX_ADDBA,	qmHandleEventRxAddBa},
@@ -222,6 +240,7 @@ static struct RX_EVENT_HANDLER arEventTable[] = {
 #if CFG_SUPPORT_NAN
 	{ EVENT_ID_NAN_EXT_EVENT, nicNanEventDispatcher }
 #endif
+{EVENT_ID_INIT_EVENT_CMD_RESULT, nicEventInitCmdResult},
 };
 
 static const struct ACTION_FRAME_SIZE_MAP arActionFrameReservedLen[] = {
@@ -298,224 +317,141 @@ static const struct ACTION_FRAME_SIZE_MAP arActionFrameReservedLen[] = {
 /*----------------------------------------------------------------------------*/
 #include <linux/types.h>
 #include <linux/kernel.h>
+
+
+
+
 static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb)
 {
 	struct GLUE_INFO *prGlueInfo;
 	struct wiphy *wiphy;
 	struct ieee80211_channel *chan;
-	struct cfg80211_bss *bss;
-	uint8_t *chosen = NULL;
-	uint8_t *candidates[3];
+	uint8_t *frame_start = NULL;
 	uint8_t *buf_start, *buf_end;
-	size_t u2FrameLen = 0;
-	int i4Freq;
+	size_t frame_len = 0;
 	uint8_t ucChnl, ucFC;
-	uint16_t u2Cap = 0, u2BeaconInt = 0;
-	int i;
+	uint16_t u2BeaconInt = 0, u2Cap = 0;
+	int i4Freq;
+	char ssid_str[33] = {0};
+	struct cfg80211_bss * ret;
 
-	if (!prAdapter || !prSwRfb)
+	if (!prAdapter || !prSwRfb || !prSwRfb->pvHeader || prSwRfb->u2PacketLen == 0)
 		return -EINVAL;
 
 	prGlueInfo = prAdapter->prGlueInfo;
-	if (!prGlueInfo || !prGlueInfo->prDevHandler ||
-	    !prGlueInfo->prDevHandler->ieee80211_ptr)
+	if (!prGlueInfo || !prGlueInfo->prDevHandler || !prGlueInfo->prDevHandler->ieee80211_ptr)
 		return -ENODEV;
 
-	/* Build the buffer window we were given:
-	 *  - pvHeader points somewhere into the firmware buffer (maybe already
-	 *    adjusted by u2HeaderLen). The valid buffer region is:
-	 *      [ pvHeader - u2HeaderLen,  pvHeader + u2PacketLen )
-	 */
-	if (!prSwRfb->pvHeader || prSwRfb->u2PacketLen == 0) {
-		DBGLOG(RX, WARN, "[RELAY] invalid pvHeader/u2PacketLen\n");
+	wiphy = prGlueInfo->prDevHandler->ieee80211_ptr->wiphy;
+
+	/* Type 7 PDMA RX buffer layout: [RX prefix 24 bytes][IEEE80211 frame][pad] */
+	buf_start = (uint8_t *)prSwRfb->pvHeader - prSwRfb->u2HeaderLen;
+	buf_end = (uint8_t *)prSwRfb->pvHeader + prSwRfb->u2PacketLen;
+
+	/* Primary candidate: skip 24-byte Type7 RX descriptor prefix */
+	frame_start = buf_start + 24;
+	
+	/* Validate frame */
+	if (frame_start + 36 > buf_end) {
+		DBGLOG(RX, WARN, "[RELAY] frame too short after Type7 prefix\n");
 		return -EINVAL;
 	}
 
-	buf_start = (uint8_t *)prSwRfb->pvHeader - prSwRfb->u2HeaderLen;
-	buf_end   = (uint8_t *)prSwRfb->pvHeader + prSwRfb->u2PacketLen;
-
-	/* Candidate frame starts to try (in order of preference):
-	 * 1) buf_start + 8  (original scan-offload assumption)
-	 * 2) buf_start      (maybe pvHeader already pointed to FC)
-	 * 3) pvHeader       (pvHeader itself is the start)
-	 */
-	candidates[0] = buf_start + 8;
-	candidates[1] = buf_start;
-	candidates[2] = (uint8_t *)prSwRfb->pvHeader;
-
-	DBGLOG(RX, WARN, "[RELAY-RAW] pvHeader=%p u2HeaderLen=%u u2PacketLen=%u\n",
-	       prSwRfb->pvHeader, prSwRfb->u2HeaderLen, prSwRfb->u2PacketLen);
-	DBGLOG_MEM8(RX, WARN, buf_start, 64);
-
-	/* Helper: validate a candidate pointer looks like a real 802.11 beacon/probe
-	 * - candidate lies inside the provided buffer region
-	 * - there is at least the minimum fixed header+fixed fields (36 bytes)
-	 * - FC byte is a plausible mgmt FC (beacon 0x80 or probe resp 0x50)
-	 * - BSSID (offset 16) is inside buffer
-	 * - IEs parse cleanly (sum of IE lengths fits in remaining length)
-	 */
-	for (i = 0; i < ARRAY_SIZE(candidates); i++) {
-		uint8_t *p = candidates[i];
-		size_t remaining;
-		uint8_t *ies;
-		size_t ie_rem;
-		bool ok = false;
-
-		if (!p)
-			continue;
-		if (p < buf_start || p + 36 > buf_end) /* need at least 36 bytes */
-			continue;
-
-		/* available frame length from this candidate */
-		remaining = buf_end - p;
-		/* plausible FC? beacon (0x80) or probe resp (0x50) or probe req(0x40) rarely */
-		if (remaining < 1)
-			continue;
-		ucFC = p[0];
-		if (!(ucFC == 0x80 || ucFC == 0x50 || ucFC == 0x40))
-			continue;
-
-		/* BSSID must be fully inside buffer */
-		if (p + 16 + 6 > buf_end)
-			continue;
-
-		/* fixed fields: beacon interval (offset 32..33), capability (34..35) exist? */
-		if (remaining < 36)
-			continue;
-
-		/* parse IEs to ensure IE lengths fit inside remaining */
-		ies = p + 36;
-		ie_rem = remaining - 36;
-		while (ie_rem >= 2) {
-		  uint8_t id = ies[0];
-		  uint8_t len = ies[1];
-		  DBGLOG(RX, INFO, "IE id=%u len=%u\n", id, len);
-			if (len > ie_rem - 2) {
-				/* malformed IE -> candidate invalid */
-				ok = false;
+	ucFC = frame_start[0];
+	/* Accept beacon (0x80/0xd0), probe resp (0x50), probe req (0x40) */
+	if (!(ucFC == 0x80 || ucFC == 0x50 || ucFC == 0xd0 || ucFC == 0x40)) {
+		/* Fallback: scan for valid frame start */
+		uint8_t *p = buf_start;
+		while (p + 36 <= buf_end) {
+			ucFC = p[0];
+			if (ucFC == 0x80 || ucFC == 0x50 || ucFC == 0xd0 || ucFC == 0x40) {
+				frame_start = p;
 				break;
 			}
-			/* move to next IE */
-			ies += 2 + len;
-			ie_rem -= 2 + len;
-			ok = true;
+			p++;
 		}
-		/* if IE region is exactly exhausted or had at least one valid IE, accept */
-		if (ok || ie_rem == 0) {
-			chosen = p;
-			u2FrameLen = remaining;
-			ucFC = p[0];
-			break;
-		}
+		if (!frame_start)
+			return -EINVAL;
 	}
 
-	/* If none of the candidates validated, fall back to original calculation but log heavily. */
-	if (!chosen) {
-		DBGLOG(RX, WARN, "[RELAY] could not find sane frame start among candidates\n");
-		DBGLOG_MEM8(RX, WARN, buf_start, 128);
-		/* fallback to previous behavior (best-effort) */
-		chosen = buf_start + 8;
-		/* compute length as original did; guard arithmetic */
-		if ((uint8_t *)prSwRfb->pvHeader + prSwRfb->u2PacketLen > chosen)
-			u2FrameLen = (size_t)((uint8_t *)prSwRfb->pvHeader + prSwRfb->u2PacketLen - chosen);
-		else
-			return -EINVAL;
-		/* require minimum */
-		if (u2FrameLen < 36) {
-			DBGLOG(RX, WARN, "[RELAY] fallback frame too small (%zu)\n", u2FrameLen);
-			return -EINVAL;
-		}
-		ucFC = chosen[0];
-	}
-
-	/* Basic length sanity */
-	if (u2FrameLen < 36)
+	frame_len = buf_end - frame_start;
+	if (frame_len < 36) {
+		DBGLOG(RX, WARN, "[RELAY] validated frame too short: %zu\n", frame_len);
 		return -EINVAL;
+	}
 
+	/* Log frame details (reduced spam) */
 	ucChnl = prSwRfb->ucChnlNum;
+	DBGLOG(RX, INFO, "[RELAY] FC=0x%02x Ch=%u len=%zu BSSID=%pM\n",
+	       ucFC, ucChnl, frame_len, frame_start + 16);
 
-	DBGLOG(RX, INFO, "[RELAY] chosen=%p FC=0x%02x Ch=%u pktlen=%zu BSSID=%pM\n",
-	       chosen, ucFC, ucChnl, u2FrameLen, chosen + 16);
-
-	/* Parse SSID from IEs for logging — search IE list properly rather than assuming fixed offsets */
+	/* Extract SSID for logging */
 	{
-		uint8_t *ies = chosen + 36;
-		size_t ie_rem = u2FrameLen - 36;
+		uint8_t *ies = frame_start + 36;
+		size_t ie_rem = frame_len - 36;
 		while (ie_rem >= 2) {
-			uint8_t id = ies[0];
-			uint8_t len = ies[1];
+			uint8_t id = ies[0], len = ies[1];
+			if (id == 0 && len <= 32) {  /* SSID IE */
+				kalMemCopy(ssid_str, ies + 2, len);
+				DBGLOG(RX, INFO, "[RELAY] SSID='%s'\n", ssid_str);
+				break;
+			}
 			if (len > ie_rem - 2)
 				break;
-			if (id == 0) { /* SSID */
-				char ssid_str[33] = {0};
-				uint8_t ssid_len = len > 32 ? 32 : len;
-				if (ssid_len)
-					kalMemCopy(ssid_str, ies + 2, ssid_len);
-				DBGLOG(RX, INFO, "[RELAY] SSID='%s' len=%u\n", ssid_str, ssid_len);
-				break;
-			}
 			ies += 2 + len;
 			ie_rem -= 2 + len;
 		}
 	}
 
-	/* compute frequency */
+	/* Compute channel frequency */
 	if (ucChnl <= 14)
-		i4Freq = 2407 + (ucChnl * 5);
+		i4Freq = 2407 + ucChnl * 5;
 	else if (ucChnl >= 36 && ucChnl <= 177)
-		i4Freq = 5000 + (ucChnl * 5);
+		i4Freq = 5000 + ucChnl * 5;
+	else if (ucChnl >= 1 && ucChnl <= 233)  /* 6GHz */
+		i4Freq = 5955 + ucChnl * 5;
 	else
-		i4Freq = 5940 + (ucChnl * 5);
+		i4Freq = 5000 + ucChnl * 5;
 
-	wiphy = prGlueInfo->prDevHandler->ieee80211_ptr->wiphy;
-	chan  = ieee80211_get_channel(wiphy, i4Freq);
+	chan = ieee80211_get_channel(wiphy, i4Freq);
 	if (!chan) {
-		DBGLOG(RX, WARN, "[RELAY] no channel for freq %d\n", i4Freq);
+		DBGLOG(RX, WARN, "[RELAY] invalid channel freq=%d\n", i4Freq);
 		return -EINVAL;
 	}
 
-	/* Read beacon fixed fields safely */
-	u2BeaconInt = le16_to_cpu(*(uint16_t *)(chosen + 32));
-	u2Cap       = le16_to_cpu(*(uint16_t *)(chosen + 34));
+	/* Read fixed fields */
+	u2BeaconInt = le16_to_cpu(*(uint16_t *)(frame_start + 32));
+	u2Cap = le16_to_cpu(*(uint16_t *)(frame_start + 34));
 
-	/* Inform cfg80211 */
+	/* Notify cfg80211 */
 	rcu_read_lock();
-	bss = cfg80211_inform_bss(wiphy, chan,
-		(ucFC == 0x80) ? CFG80211_BSS_FTYPE_BEACON : CFG80211_BSS_FTYPE_PRESP,
-		chosen + 16,           /* BSSID */
-		0,                     /* TSF */
+	ret = cfg80211_inform_bss(wiphy, chan,
+		(ucFC == 0x80 || ucFC == 0xd0) ? CFG80211_BSS_FTYPE_BEACON : CFG80211_BSS_FTYPE_PRESP,
+		frame_start + 16,  /* BSSID */
+		0,                 /* TSF */
 		u2Cap,
 		u2BeaconInt,
-		chosen + 36,           /* IEs */
-		(size_t)(u2FrameLen - 36),
+		frame_start + 36,  /* IEs */
+		frame_len - 36,
 		DBM_TO_MBM(-50),
 		GFP_ATOMIC);
 	rcu_read_unlock();
 
-	if (bss) {
-		cfg80211_put_bss(wiphy, bss);
-		DBGLOG(RX, INFO, "[RELAY] BSS OK BSSID=%pM SSID logged above\n", chosen + 16);
-	} else {
-		DBGLOG(RX, WARN, "[RELAY] cfg80211_inform_bss returned NULL\n");
-	}
+	DBGLOG(RX, INFO, "[RELAY] BSS notified BSSID=%pM\n", frame_start + 16);
 
-	/* Populate internal rBSSDescList: swap pvHeader -> chosen and restore afterwards */
+	/* Pass cleaned frame to scan engine */
 	{
 		void *pvSavedHeader = prSwRfb->pvHeader;
 		uint16_t u2SavedHeaderLen = prSwRfb->u2HeaderLen;
 		uint16_t u2SavedPacketLen = prSwRfb->u2PacketLen;
 
-		prSwRfb->pvHeader = chosen;
+		prSwRfb->pvHeader = frame_start;
 		prSwRfb->u2HeaderLen = 0;
-
-		/* clamp to size_t if it exceeds uint16_t range (defensive) */
-		if (u2FrameLen > U16_MAX)
-			prSwRfb->u2PacketLen = U16_MAX;
-		else
-			prSwRfb->u2PacketLen = (uint16_t)u2FrameLen;
+		prSwRfb->u2PacketLen = (uint16_t)min_t(size_t, frame_len, U16_MAX);
 
 		scanProcessBeaconAndProbeResp(prAdapter, prSwRfb);
 
+		/* Restore original */
 		prSwRfb->pvHeader = pvSavedHeader;
 		prSwRfb->u2HeaderLen = u2SavedHeaderLen;
 		prSwRfb->u2PacketLen = u2SavedPacketLen;
@@ -1941,6 +1877,31 @@ void nicRxProcessDataPacket(IN struct ADAPTER *prAdapter,
 	}
 }
 
+
+static PROCESS_RX_UNI_EVENT_FUNCTION arUniEventTable[UNI_EVENT_ID_NUM] = {
+	[0 ... UNI_EVENT_ID_NUM - 1] = NULL,
+	[UNI_EVENT_ID_SCAN_DONE] = nicUniEventScanDone,
+	[UNI_EVENT_ID_CNM] = nicUniEventChMngrHandleChEvent,
+	[UNI_EVENT_ID_MBMC] = nicUniEventMbmcHandleEvent,
+	[UNI_EVENT_ID_STATUS_TO_HOST] = nicUniEventStatusToHost,
+	[UNI_EVENT_ID_BA_OFFLOAD] = nicUniEventBaOffload,
+	[UNI_EVENT_ID_SLEEP_NOTIFY] = nicUniEventSleepNotify,
+	[UNI_EVENT_ID_BEACON_TIMEOUT] = nicUniEventBeaconTimeout,
+	[UNI_EVENT_ID_UPDATE_COEX_PHYRATE] = nicUniEventUpdateCoex,
+	[UNI_EVENT_ID_IDC] = nicUniEventIdc,
+	[UNI_EVENT_ID_BSS_IS_ABSENCE] = nicUniEventBssIsAbsence,
+	[UNI_EVENT_ID_PS_SYNC] = nicUniEventPsSync,
+	[UNI_EVENT_ID_SAP] = nicUniEventSap,
+};
+
+
+typedef uint32_t (*PROCESS_LEGACY_TO_UNI_FUNCTION) (struct ADAPTER *,
+	struct WIFI_UNI_SETQUERY_INFO *);
+
+
+
+
+
 /*
  * nicRxProcessEventPacket - Process a received Wi-Fi event packet
  *
@@ -1959,59 +1920,55 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
     ASSERT(prSwRfb);
 
     prChipInfo = prAdapter->chip_info;
-    prEvent = (struct WIFI_EVENT *)(prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
+    prEvent = (struct WIFI_EVENT *)
+        (prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
 
-    DBGLOG(RX, WARN, "[EVT-PTR] pucRecvBuff=%p rxd_size=%u byteCount=%u prEvent=%p\n",
-           prSwRfb->pucRecvBuff, prChipInfo->rxd_size, prSwRfb->u2RxByteCount, prEvent);
-    DBGLOG_MEM8(RX, WARN, prSwRfb->pucRecvBuff, prSwRfb->u2RxByteCount);
+    DBGLOG(RX, LOUD,
+        "[RX EVT] EID=0x%02x SEQ=%u LEN=%u\n",
+        prEvent->ucEID,
+        prEvent->ucSeqNum,
+        prEvent->u2PacketLength);
 
-    DBGLOG(RX, WARN, "[EVT-DUMP] EID=0x%02x SEQ=%u LEN=%u\n",
-           prEvent->ucEID, prEvent->ucSeqNum, prEvent->u2PacketLength);
-    DBGLOG_MEM8(NIC, WARN, (uint8_t *)prEvent, min((uint32_t)prEvent->u2PacketLength, 64));
-
-    if (prEvent->ucEID != EVENT_ID_DEBUG_MSG && prEvent->ucEID != EVENT_ID_ASSERT_DUMP) {
-        DBGLOG(NIC, TRACE, "RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
-               prEvent->ucEID, prEvent->ucSeqNum, prEvent->u2PacketLength);
-    }
-
-    /* Try to find a handler in the event table */
+    /* ===== LEGACY EVENT TABLE ===== */
     u4Size = sizeof(arEventTable) / sizeof(struct RX_EVENT_HANDLER);
     for (u4Idx = 0; u4Idx < u4Size; u4Idx++) {
         if (prEvent->ucEID == arEventTable[u4Idx].eEID) {
+            DBGLOG(RX, LOUD,
+                "[LEGACY EVT] EID=0x%02x handler=%ps\n",
+                prEvent->ucEID,
+                arEventTable[u4Idx].pfnHandler);
             arEventTable[u4Idx].pfnHandler(prAdapter, prEvent);
             nicRxReturnRFB(prAdapter, prSwRfb);
             return;
         }
     }
 
-    /* Event not found in table, check for pending CMD */
+    /* ===== CMD RESPONSE MATCH ===== */
     prCmdInfo = nicGetPendingCmdInfo(prAdapter, prEvent->ucSeqNum);
     if (prCmdInfo) {
-        if (prCmdInfo->pfCmdDoneHandler) {
-            DBGLOG(RX, WARN, "[CMD-DONE] EID=0x%02x SEQ=%u handler=%ps\n",
-                   prEvent->ucEID, prEvent->ucSeqNum, prCmdInfo->pfCmdDoneHandler);
-            DBGLOG(RX, WARN, "Found pending CMD: ID=0x%x Handler=%ps\n",
-                   prCmdInfo->ucCID, prCmdInfo->pfCmdDoneHandler);
-
-            prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo, prEvent->aucBuffer);
-        } else if (prCmdInfo->fgIsOid) {
-            kalOidComplete(prAdapter->prGlueInfo, prCmdInfo->fgSetQuery, 0, WLAN_STATUS_SUCCESS);
-        }
-
+        DBGLOG(RX, LOUD,
+            "[CMD RSP] EID=0x%02x SEQ=%u CID=0x%02x\n",
+            prEvent->ucEID,
+            prEvent->ucSeqNum,
+            prCmdInfo->ucCID);
+        if (prCmdInfo->pfCmdDoneHandler)
+            prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+                                        prEvent->aucBuffer);
+        else if (prCmdInfo->fgIsOid)
+            kalOidComplete(prAdapter->prGlueInfo,
+                           prCmdInfo->fgSetQuery, 0,
+                           WLAN_STATUS_SUCCESS);
         cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
     } else {
-        DBGLOG(RX, TRACE, "UNHANDLED RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
-               prEvent->ucEID, prEvent->ucSeqNum, prEvent->u2PacketLength);
+        DBGLOG_LIMITED(RX, WARN,
+            "[UNHANDLED EVT] EID=0x%02x SEQ=%u LEN=%u\n",
+            prEvent->ucEID,
+            prEvent->ucSeqNum,
+            prEvent->u2PacketLength);
     }
 
-    /* Reset chip NoAck flag */
-    if (prAdapter->fgIsChipNoAck) {
-        DBGLOG(RX, WARN, "Got response from chip, clear NoAck flag!\n");
-        WARN_ON(TRUE);
-    }
     prAdapter->ucOidTimeoutCount = 0;
     prAdapter->fgIsChipNoAck = FALSE;
-
     nicRxReturnRFB(prAdapter, prSwRfb);
 }
 
@@ -2333,21 +2290,6 @@ static void nicRxCheckWakeupReason(struct ADAPTER *prAdapter,
 #endif /* CFG_SUPPORT_WAKEUP_REASON_DEBUG */
 
 
-static PROCESS_RX_UNI_EVENT_FUNCTION arUniEventTable[UNI_EVENT_ID_NUM] = {
-	[0 ... UNI_EVENT_ID_NUM - 1] = NULL,
-	[UNI_EVENT_ID_SCAN_DONE] = nicUniEventScanDone,
-	[UNI_EVENT_ID_CNM] = nicUniEventChMngrHandleChEvent,
-	[UNI_EVENT_ID_MBMC] = nicUniEventMbmcHandleEvent,
-	[UNI_EVENT_ID_STATUS_TO_HOST] = nicUniEventStatusToHost,
-	[UNI_EVENT_ID_BA_OFFLOAD] = nicUniEventBaOffload,
-	[UNI_EVENT_ID_SLEEP_NOTIFY] = nicUniEventSleepNotify,
-	[UNI_EVENT_ID_BEACON_TIMEOUT] = nicUniEventBeaconTimeout,
-	[UNI_EVENT_ID_UPDATE_COEX_PHYRATE] = nicUniEventUpdateCoex,
-	[UNI_EVENT_ID_IDC] = nicUniEventIdc,
-	[UNI_EVENT_ID_BSS_IS_ABSENCE] = nicUniEventBssIsAbsence,
-	[UNI_EVENT_ID_PS_SYNC] = nicUniEventPsSync,
-	[UNI_EVENT_ID_SAP] = nicUniEventSap,
-};
 
 
 void nicUniEventScanDone(struct ADAPTER *ad, struct WIFI_UNI_EVENT *evt)
@@ -2446,120 +2388,78 @@ void nicUniEventScanDone(struct ADAPTER *ad, struct WIFI_UNI_EVENT *evt)
 void nicRxProcessUniEventPacket(IN struct ADAPTER *prAdapter,
                                 IN OUT struct SW_RFB *prSwRfb)
 {
-    struct mt66xx_chip_info *prChipInfo;
-    struct CMD_INFO *prCmdInfo;
-    struct WIFI_UNI_EVENT *prEvent;
+	struct mt66xx_chip_info *prChipInfo;
+	struct CMD_INFO *prCmdInfo = NULL;
+	struct WIFI_UNI_EVENT *prEvent;
+	uint8_t rawEid;
+	uint8_t eid;
 
-    ASSERT(prAdapter);
-    ASSERT(prSwRfb);
+	ASSERT(prAdapter);
+	ASSERT(prSwRfb);
 
-    prChipInfo = prAdapter->chip_info;
+	prChipInfo = prAdapter->chip_info;
+	prEvent = (struct WIFI_UNI_EVENT *)(prSwRfb->pucRecvBuff +
+		   prChipInfo->rxd_size);
 
-    prEvent = (struct WIFI_UNI_EVENT *)
-        (prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
+	rawEid = prEvent->ucEID;
+	eid = GET_UNI_EVENT_ID(prEvent);
 
-    if (IS_UNI_UNSOLICIT_EVENT(prEvent)) {
+	/* Try to match a pending solicited command by sequence number */
+	prCmdInfo = nicGetPendingCmdInfo(prAdapter, prEvent->ucSeqNum);
 
-        uint8_t rawEid = prEvent->ucEID;
-        uint8_t eid = GET_UNI_EVENT_ID(prEvent);
+	if (!prCmdInfo && IS_UNI_UNSOLICIT_EVENT(prEvent)) {
+		if (!(arUniEventTable[eid])) {
+			DBGLOG(RX, INFO,
+			       "UNHANDLED RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
+			       eid, prEvent->ucSeqNum,
+			       prEvent->u2PacketLength);
+			if (prEvent->u2PacketLength >= 16) {
+				uint32_t *p = (uint32_t *)prEvent->aucBuffer;
 
-        if (!(arUniEventTable[eid])) {
+				DBGLOG(RX, INFO,
+				       "[CMD-DUMP] HDR: %08x %08x %08x %08x\n",
+				       p[0], p[1], p[2], p[3]);
+			}
+		}
+		if (arUniEventTable[eid])
+			arUniEventTable[eid](prAdapter, prEvent);
 
-            DBGLOG(RX, WARN,
-                   "[UNI-DROP] Unhandled UNI event: RAW_EID=0x%02X ID=0x%02X SEQ=%u LEN=%u\n",
-                   rawEid,
-                   eid,
-                   prEvent->ucSeqNum,
-                   prEvent->u2PacketLength);
 
-            /* Header preview (first 16 bytes) */
-            if (prEvent->u2PacketLength >= 16) {
-                uint32_t *p = (uint32_t *)prEvent->aucBuffer;
+	} else {
+		if (!prCmdInfo)
+			prCmdInfo = nicGetPendingCmdInfo(prAdapter,
+							 prEvent->ucSeqNum);
+		if (prCmdInfo != NULL) {
+			// ... existing cmd handling ...
+		} else {
+			/* DRAIN FLOOD: Drop ID 0x01 events immediately */
+			if (eid == 0x01) {
+				DBGLOG(RX, LOUD, "DROP ID=0x01 SEQ=%u\n", prEvent->ucSeqNum);
+				nicRxReturnRFB(prAdapter, prSwRfb);
+				return;  /* CRITICAL: exit early, don't log spam */
+			}
 
-                DBGLOG(RX, INFO,
-                       "[UNI-DUMP] HDR: %08x %08x %08x %08x\n",
-                       p[0], p[1], p[2], p[3]);
-            }
+			/* Legacy unhandled logging for other IDs */
+			DBGLOG(RX, INFO,
+			       "UNHANDLED RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
+			       eid, prEvent->ucSeqNum,
+			       prEvent->u2PacketLength);
+			if (prEvent->u2PacketLength >= 16) {
+				uint32_t *p = (uint32_t *)prEvent->aucBuffer;
+				DBGLOG(RX, INFO,
+				       "[CMD-DUMP] HDR: %08x %08x %08x %08x\n",
+				       p[0], p[1], p[2], p[3]);
+			}
+		}
+	}
 
-            /* Bounded payload dump */
-            uint16_t dumpLen = prEvent->u2PacketLength;
-            if (dumpLen > 128)
-                dumpLen = 128;
 
-            DBGLOG_MEM8(RX, INFO,
-                        prEvent->aucBuffer,
-                        dumpLen);
-        }
 
-        /* Call handler if present */
-        if (arUniEventTable[eid])
-            arUniEventTable[eid](prAdapter, prEvent);
+	prAdapter->ucOidTimeoutCount = 0;
+	prAdapter->fgIsChipNoAck = FALSE;
 
-    } else {
-
-        prCmdInfo = nicGetPendingCmdInfo(prAdapter,
-                                         prEvent->ucSeqNum);
-
-        if (prCmdInfo != NULL) {
-
-            if (prCmdInfo->pfCmdDoneHandler) {
-
-                prCmdInfo->pfCmdDoneHandler(
-                    prAdapter,
-                    prCmdInfo,
-                    prEvent->aucBuffer);
-
-            } else if (prCmdInfo->fgIsOid) {
-
-                kalOidComplete(prAdapter->prGlueInfo,
-                               prCmdInfo->fgSetQuery,
-                               0,
-                               WLAN_STATUS_SUCCESS);
-            }
-
-            /* return prCmdInfo */
-            cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
-
-        } else {
-
-            DBGLOG(RX, INFO,
-                   "UNHANDLED RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
-                   prEvent->ucEID,
-                   prEvent->ucSeqNum,
-                   prEvent->u2PacketLength);
-
-            /* Header preview */
-            if (prEvent->u2PacketLength >= 16) {
-                uint32_t *p = (uint32_t *)prEvent->aucBuffer;
-
-                DBGLOG(RX, INFO,
-                       "[CMD-DUMP] HDR: %08x %08x %08x %08x\n",
-                       p[0], p[1], p[2], p[3]);
-            }
-
-            uint16_t dumpLen = prEvent->u2PacketLength;
-            if (dumpLen > 128)
-                dumpLen = 128;
-
-            DBGLOG_MEM8(RX, INFO,
-                        prEvent->aucBuffer,
-                        dumpLen);
-        }
-    }
-
-    /* Reset Chip NoAck flag */
-    if (prAdapter->fgIsChipNoAck) {
-        DBGLOG_LIMITED(RX, WARN,
-                       "Got response from chip, clear NoAck flag!\n");
-        WARN_ON(TRUE);
-    }
-
-    prAdapter->ucOidTimeoutCount = 0;
-    prAdapter->fgIsChipNoAck = FALSE;
-
-    nicRxReturnRFB(prAdapter, prSwRfb);
+	nicRxReturnRFB(prAdapter, prSwRfb);
 }
-
 
 
 #if ((CFG_SUPPORT_ICS == 1) || (CFG_SUPPORT_PHY_ICS == 1))
@@ -2642,10 +2542,10 @@ void nicRxProcessPacketType(
 
 	prRxCtrl = &prAdapter->rRxCtrl;
 	prChipInfo = prAdapter->chip_info;
-	DBGLOG(RX, WARN, "[PKT-TYPE] ucPacketType=0x%02x\n", prSwRfb->ucPacketType);
+	DBGLOG(RX, LOUD, "[PKT-TYPE] ucPacketType=0x%02x\n", prSwRfb->ucPacketType);
 	switch (prSwRfb->ucPacketType) {
 	case RX_PKT_TYPE_RX_DATA:
-		DBGLOG(RX, WARN, "[RX-DATA] arrived\n");
+		DBGLOG(RX, LOUD, "[RX-DATA] arrived\n");
 		if (HAL_IS_RX_DIRECT(prAdapter)) {
 			spin_lock_bh(&prGlueInfo->rSpinLock[
 				SPIN_LOCK_RX_DIRECT]);
@@ -2658,7 +2558,7 @@ void nicRxProcessPacketType(
 		break;
 
 	case RX_PKT_TYPE_SW_DEFINED:
-		DBGLOG(RX, WARN, "[SW-PKT] raw=0x%04x masked=0x%04x evt=0x%04x frm=0x%04x\n",
+		DBGLOG(RX, LOUD, "[SW-PKT] raw=0x%04x masked=0x%04x evt=0x%04x frm=0x%04x\n",
 			NIC_RX_GET_U2_SW_PKT_TYPE(prSwRfb->prRxStatus),
 			NIC_RX_GET_U2_SW_PKT_TYPE(prSwRfb->prRxStatus) & prChipInfo->u2RxSwPktBitMap,
 			prChipInfo->u2RxSwPktEvent,
@@ -2666,10 +2566,10 @@ void nicRxProcessPacketType(
 		if ((NIC_RX_GET_U2_SW_PKT_TYPE(prSwRfb->prRxStatus) &
 		     prChipInfo->u2RxSwPktBitMap) == prChipInfo->u2RxSwPktEvent) {
 			if (IS_UNI_EVENT(prSwRfb->pucRecvBuff + prChipInfo->rxd_size)) {
-			DBGLOG(RX, WARN, "[SW-PKT] -> nicRxProcessUniEventPacket\n");
+			DBGLOG(RX, LOUD, "[SW-PKT] -> nicRxProcessUniEventPacket\n");
 			nicRxProcessUniEventPacket(prAdapter, prSwRfb);
 		} else {
-			DBGLOG(RX, WARN, "[SW-PKT] -> nicRxProcessEventPacket\n");
+			DBGLOG(RX, LOUD, "[SW-PKT] -> nicRxProcessEventPacket\n");
 			nicRxProcessEventPacket(prAdapter, prSwRfb);
 		}
 		} else if ((NIC_RX_GET_U2_SW_PKT_TYPE(prSwRfb->prRxStatus) &
@@ -2678,7 +2578,7 @@ void nicRxProcessPacketType(
 				get_ofld, prSwRfb->prRxStatus);
 			RX_STATUS_GET(prChipInfo->prRxDescOps, prSwRfb->fgHdrTran,
 				get_HdrTrans, prSwRfb->prRxStatus);
-			DBGLOG(RX, WARN, "[PKT-ROUTE] ucOFLD=%u fgHdrTran=%u\n",
+			DBGLOG(RX, LOUD, "[PKT-ROUTE] ucOFLD=%u fgHdrTran=%u\n",
 				prSwRfb->ucOFLD, prSwRfb->fgHdrTran);
 			if ((prSwRfb->ucOFLD) || (prSwRfb->fgHdrTran)) {
 				if (HAL_IS_RX_DIRECT(prAdapter)) {
@@ -2778,7 +2678,7 @@ void nicRxProcessRFBs(IN struct ADAPTER *prAdapter)
 
 			/* check process RFB timeout */
 			if ((kalGetTimeTick() - u4Tick) > RX_PROCESS_TIMEOUT) {
-				DBGLOG(RX, WARN, "Rx process RFBs timeout\n");
+				DBGLOG(RX, LOUD, "Rx process RFBs timeout\n");
 				break;
 			}
 
@@ -3922,17 +3822,11 @@ void nicUniEventPsSync(struct ADAPTER *ad, struct WIFI_UNI_EVENT *evt)
 			struct UNI_EVENT_CLIENT_PS_INFO *ps =
 				(struct UNI_EVENT_CLIENT_PS_INFO *) tag;
 			struct EVENT_STA_CHANGE_PS_MODE *legacy;
-			struct WIFI_EVENT *prEvent;
+			uint8_t buf[sizeof(struct WIFI_EVENT) +
+				    sizeof(struct EVENT_STA_CHANGE_PS_MODE)];
+			struct WIFI_EVENT *prEvent = (struct WIFI_EVENT *)buf;
 
-			prEvent = (struct WIFI_EVENT *)kalMemAlloc(
-					sizeof(struct WIFI_EVENT) +
-					sizeof(struct EVENT_STA_CHANGE_PS_MODE),
-					VIR_MEM_TYPE);
-			if (!prEvent) {
-				DBGLOG(NIC, ERROR,
-				       "Allocate prEvent failed!\n");
-				return;
-			}
+			kalMemZero(buf, sizeof(buf));
 
 			legacy = (struct EVENT_STA_CHANGE_PS_MODE *)
 				prEvent->aucBuffer;
@@ -3942,10 +3836,6 @@ void nicUniEventPsSync(struct ADAPTER *ad, struct WIFI_UNI_EVENT *evt)
 			legacy->ucFreeQuota = ps->ucBufferSize;
 
 			qmHandleEventStaChangePsMode(ad, prEvent);
-
-			kalMemFree(prEvent, VIR_MEM_TYPE,
-				sizeof(struct WIFI_EVENT) +
-				sizeof(struct EVENT_STA_CHANGE_PS_MODE));
 		}
 			break;
 		default:

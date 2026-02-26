@@ -157,6 +157,8 @@ u_int8_t mt7902_show_debug_sop_info(struct ADAPTER *prAdapter,
 ********************************************************************************
 */
 
+void wlanMt7902InitPcieInt(struct GLUE_INFO *prGlueInfo);
+
 #endif /* _MT7902_H */
 
 #endif  /* MT7902 */

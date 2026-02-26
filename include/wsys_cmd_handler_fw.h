@@ -169,7 +169,6 @@
 ******************************************************************************
 */
 
-#ifdef CFG_SUPPORT_UNIFIED_COMMAND
 enum ENUM_WIFI_MODE {
 	WMODE_INVALID = 0,
 	WMODE_A = 1 << 0,
@@ -190,7 +189,6 @@ enum ENUM_WIFI_MODE {
 	 */
 	WMODE_COMP = 12,
 };
-#endif
 
 /* Define CMD ID from Host to firmware (v0.07) */
 enum ENUM_CMD_ID {

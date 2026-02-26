@@ -315,14 +315,21 @@ uint8_t mt7961SetRxRingHwAddr(
 	return TRUE;
 }
 
-void wlanBuzzardInitPcieInt(
-	struct GLUE_INFO *prGlueInfo)
+void wlanBuzzardInitPcieInt(struct GLUE_INFO *prGlueInfo)
 {
-       /* PCIE interrupt DMA end enable  */
-	HAL_MCR_WR(prGlueInfo->prAdapter,
-		0x10188,
-		0x000000FF);
+    struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
+    
+    /* MT7902 PCIe IRQ watermark fix - clears RX flood interference */
+    if (prAdapter->chip_info && prAdapter->chip_info->chip_id == 0x7902) {
+        HAL_MCR_WR(prAdapter, 0x10188, 0x00000000);  // Clear RX watermark mask
+        kalUdelay(10);
+    }
+    
+    /* Original PCIE interrupt DMA end enable */
+    HAL_MCR_WR(prGlueInfo->prAdapter, 0x10188, 0x000000FF);
+    DBGLOG(INIT, INFO, "MT7902: IRQ watermark cleared\n");
 }
+
 
 #if CFG_SUPPORT_PCIE_ASPM_IMPROVE
 

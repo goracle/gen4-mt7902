@@ -789,7 +789,6 @@ struct MDNS_INFO_T {
 
 #endif
 
-#if (CFG_SUPPORT_TWT == 1)
 enum _TWT_GET_TSF_REASON {
 	TWT_GET_TSF_FOR_ADD_AGRT_BYPASS = 1,
 	TWT_GET_TSF_FOR_ADD_AGRT = 2,
@@ -823,7 +822,6 @@ struct _TWT_CTRL_T {
 
 
 
-#if (CFG_SUPPORT_TWT_HOTSPOT == 1)
 struct _DL_LIST {
 	struct _DL_LIST *Next;
 	struct _DL_LIST *Prev;
@@ -919,7 +917,6 @@ struct _TWT_HOTSPOT_STA_NODE {
 	uint8_t	agrt_sp_wake_intvl_exponent;
 	struct STA_RECORD *prStaRec;
 };
-#endif
 
 struct _TWT_GET_TSF_CONTEXT_T {
 	enum _TWT_GET_TSF_REASON ucReason;
@@ -929,7 +926,6 @@ struct _TWT_GET_TSF_CONTEXT_T {
 	struct _TWT_PARAMS_T rTWTParams;
 };
 
-#endif
 
 #if CFG_SUPPORT_CSI
 struct CSI_DATA_T;

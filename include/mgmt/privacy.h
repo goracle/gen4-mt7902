@@ -249,10 +249,8 @@ secPrivacySeekForBcEntry(IN struct ADAPTER *prAdapter,
 uint8_t secGetStaIdxByWlanIdx(IN struct ADAPTER *prAdapter,
 			      IN uint8_t ucWlanIdx);
 
-#ifdef CFG_SUPPORT_UNIFIED_COMMAND
 uint8_t secGetWlanIdxByStaIdx(struct ADAPTER *prAdapter,
 				uint8_t ucStaIndex);
-#endif
 
 uint8_t secGetBssIdxByWlanIdx(IN struct ADAPTER *prAdapter,
 			      IN uint8_t ucWlanIdx);

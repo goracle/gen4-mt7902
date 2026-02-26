@@ -1340,7 +1340,6 @@ uint8_t secGetStaIdxByWlanIdx(struct ADAPTER *prAdapter, uint8_t ucWlanIdx)
 		return STA_REC_INDEX_NOT_FOUND;
 }
 
-#ifdef CFG_SUPPORT_UNIFIED_COMMAND
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief  Got the wlan index by STA record index
@@ -1361,7 +1360,6 @@ uint8_t secGetWlanIdxByStaIdx(struct ADAPTER *prAdapter, uint8_t ucStaIndex)
 
 	return WTBL_SIZE;
 }
-#endif
 
 /*----------------------------------------------------------------------------*/
 /*!

@@ -167,9 +167,7 @@
 #define CONNECTION_INFRA_AP		(STA_TYPE_AP|NETWORK_INFRA)
 #define CONNECTION_P2P_GC			(STA_TYPE_STA|NETWORK_P2P)
 #define CONNECTION_P2P_GO			(STA_TYPE_AP|NETWORK_P2P)
-#ifdef CFG_SUPPORT_UNIFIED_COMMAND
 #define CONNECTION_P2P_DEVICE		(NETWORK_P2P)
-#endif
 #define CONNECTION_MESH_STA		(STA_TYPE_STA|NETWORK_MESH)
 #define CONNECTION_MESH_AP		(STA_TYPE_AP|NETWORK_MESH)
 #define CONNECTION_IBSS_ADHOC		(STA_TYPE_ADHOC|NETWORK_IBSS)
@@ -451,8 +449,8 @@ enum ENUM_EXT_CMD_ID {
 	EXT_CMD_ID_DUMP_MEM = 0x57,
 	EXT_CMD_ID_TX_POWER_FEATURE_CTRL = 0x58,
 	EXT_CMD_ID_SER = 0x81,
-#if (CFG_SUPPORT_TWT == 1)
 	EXT_CMD_ID_TWT_AGRT_UPDATE = 0x94,
+#if (CFG_SUPPORT_TWT == 1)
 #endif
 	EXT_CMD_ID_SYSDVT_TEST = 0x99,
 #if (CFG_SUPPORT_802_11AX == 1)
@@ -944,7 +942,6 @@ struct CMD_RX_PACKET_FILTER {
 #define SCHED_SCAN_CHANNEL_TYPE_2G4_ONLY       (2)
 #define SCHED_SCAN_CHANNEL_TYPE_5G_ONLY        (3)
 
-#if (CFG_SUPPORT_TWT == 1)
 /* TWT related definitions */
 #define TWT_AGRT_MAX_NUM        16
 #define TWT_GRP_MAX_NUM         8
@@ -969,7 +966,6 @@ enum _TWT_AGRT_CTRL_CODE_T {
 	TWT_AGRT_CTRL_TEARDOWN,
 	TWT_AGRT_CTRL_RESET
 };
-#endif
 
 /* ID for different MAC Info */
 enum {
@@ -3242,7 +3238,6 @@ struct EVENT_GET_TXPWR_TBL {
 };
 #endif /* CFG_WIFI_TXPWR_TBL_DUMP */
 
-#if (CFG_SUPPORT_TWT == 1)
 /*
  * Important: Used for Communication between Host and WM-CPU,
  * should be packed and DW-aligned and in little-endian format
@@ -3284,7 +3279,6 @@ struct _EXT_CMD_TWT_ARGT_UPDATE_T {
 	/* DW7 ~ DW10 */
 	uint16_t au2StaList[TWT_GRP_MAX_MEMBER_CNT];
 };
-#endif
 
 #if (CFG_SUPPORT_802_11AX == 1)
 struct _CMD_RLM_UPDATE_SR_PARMS_T {
@@ -4170,5 +4164,7 @@ void nicCmdEventLatchTSF(IN struct ADAPTER *prAdapter,
  *                              F U N C T I O N S
  *******************************************************************************
  */
+
+
 
 #endif /* _NIC_CMD_EVENT_H */

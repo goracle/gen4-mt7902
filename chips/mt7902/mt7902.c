@@ -64,7 +64,25 @@
 /*******************************************************************************
 *                              F U N C T I O N S
 ********************************************************************************
+
+
 */
+
+
+void wlanMt7902InitPcieInt(struct GLUE_INFO *prGlueInfo)
+{
+    struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
+    
+    /* MT7902 PCIe IRQ watermark fix - clears RX flood interference */
+    HAL_MCR_WR(prAdapter, 0x10188, 0x00000000);  // Clear RX watermark mask
+    kalUdelay(10);
+    
+    /* Original PCIE interrupt DMA end enable */
+    HAL_MCR_WR(prGlueInfo->prAdapter, 0x10188, 0x000000FF);
+    DBGLOG(INIT, INFO, "MT7902: IRQ watermark cleared\n");
+}
+
+
 
 /*******************************************************************************
 *                            P U B L I C   D A T A
@@ -959,6 +977,7 @@ uint32_t mt7902CoDlImageSectGetPatchInfo(IN struct ADAPTER *prAdapter,
 	return u4Status;
 }
 
+
 uint32_t mt7902CoDlPatchSendSemaCtl(IN struct ADAPTER *prAdapter,
 				    IN uint32_t u4Addr,
 				    IN enum ENUM_IMG_DL_IDX_T eDlIdx,
@@ -1503,7 +1522,7 @@ struct BUS_INFO mt7902_bus_info = {
 	.processSoftwareInterrupt = asicConnac2xProcessSoftwareInterrupt,
 	.softwareInterruptMcu = asicConnac2xSoftwareInterruptMcu,
 	.hifRst = asicConnac2xHifRst,
-	.initPcieInt = wlanBuzzardInitPcieInt,
+	.initPcieInt = wlanMt7902InitPcieInt,
 	.devReadIntStatus = mt7902ReadIntStatus,
 	.DmaShdlInit = mt7902DmashdlInit,
 	.DmaShdlReInit = mt7902DmashdlReInit,

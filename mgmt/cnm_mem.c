@@ -960,55 +960,113 @@ static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
                                     struct CMD_INFO *prCmdInfo,
                                     uint8_t *pucEventBuf)
 {
-    struct EVENT_ACTIVATE_STA_REC *prEventContent =
-        (struct EVENT_ACTIVATE_STA_REC *)pucEventBuf;
-    struct STA_RECORD *prStaRec;
+	struct EVENT_ACTIVATE_STA_REC *prEventContent =
+		(struct EVENT_ACTIVATE_STA_REC *)pucEventBuf;
+	struct STA_RECORD *prStaRec;
 
-    prStaRec = cnmGetStaRecByIndex(prAdapter, prEventContent->ucStaRecIdx);
-    if (!prStaRec)
-        return;
+	prStaRec = cnmGetStaRecByIndex(prAdapter, prEventContent->ucStaRecIdx);
+	if (!prStaRec)
+		return;
 
-    if (kalMemCmp(prStaRec->aucMacAddr, prEventContent->aucMacAddr, MAC_ADDR_LEN) != 0)
-        return;
+	if (kalMemCmp(prStaRec->aucMacAddr, prEventContent->aucMacAddr,
+		      MAC_ADDR_LEN) != 0)
+		return;
 
-    switch (prStaRec->ucStaState) {
-    case STA_STATE_1:
-        DBGLOG(MEM, INFO,
-               "StaRec[%u] FW ACK state=1, advancing to STATE_2\n",
-               prStaRec->ucIndex);
-        cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_2);
-        break;
+	switch (prStaRec->ucStaState) {
+	case STA_STATE_1:
+		/*
+		 * FW ack'd WTBL allocation. Advance to STATE_2, wait for
+		 * next ACK. QM and SAA are not touched yet.
+		 */
+		DBGLOG(MEM, INFO,
+		       "StaRec[%u] FW ACK state=1, advancing to STATE_2\n",
+		       prStaRec->ucIndex);
+		cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_2);
+		break;
 
-    case STA_STATE_2:
-        DBGLOG(MEM, INFO,
-               "StaRec[%u] FW ACK state=2, advancing to STATE_3 and enabling TX + SAA\n",
-               prStaRec->ucIndex);
-        cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_3);
-        qmActivateStaRec(prAdapter, prStaRec);
-        qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
-        aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
-        break;
+	case STA_STATE_2:
+		/*
+		 * FW ack'd STATE_2. Send STATE_3 cmd and wait for its ACK.
+		 *
+		 * Do NOT activate QM or fire SAA here. The auth frame travels
+		 * via WFDMA data ring; the STATE_3 cmd travels via the cmd ring
+		 * (ring 15). There is no ordering guarantee between the two rings
+		 * inside the MCU. If we fire SAA now, the auth frame can reach
+		 * LMAC before the WTBL is armed by STATE_3, and FW flushes it
+		 * immediately with UNI_TXDONE status=33 / sn=0xFFFF.
+		 *
+		 * cnmStaRecChangeState sets ucStaState=3 synchronously, so the
+		 * STATE_3 ACK handler below will see case STA_STATE_3 and fire
+		 * SAA only after FW confirms the WTBL is fully committed.
+		 */
+		DBGLOG(MEM, INFO,
+		       "StaRec[%u] FW ACK state=2, sending STATE_3 cmd"
+		       " (SAA deferred until STATE_3 ACK)\n",
+		       prStaRec->ucIndex);
+		cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_3);
+		break;
 
-    case STA_STATE_3:
-        /*
-         * FW confirms STATE_3 cmd receipt. QM was already armed and SAA
-         * already fired in the STATE_2 handler. Do NOT call qmActivateStaRec
-         * here — it deactivates then reactivates, bouncing TxAllowed 1->0->1
-         * while an auth frame may be in-flight, causing UNI_TXDONE status=33.
-         * Just ensure TxAllowed is pinned high.
-         */
-        DBGLOG(CNM, INFO,
-               "StaRec[%u] FW ACK state=3, confirming TX_ALLOWED\n",
-               prStaRec->ucIndex);
-        qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
-        break;
+	case STA_STATE_3:
+	  DBGLOG(CNM, INFO, "StaRec[%u] FW ACK state=3, WTBL armed — activating QM\n", 
+		 prStaRec->ucIndex);
+    
+	  // ✅ CRITICAL: UNBLOCK QM FIRST (field[32])  
+	  prStaRec->fgIsTxAllowed = TRUE;
+	  qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
+    
+	  // Activate QM infrastructure
+	  qmActivateStaRec(prAdapter, prStaRec);
+	  nicTxUpdateStaRecDefaultRate(prAdapter, prStaRec);
+    
+	  // ✅ MT7902 FULL WTBL programming (field[7])
+#define MT7902_WTBL_WIDX1    0x820d0400  // WIDX=1 entry base
+    
+	  uint32_t u4Value;
+    
+	  // WTBL 0x00: TX_EN + Valid bit
+	  u4Value = 0x00010001;  // Bit0=TX_EN, Bit16=Valid
+	  kalDevRegWrite(prAdapter->prGlueInfo, MT7902_WTBL_WIDX1 + 0x00, u4Value);
+    
+	  // WTBL 0x04: MAC addr bytes 0-3 (3c:78:95:ad → reversed endian)
+	  u4Value = (prStaRec->aucMacAddr[0] << 24) | 
+	    (prStaRec->aucMacAddr[1] << 16) |
+	    (prStaRec->aucMacAddr[2] <<  8) | 
+	    prStaRec->aucMacAddr[3];
+	  kalDevRegWrite(prAdapter->prGlueInfo, MT7902_WTBL_WIDX1 + 0x04, u4Value);
+    
+	  // WTBL 0x08: MAC addr bytes 4-5 + STA type
+	  u4Value = (prStaRec->aucMacAddr[4] <<  8) | 
+	    prStaRec->aucMacAddr[5] | 
+	    (1 << 16);  // Bit16=STA type
+	  kalDevRegWrite(prAdapter->prGlueInfo, MT7902_WTBL_WIDX1 + 0x08, u4Value);
+    
+	  // WTBL 0x10: TX rates (match your field[20]=0x4b)
+	  u4Value = 0x004B0000;
+	  kalDevRegWrite(prAdapter->prGlueInfo, MT7902_WTBL_WIDX1 + 0x10, u4Value);
+    
+	  // Force final state sync (field[7][3])
+	  prStaRec->ucStaState = STA_STATE_3;
+	  prStaRec->fgIsTxAllowed = TRUE;           // [32][1] !!!
+    
+	  DBGLOG(CNM, INFO, "MT7902 STA[%d] TX_ENABLED [7][%d] TxAllowed[%d]\n", 
+		 prStaRec->ucIndex, prStaRec->ucStaState, prStaRec->fgIsTxAllowed);
+    
+	  cnmDumpStaRec(prAdapter, prStaRec->ucIndex);  // Verify [7][3],[32][1]
+    
+	  secPrivacySeekForEntry(prAdapter, prStaRec);
+	  aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
+	  break;
 
-    default:
-        DBGLOG(MEM, INFO, "StaRec[%u] FW ACK state=%u (no-op)\n",
-               prStaRec->ucIndex, prStaRec->ucStaState);
-        break;
-    }
+
+	default:
+		DBGLOG(MEM, INFO, "StaRec[%u] FW ACK state=%u (no-op)\n",
+		       prStaRec->ucIndex, prStaRec->ucStaState);
+		break;
+	}
 }
+
+
+
 
 /*----------------------------------------------------------------------------*/
 /*!

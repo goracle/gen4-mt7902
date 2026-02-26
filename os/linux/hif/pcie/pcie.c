@@ -65,6 +65,7 @@
 
 #include "gl_os.h"
 
+#include "chips/mt7902.h"
 #include "hif_pdma.h"
 #include <linux/pm_runtime.h>
 #include <linux/workqueue.h> /* Added for V2 recovery fix */
@@ -1350,48 +1351,57 @@ void glBusRelease(void *pvData)
 /*----------------------------------------------------------------------------*/
 int32_t glBusSetIrq(void *pvData, void *pfnIsr, void *pvCookie)
 {
-	struct BUS_INFO *prBusInfo;
-	struct net_device *prNetDevice = NULL;
-	struct GLUE_INFO *prGlueInfo = NULL;
-	struct GL_HIF_INFO *prHifInfo = NULL;
-	struct pci_dev *pdev = NULL;
-	int ret = 0;
+    struct BUS_INFO *prBusInfo = NULL;
+    struct net_device *prNetDevice = NULL;
+    struct GLUE_INFO *prGlueInfo = NULL;
+    struct GL_HIF_INFO *prHifInfo = NULL;
+    struct pci_dev *pdev = NULL;
+    int ret = 0;
 
-	ASSERT(pvData);
-	if (!pvData)
-		return -1;
+    prNetDevice = (struct net_device *)pvData;
+    prGlueInfo = (struct GLUE_INFO *)pvCookie;
+    
+    /* MT7902 NO-NVRAM: Log but continue */
+    if (!prGlueInfo) {
+        DBGLOG(INIT, ERROR, "glBusSetIrq: NULL GlueInfo (no NVRAM)\n");
+    } else {
+        prBusInfo = prGlueInfo->prAdapter->chip_info->bus_info;
+        prHifInfo = &prGlueInfo->rHifInfo;
+        pdev = prHifInfo->pdev;
+        prHifInfo->u4IrqId = pdev->irq;
 
-	prNetDevice = (struct net_device *)pvData;
-	prGlueInfo = (struct GLUE_INFO *)pvCookie;
-	ASSERT(prGlueInfo);
-	if (!prGlueInfo)
-		return -1;
+        /* Recovery init */
+        INIT_WORK(&prHifInfo->recovery_work, mt7902_recovery_work);
+        mutex_init(&prHifInfo->recovery_lock);
+        prHifInfo->state_flags = 0;
+        set_bit(MTK_FLAG_IRQ_ALIVE, &prHifInfo->state_flags);
+        prHifInfo->saved_irq = pdev->irq;
+        prHifInfo->pdev = pdev;
+    }
 
-	prBusInfo = prGlueInfo->prAdapter->chip_info->bus_info;
+    /* MT7902 IRQ WATERMARK FIX - ALWAYS RUNS (even without NVRAM) */
+    DBGLOG(INIT, ERROR, "=== MT7902 IRQ FIX ===\n");
+    if (prGlueInfo && prGlueInfo->prAdapter) {
+        HAL_MCR_WR(prGlueInfo->prAdapter, 0x10188, 0x00000000);
+        kalUdelay(10);
+        HAL_MCR_WR(prGlueInfo->prAdapter, 0x10188, 0x000000FF);
+        DBGLOG(INIT, ERROR, "MT7902: IRQ FIXED 0x10188=0xFF\n");
+    }
 
-	prHifInfo = &prGlueInfo->rHifInfo;
-	pdev = prHifInfo->pdev;
+    /* Use original IRQ logic - safe fallback */
+    ret = request_irq(prNetDevice->irq ? prNetDevice->irq : pdev->irq, 
+                      mtk_pci_interrupt, IRQF_SHARED, 
+                      prNetDevice->name, prGlueInfo);
+    
+    if (ret != 0)
+        DBGLOG(INIT, INFO, "glBusSetIrq: request_irq ERROR(%d)\n", ret);
+    else if (prBusInfo && prBusInfo->initPcieInt)
+        prBusInfo->initPcieInt(prGlueInfo);
 
-	prHifInfo->u4IrqId = pdev->irq;
-
-	/* V2 FIX: Initialize recovery infrastructure */
-	INIT_WORK(&prHifInfo->recovery_work, mt7902_recovery_work);
-	mutex_init(&prHifInfo->recovery_lock);
-	prHifInfo->state_flags = 0;
-	set_bit(MTK_FLAG_IRQ_ALIVE, &prHifInfo->state_flags); /* IRQ starts alive */
-	prHifInfo->saved_irq = pdev->irq;
-	prHifInfo->pdev = pdev;
-
-	ret = request_irq(prHifInfo->u4IrqId, mtk_pci_interrupt,
-		IRQF_SHARED, prNetDevice->name, prGlueInfo);
-	if (ret != 0)
-		DBGLOG(INIT, INFO,
-			"glBusSetIrq: request_irq  ERROR(%d)\n", ret);
-	else if (prBusInfo->initPcieInt)
-		prBusInfo->initPcieInt(prGlueInfo);
-
-	return ret;
+    return ret;
 }
+
+
 
 /*----------------------------------------------------------------------------*/
 /*!

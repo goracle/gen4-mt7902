@@ -1479,14 +1479,15 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 		u4Status = wlanCheckWifiFunc(prAdapter, TRUE);
 
 		if (u4Status == WLAN_STATUS_SUCCESS) {
-			/* Apply deferred US override only if flagged and
-			 * FW is ready. */
+		  /* Apply deferred US override only if flagged and
+		   * FW is ready. */
+
+		  // Your existing ACPI D0 lines here:
+		  DBGLOG(INIT, INFO, "Setting adapter to ACPI D0 state\n");
+		  prAdapter->rAcpiState = ACPI_STATE_D0;
+		  prAdapter->fgIsRadioOff = FALSE;
 
 
-			// 🔧 ADD THESE 3 LINES HERE:
-			DBGLOG(INIT, INFO, "Setting adapter to ACPI D0 state\n");
-			prAdapter->rAcpiState = ACPI_STATE_D0;
-			prAdapter->fgIsRadioOff = FALSE;
 
 
 #if defined(_HIF_SDIO)
