@@ -1007,54 +1007,61 @@ static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
 		break;
 
 	case STA_STATE_3:
-	  DBGLOG(CNM, INFO, "StaRec[%u] FW ACK state=3, WTBL armed — activating QM\n", 
+	  DBGLOG(CNM, INFO,
+		 "StaRec[%u] FW ACK state=3 — activating TX path\n",
 		 prStaRec->ucIndex);
-    
-	  // ✅ CRITICAL: UNBLOCK QM FIRST (field[32])  
+
+	  /* -------------------------------------------------- */
+	  /* 1️⃣ Ensure firmware has finished WTBL programming  */
+	  /* -------------------------------------------------- */
+
+	  if (!prStaRec->fgIsInUse) {
+	    DBGLOG(CNM, ERROR,
+		   "StaRec[%u] not in use — abort TX enable\n",
+		   prStaRec->ucIndex);
+	    break;
+	  }
+
+	  /* Do NOT manually write WTBL registers here.
+	   * Firmware should have programmed WTBL via
+	   * UNI_CMD_STA_REC_UPDATE.
+	   */
+
+	  /* -------------------------------------------------- */
+	  /* 2️⃣ Activate QM infrastructure                     */
+	  /* -------------------------------------------------- */
+
+	  qmActivateStaRec(prAdapter, prStaRec);
+
+	  /* Set default rate through normal driver path */
+	  nicTxUpdateStaRecDefaultRate(prAdapter, prStaRec);
+
+	  /* -------------------------------------------------- */
+	  /* 3️⃣ Unblock TX at driver layer                     */
+	  /* -------------------------------------------------- */
+
 	  prStaRec->fgIsTxAllowed = TRUE;
 	  qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
-    
-	  // Activate QM infrastructure
-	  qmActivateStaRec(prAdapter, prStaRec);
-	  nicTxUpdateStaRecDefaultRate(prAdapter, prStaRec);
-    
-	  // ✅ MT7902 FULL WTBL programming (field[7])
-#define MT7902_WTBL_WIDX1    0x820d0400  // WIDX=1 entry base
-    
-	  uint32_t u4Value;
-    
-	  // WTBL 0x00: TX_EN + Valid bit
-	  u4Value = 0x00010001;  // Bit0=TX_EN, Bit16=Valid
-	  kalDevRegWrite(prAdapter->prGlueInfo, MT7902_WTBL_WIDX1 + 0x00, u4Value);
-    
-	  // WTBL 0x04: MAC addr bytes 0-3 (3c:78:95:ad → reversed endian)
-	  u4Value = (prStaRec->aucMacAddr[0] << 24) | 
-	    (prStaRec->aucMacAddr[1] << 16) |
-	    (prStaRec->aucMacAddr[2] <<  8) | 
-	    prStaRec->aucMacAddr[3];
-	  kalDevRegWrite(prAdapter->prGlueInfo, MT7902_WTBL_WIDX1 + 0x04, u4Value);
-    
-	  // WTBL 0x08: MAC addr bytes 4-5 + STA type
-	  u4Value = (prStaRec->aucMacAddr[4] <<  8) | 
-	    prStaRec->aucMacAddr[5] | 
-	    (1 << 16);  // Bit16=STA type
-	  kalDevRegWrite(prAdapter->prGlueInfo, MT7902_WTBL_WIDX1 + 0x08, u4Value);
-    
-	  // WTBL 0x10: TX rates (match your field[20]=0x4b)
-	  u4Value = 0x004B0000;
-	  kalDevRegWrite(prAdapter->prGlueInfo, MT7902_WTBL_WIDX1 + 0x10, u4Value);
-    
-	  // Force final state sync (field[7][3])
+
+	  /* Sync state */
 	  prStaRec->ucStaState = STA_STATE_3;
-	  prStaRec->fgIsTxAllowed = TRUE;           // [32][1] !!!
-    
-	  DBGLOG(CNM, INFO, "MT7902 STA[%d] TX_ENABLED [7][%d] TxAllowed[%d]\n", 
-		 prStaRec->ucIndex, prStaRec->ucStaState, prStaRec->fgIsTxAllowed);
-    
-	  cnmDumpStaRec(prAdapter, prStaRec->ucIndex);  // Verify [7][3],[32][1]
-    
+
+	  DBGLOG(CNM, INFO,
+		 "MT7902 STA[%u] ACTIVE — TxAllowed=%u\n",
+		 prStaRec->ucIndex,
+		 prStaRec->fgIsTxAllowed);
+
+	  cnmDumpStaRec(prAdapter, prStaRec->ucIndex);
+
+	  /* -------------------------------------------------- */
+	  /* 4️⃣ Security + Pending Auth/Assoc                  */
+	  /* -------------------------------------------------- */
+
 	  secPrivacySeekForEntry(prAdapter, prStaRec);
-	  aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
+
+	  if (prStaRec->ucStaState == STA_STATE_3 && prStaRec->fgIsTxAllowed) {
+	    aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
+	  }
 	  break;
 
 

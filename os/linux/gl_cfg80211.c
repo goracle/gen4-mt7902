@@ -1606,47 +1606,29 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	struct ADAPTER *prAdapter;
 	struct AIS_FSM_INFO *prAisFsmInfo;
 	struct CONNECTION_SETTINGS *prConnSettings;
-	struct IEEE_802_11_MIB *prMib;
-	struct PARAM_CONNECT rNewSsid;
-	uint8_t aucSsid[32];
-	const u8 *ssid_ie;
-	uint32_t rStatus, u4BufLen;
+	struct BSS_DESC *prBssDesc;
 	uint8_t ucBssIndex;
 	enum ENUM_PARAM_AUTH_MODE eAuthMode;
 	enum ENUM_WEP_STATUS eEncStatus;
+	struct PARAM_CONNECT rNewSsid;
+	uint32_t u4BufLen;
+	uint32_t rStatus;
 
-	if (!prGlueInfo) {
-		DBGLOG(REQ, ERROR, "[AUTH] NULL glue info\n");
+	if (!prGlueInfo)
 		return -EINVAL;
-	}
-
 	prAdapter = prGlueInfo->prAdapter;
-	if (!prAdapter) {
-		DBGLOG(REQ, ERROR, "[AUTH] NULL adapter\n");
+	if (!prAdapter)
 		return -EINVAL;
-	}
 
 	ucBssIndex = wlanGetBssIdx(ndev);
 	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
 	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
-	prMib = aisGetMib(prAdapter, ucBssIndex);
-
-	if (!prAisFsmInfo || !prConnSettings || !prMib) {
-		DBGLOG(REQ, ERROR, "[AUTH] NULL FSM/settings for bss=%d\n", ucBssIndex);
+	if (!prAisFsmInfo || !prConnSettings)
 		return -EINVAL;
-	}
 
 	DBGLOG(REQ, INFO,
-		"[AUTH] called: bss=%d state=%d auth_type=%d target=" MACSTR "\n",
-		ucBssIndex, prAisFsmInfo->eCurrentState,
-		req->auth_type, MAC2STR(req->bss->bssid));
-
-	if (prAisFsmInfo->eCurrentState == AIS_STATE_REQ_CHANNEL_JOIN ||
-		prAisFsmInfo->eCurrentState == AIS_STATE_JOIN) {
-		DBGLOG(REQ, INFO, "[AUTH] already in join (state=%d), ignoring\n",
-			prAisFsmInfo->eCurrentState);
-		return 0;
-	}
+		"[AUTH] bss=%d auth_type=%d target=" MACSTR "\n",
+		ucBssIndex, req->auth_type, MAC2STR(req->bss->bssid));
 
 	switch (req->auth_type) {
 	case NL80211_AUTHTYPE_SAE:
@@ -1663,46 +1645,52 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	kalIoctl(prGlueInfo, wlanoidSetAuthMode,
 		&eAuthMode, sizeof(eAuthMode),
 		FALSE, FALSE, FALSE, &u4BufLen);
-
 	kalIoctl(prGlueInfo, wlanoidSetEncryptionStatus,
 		&eEncStatus, sizeof(eEncStatus),
 		FALSE, FALSE, FALSE, &u4BufLen);
 
-	/* Extract SSID from BSS IEs into local buffer before RCU unlock */
-	kalMemZero(aucSsid, sizeof(aucSsid));
-	kalMemZero(&rNewSsid, sizeof(rNewSsid));
-	rcu_read_lock();
-	ssid_ie = cfg80211_find_ie(WLAN_EID_SSID,
-		rcu_dereference(req->bss->ies)->data,
-		rcu_dereference(req->bss->ies)->len);
-	if (ssid_ie && ssid_ie[1] <= 32) {
-		kalMemCopy(aucSsid, ssid_ie + 2, ssid_ie[1]);
-		rNewSsid.u4SsidLen = ssid_ie[1];
+	/* Look up the BSS_DESC for iwd's chosen BSSID and pin it as target.
+	 * This ensures SEARCH uses iwd's choice directly without policy
+	 * engine interference, and clears any stale target from a prior
+	 * failed attempt. */
+	prBssDesc = scanSearchBssDescByBssid(prAdapter,
+		(uint8_t *)req->bss->bssid);
+	if (prBssDesc) {
+		prAisFsmInfo->prTargetBssDesc = prBssDesc;
+		DBGLOG(REQ, INFO,
+			"[AUTH] Pinned target BSS: " MACSTR " CH %d\n",
+			MAC2STR(prBssDesc->aucBSSID),
+			prBssDesc->ucChannelNum);
+	} else {
+		prAisFsmInfo->prTargetBssDesc = NULL;
+		DBGLOG(REQ, WARN,
+			"[AUTH] BSS " MACSTR " not in scan cache, clearing target\n",
+			MAC2STR(req->bss->bssid));
 	}
-	rcu_read_unlock();
 
-	rNewSsid.pucSsid = aucSsid;
+	/* Kick the AIS FSM */
+	kalMemZero(&rNewSsid, sizeof(rNewSsid));
 	rNewSsid.pucBssid = (uint8_t *)req->bss->bssid;
-	rNewSsid.pucBssidHint = NULL;
-	rNewSsid.u4CenterFreq = req->bss->channel ? req->bss->channel->center_freq : 0;
+	rNewSsid.u4CenterFreq = req->bss->channel ?
+		req->bss->channel->center_freq : 0;
+	rNewSsid.pucSsid = NULL;
+	rNewSsid.u4SsidLen = 0;
 	rNewSsid.ucBssIdx = ucBssIndex;
-
-	DBGLOG(REQ, INFO, "[AUTH] connect: SSID='%.*s' BSSID=" MACSTR " freq=%u\n",
-		rNewSsid.u4SsidLen, aucSsid,
-		MAC2STR(req->bss->bssid), rNewSsid.u4CenterFreq);
 
 	rStatus = kalIoctl(prGlueInfo, wlanoidSetConnect,
 		(void *)&rNewSsid, sizeof(struct PARAM_CONNECT),
 		FALSE, FALSE, FALSE, &u4BufLen);
 
-	if (rStatus != WLAN_STATUS_SUCCESS && rStatus != 0x103) {
-		DBGLOG(REQ, ERROR, "[AUTH] wlanoidSetConnect failed: 0x%x\n", rStatus);
-		return -EINVAL;
+	if (rStatus != WLAN_STATUS_SUCCESS) {
+		DBGLOG(REQ, ERROR,
+			"[AUTH] wlanoidSetConnect failed: 0x%x\n", rStatus);
+		return -EIO;
 	}
+
+	prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
 
 	return 0;
 }
-
 
 /* Add .disassoc method to avoid kernel WARN_ON when insmod wlan.ko */
 /*
@@ -5065,69 +5053,67 @@ int mtk_cfg80211_sched_scan_stop(IN struct wiphy *wiphy,
  */
 
 int mtk_cfg80211_assoc(struct wiphy *wiphy,
-                       struct net_device *ndev, struct cfg80211_assoc_request *req)
+		       struct net_device *ndev,
+		       struct cfg80211_assoc_request *req)
 {
-    struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
-    struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
-    struct AIS_FSM_INFO *prAisFsmInfo;
-    struct CONNECTION_SETTINGS *prConnSettings;
-    uint32_t rStatus;
-    uint32_t u4BufLen;
-    uint8_t ucBssIndex = wlanGetBssIdx(ndev);
-    enum ENUM_PARAM_AUTH_MODE eAuthMode = AUTH_MODE_WPA2_PSK; // Default to WPA2-PSK for 'H'
-    enum ENUM_WEP_STATUS eEncStatus = ENUM_ENCRYPTION3_ENABLED; // Default to CCMP/AES
+	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *)wiphy_priv(wiphy);
+	struct ADAPTER *prAdapter;
+	struct AIS_FSM_INFO *prAisFsmInfo;
+	struct CONNECTION_SETTINGS *prConnSettings;
+	struct PARAM_CONNECT rNewSsid;
+	uint8_t aucSsid[32];
+	const u8 *ssid_ie;
+	uint32_t rStatus, u4BufLen;
+	uint8_t ucBssIndex;
 
-    prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
-    prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
+	if (!prGlueInfo || !prGlueInfo->prAdapter)
+		return -EINVAL;
 
-    /* LOBOTOMY 1: Bypass State Verification.
-       Force the state to 'Connecting' so we don't return -EINVAL. */
-    prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
-    prConnSettings->bss = req->bss;
+	prAdapter = prGlueInfo->prAdapter;
+	ucBssIndex = wlanGetBssIdx(ndev);
+	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
+	if (!prAisFsmInfo || !prConnSettings)
+		return -EINVAL;
 
-    DBGLOG(REQ, INFO, "[ASSOC-LOBOTOMY] Forcing association for SSID 'H'\n");
+	DBGLOG(REQ, INFO, "[ASSOC] bss=%d target=" MACSTR "\n",
+		ucBssIndex, MAC2STR(req->bss->bssid));
 
-    /* LOBOTOMY 2: Skip Runtime PM and MMIO checks.
-       These are often the cause of the 0x103 (Pending) hangs. */
+	/* Extract SSID from BSS IEs */
+	kalMemZero(aucSsid, sizeof(aucSsid));
+	kalMemZero(&rNewSsid, sizeof(rNewSsid));
+	rcu_read_lock();
+	ssid_ie = cfg80211_find_ie(WLAN_EID_SSID,
+		rcu_dereference(req->bss->ies)->data,
+		rcu_dereference(req->bss->ies)->len);
+	if (ssid_ie && ssid_ie[1] <= 32) {
+		kalMemCopy(aucSsid, ssid_ie + 2, ssid_ie[1]);
+		rNewSsid.u4SsidLen = ssid_ie[1];
+	}
+	rcu_read_unlock();
 
-    /* LOBOTOMY 3: Strip BSSID mismatch logic.
-       In roaming or rapid reconnects, the driver's cached arBssid 
-       often won't match req->bss->bssid yet. We trust iwd. */
+	rNewSsid.pucSsid = aucSsid;
+	rNewSsid.pucBssid = (uint8_t *)req->bss->bssid;
+	rNewSsid.pucBssidHint = NULL;
+	rNewSsid.u4CenterFreq = req->bss->channel ?
+		req->bss->channel->center_freq : 0;
+	rNewSsid.ucBssIdx = ucBssIndex;
 
-    /* LOBOTOMY 4: Simplified Security Setup.
-       Instead of parsing every IE, we jump straight to pushing the 
-       security parameters to the OID. We'll use the request's 
-       AKM and Ciphers but ignore the internal 'PrivacyInvoke' flags. */
+	prConnSettings->fgIsSendAssoc = TRUE;
+	prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
 
-    /* Set Encryption Status (Lobotomized) */
-    kalIoctl(prGlueInfo, wlanoidSetEncryptionStatus,
-             &eEncStatus, sizeof(eEncStatus),
-             FALSE, FALSE, FALSE, &u4BufLen);
+	rStatus = kalIoctl(prGlueInfo, wlanoidSetConnect,
+		(void *)&rNewSsid, sizeof(struct PARAM_CONNECT),
+		FALSE, FALSE, FALSE, &u4BufLen);
 
-    /* Set Auth Mode (Lobotomized - assuming WPA2/WPA3 for modern H) */
-    kalIoctl(prGlueInfo, wlanoidSetAuthMode,
-             &eAuthMode, sizeof(eAuthMode),
-             FALSE, FALSE, FALSE, &u4BufLen);
+	if (rStatus != WLAN_STATUS_SUCCESS && rStatus != 0x103) {
+		DBGLOG(REQ, ERROR, "[ASSOC] wlanoidSetConnect failed: 0x%x\n",
+			rStatus);
+		return -EINVAL;
+	}
 
-    /* LOBOTOMY 5: The Final Push.
-       Force the wlanoidSetBssid call. This is what actually triggers 
-       the firmware's association frame. */
-    prConnSettings->fgIsSendAssoc = TRUE;
-    
-    rStatus = kalIoctlByBssIdx(prGlueInfo, wlanoidSetBssid,
-                               (void *)req->bss->bssid, MAC_ADDR_LEN, 
-                               FALSE, FALSE, TRUE, &u4BufLen, ucBssIndex);
-
-    /* Again, we treat PENDING as SUCCESS to keep the kernel happy. */
-    if (rStatus == 0x103) {
-        DBGLOG(REQ, INFO, "[ASSOC-LOBOTOMY] Swallowing 0x103 - dispatching...\n");
-        rStatus = 0;
-    }
-
-    DBGLOG(REQ, INFO, "[ASSOC-LOBOTOMY] Association request sent to firmware.\n");
-    return 0;
+	return 0;
 }
-
 
 
 #if CFG_SUPPORT_TDLS

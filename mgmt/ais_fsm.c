@@ -7647,7 +7647,7 @@ void aisFsmFirePendingSAA(struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	}
 
 	DBGLOG(AIS, INFO,
-	       "[AIS%d] STATE_1 ACK confirmed: StaRec[%u] ucStaState=%u firing SAA\n",
+	       "[AIS%d] STATE_3 ACK confirmed: StaRec[%u] ucStaState=%u firing SAA\n",
 	       ucBssIndex, prStaRec->ucIndex, prStaRec->ucStaState);
 
 	/* StaRec was already activated by cnmStaRecHandleEventPkt on STATE_2 ACK.
