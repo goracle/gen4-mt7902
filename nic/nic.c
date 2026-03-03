@@ -556,12 +556,8 @@ uint32_t nicProcessIST(IN struct ADAPTER *prAdapter)
 
 		/* 3. No Interrupts Pending */
 		if (u4IntStatus == 0) {
-			if (i == 0) {
+			if (i == 0)
 				u4Status = WLAN_STATUS_NOT_INDICATING;
-				DBGLOG(HAL, INFO, "MT7902-FIX: IST no IRQs at first iteration\n");
-			} else {
-				DBGLOG(HAL, WARN, "MT7902-FIX: IST no IRQs at iter %u\n", i);
-			}
 			break;
 		}
 
@@ -602,7 +598,7 @@ uint32_t nicProcessIST_impl(IN struct ADAPTER *prAdapter,
 	ASSERT(prAdapter);
 
 	prAdapter->u4IntStatus = u4IntStatus;
-	DBGLOG(INTR, WARN, "[INT-DISPATCH] u4IntStatus=0x%08x\n", u4IntStatus);
+	DBGLOG(INTR, LOUD, "[INT-DISPATCH] u4IntStatus=0x%08x\n", u4IntStatus);
 
 	/* Process each of the interrupt status consequently */
 	prIntEventMap = &arIntEventMapTable[0];

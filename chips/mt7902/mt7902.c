@@ -414,7 +414,7 @@ void mt7902Connac2xProcessRxInterrupt(
 	union WPDMA_INT_STA_STRUCT rIntrStatus;
 
 	rIntrStatus = (union WPDMA_INT_STA_STRUCT)prHifInfo->u4IntStatus;
-	DBGLOG(HAL, WARN, "[INT-PROC] raw=0x%08x\n", prHifInfo->u4IntStatus);
+	DBGLOG(HAL, LOUD, "[INT-PROC] raw=0x%08x\n", prHifInfo->u4IntStatus);
 
 	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_2)
 		halRxReceiveRFBs(prAdapter, RX_RING_DATA_IDX_0, TRUE);
@@ -585,7 +585,7 @@ void mt7902ReadIntStatus(
 		WF_WFDMA_HOST_DMA0_HOST_INT_STA_ADDR, &u4RegValue);
 	{
 	  //static int once;
-		DBGLOG(HAL, WARN, "[INT-RAW] u4RegValue=0x%08x rxdone_bits=0x%08x\n", u4RegValue, prBusInfo->host_int_rxdone_bits);
+		DBGLOG(HAL, LOUD, "[INT-RAW] u4RegValue=0x%08x rxdone_bits=0x%08x\n", u4RegValue, prBusInfo->host_int_rxdone_bits);
 	}
 
 	if (HAL_IS_CONNAC2X_EXT_RX_DONE_INTR(u4RegValue,
