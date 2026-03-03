@@ -363,14 +363,15 @@ uint32_t authSendAuthFrame(IN struct ADAPTER *prAdapter,
 	ASSERT(prStaRec->ucBssIndex <= prAdapter->ucHwBssIdNum);
 	prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, prStaRec->ucBssIndex);
 
-	authComposeAuthFrameHeaderAndFF(prAdapter, prStaRec, (uint8_t *)
-					 ((uint32_t) (prMsduInfo->prPacket) +
-					  MAC_TX_RESERVED_FIELD),
-					 prStaRec->aucMacAddr,
-					 prBssInfo->aucOwnMacAddr,
-					 prStaRec->ucAuthAlgNum,
-					 u2TransactionSeqNum,
-					 STATUS_CODE_RESERVED);
+
+	authComposeAuthFrameHeaderAndFF(prAdapter, prStaRec, prStaRec->ucBssIndex,
+					(uint8_t *)((uint32_t) (prMsduInfo->prPacket) + MAC_TX_RESERVED_FIELD),
+					prStaRec->aucMacAddr,
+					prBssInfo->aucOwnMacAddr,
+					prStaRec->ucAuthAlgNum,
+					u2TransactionSeqNum,
+					STATUS_CODE_RESERVED);
+
 
 	u2PayloadLen =
 	    (AUTH_ALGORITHM_NUM_FIELD_LEN +
@@ -532,6 +533,7 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
 
     if (prStaRec) {
         ucFinalWlanIndex = prStaRec->ucWlanIndex;
+	u2AuthAlgNum = prStaRec->ucAuthAlgNum;  // <-- ADD THIS
 
         if (ucFinalWlanIndex == 0) {
             DBGLOG(SAA, ERROR,
@@ -1183,6 +1185,11 @@ authComposeDeauthFrameHeaderAndFF(IN uint8_t *pucBuffer,
 	ASSERT(aucPeerMACAddress);
 	ASSERT(aucMACAddress);
 	ASSERT(aucBssid);
+
+	if (pucBuffer) {
+	  DBGLOG(SAA, ERROR, "[AUTH-BYTES] Algorithm field: 0x%02x 0x%02x\n",
+		 pucBuffer[26], pucBuffer[27]);
+	}
 
 	prDeauthFrame = (struct WLAN_DEAUTH_FRAME *)pucBuffer;
 

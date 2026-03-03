@@ -1011,10 +1011,6 @@ static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
 		 "StaRec[%u] FW ACK state=3 — activating TX path\n",
 		 prStaRec->ucIndex);
 
-	  /* -------------------------------------------------- */
-	  /* 1️⃣ Ensure firmware has finished WTBL programming  */
-	  /* -------------------------------------------------- */
-
 	  if (!prStaRec->fgIsInUse) {
 	    DBGLOG(CNM, ERROR,
 		   "StaRec[%u] not in use — abort TX enable\n",
@@ -1022,48 +1018,28 @@ static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
 	    break;
 	  }
 
-	  /* Do NOT manually write WTBL registers here.
-	   * Firmware should have programmed WTBL via
-	   * UNI_CMD_STA_REC_UPDATE.
-	   */
-
-	  /* -------------------------------------------------- */
-	  /* 2️⃣ Activate QM infrastructure                     */
-	  /* -------------------------------------------------- */
-
+	  /* Activate QM */
 	  qmActivateStaRec(prAdapter, prStaRec);
 
-	  /* Set default rate through normal driver path */
+	  /* Set default rate */
 	  nicTxUpdateStaRecDefaultRate(prAdapter, prStaRec);
 
-	  /* -------------------------------------------------- */
-	  /* 3️⃣ Unblock TX at driver layer                     */
-	  /* -------------------------------------------------- */
-
+	  /* Allow TX */
 	  prStaRec->fgIsTxAllowed = TRUE;
 	  qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
-
-	  /* Sync state */
-	  prStaRec->ucStaState = STA_STATE_3;
 
 	  DBGLOG(CNM, INFO,
 		 "MT7902 STA[%u] ACTIVE — TxAllowed=%u\n",
 		 prStaRec->ucIndex,
 		 prStaRec->fgIsTxAllowed);
 
-	  cnmDumpStaRec(prAdapter, prStaRec->ucIndex);
+	  /* Install security entry */
+	  //secPrivacySeekForEntry(prAdapter, prStaRec);
 
-	  /* -------------------------------------------------- */
-	  /* 4️⃣ Security + Pending Auth/Assoc                  */
-	  /* -------------------------------------------------- */
+	  /* NOW fire pending SAA */
+	  aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
 
-	  secPrivacySeekForEntry(prAdapter, prStaRec);
-
-	  if (prStaRec->ucStaState == STA_STATE_3 && prStaRec->fgIsTxAllowed) {
-	    aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
-	  }
 	  break;
-
 
 	default:
 		DBGLOG(MEM, INFO, "StaRec[%u] FW ACK state=%u (no-op)\n",

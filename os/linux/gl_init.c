@@ -6952,7 +6952,7 @@ static int32_t wlanProbe(void *pvData, void *pvDriverData)
 
     wlanDebugInit();
     aucDebugModule[DBG_INIT_IDX] = DBG_CLASS_ERROR;
-    aucDebugModule[DBG_HAL_IDX]  = DBG_CLASS_ERROR;
+    aucDebugModule[DBG_HAL_IDX]  = DBG_CLASS_ERROR | DBG_CLASS_WARN;
     aucDebugModule[DBG_NIC_IDX]  = DBG_CLASS_ERROR;
     DBGLOG(INIT, ERROR, "wlanProbe: Starting throttled probe\n");
 	/* MT7902-FIX: Clear stale reset flag from previous session.

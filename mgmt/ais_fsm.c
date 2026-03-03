@@ -907,6 +907,12 @@ void aisFsmStateInit_IBSS_MERGE(IN struct ADAPTER *prAdapter,
 					      prAisBssInfo->ucBssIndex,
 					      prBssDesc);
 
+	/* Force OPEN auth for unencrypted APs */
+	if (prBssDesc && (prBssDesc->u2CapInfo & CAP_INFO_PRIVACY) == 0) {
+		prStaRec->ucAuthAlgNum = AUTH_ALGORITHM_NUM_OPEN_SYSTEM;
+		DBGLOG(AIS, ERROR, "[AIS-OPEN-AUTH] Forcing OPEN auth for unencrypted AP\n");
+	}
+
 	if (!prStaRec) {
 		DBGLOG(AIS, ERROR,
 			"aisFsmStateInit_IBSS_MERGE failed because prStaRec is NULL, return.\n");

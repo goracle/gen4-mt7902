@@ -618,6 +618,18 @@ struct UNI_CMD_STAREC {
 	uint8_t aucTlvBuffer[];
 } __KAL_ATTRIB_PACKED__;
 
+struct UNI_CMD_STAREC_SEC {
+	uint16_t u2Tag;
+	uint16_t u2Length;
+	uint8_t ucAuthAlg;
+	uint8_t ucCipherSuit;
+	uint8_t aucPad[2];
+} __packed;
+
+
+
+
+
 /*  STA record TLV tag */
 enum ENUM_UNI_CMD_STAREC_TAG {
 	UNI_CMD_STAREC_TAG_BASIC		= 0x00,
@@ -628,6 +640,7 @@ enum ENUM_UNI_CMD_STAREC_TAG {
 	UNI_CMD_STAREC_TAG_MAUNAL_ASSOC		= 0x05,
 	UNI_CMD_STAREC_TAG_BA			= 0x06,
 	UNI_CMD_STAREC_TAG_STATE_CHANGED	= 0x07,
+	UNI_CMD_STAREC_TAG_SEC			= 0x08,
 	UNI_CMD_STAREC_TAG_HT_BASIC		= 0x09,
 	UNI_CMD_STAREC_TAG_VHT_BASIC		= 0x0a,
 	UNI_CMD_STAREC_TAG_AP_PS		= 0x0b,

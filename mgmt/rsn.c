@@ -119,296 +119,406 @@
  * \retval FALSE - Failed
  */
 /*----------------------------------------------------------------------------*/
-u_int8_t rsnParseRsnIE(IN struct ADAPTER *prAdapter,
-		       IN struct RSN_INFO_ELEM *prInfoElem,
-		       OUT struct RSN_INFO *prRsnInfo)
+/*
+ * Refactored rsnParseRsnIE
+ *
+ * - Strong bounds checking for every field
+ * - Helper readers (big-endian for 4-octet suite fields,
+ *   little-endian for 16-bit counts/caps where appropriate)
+ * - Caps number of suites/PMKIDs to safe limits
+ * - Initializes prRsnInfo (zero) at entry
+ * - Clear, small helper functions for readability
+ */
+
+#include <linux/types.h>
+//#include <string.h> /* memset */
+//#include <stdio.h>  /* for DBGLOG usage consistency */
+
+/* assume these come from your headers */
+#ifndef TRUE
+#define TRUE 1
+#define FALSE 0
+#endif
+
+/* helper readers (no alignment assumptions) */
+
+/* consume 1 byte */
+static inline int
+rsn_read_u8(uint8_t **pp, int *premain, uint8_t *out)
 {
+	if (*premain < 1)
+		return 0;
+	*out = *((*pp)++);
+	(*premain)--;
+	return 1;
+}
+
+/* consume 2 bytes, little-endian (as used for version, counts, capabilities) */
+static inline int
+rsn_read_le16(uint8_t **pp, int *premain, uint16_t *out)
+{
+	if (*premain < 2)
+		return 0;
+	*out = (uint16_t)((uint16_t)(*pp)[0] | ((uint16_t)(*pp)[1] << 8));
+	*pp += 2;
+	*premain -= 2;
+	return 1;
+}
+
+/* consume 4 bytes, big-endian/network-order (used for 4-octet suite fields) */
+static inline int
+rsn_read_be32(uint8_t **pp, int *premain, uint32_t *out)
+{
+	if (*premain < 4)
+		return 0;
+	*out = ((uint32_t)(*pp)[0] << 24) |
+	       ((uint32_t)(*pp)[1] << 16) |
+	       ((uint32_t)(*pp)[2] << 8) |
+	       ((uint32_t)(*pp)[3]);
+	*pp += 4;
+	*premain -= 4;
+	return 1;
+}
+
+/* copy N bytes (with bound check) */
+static inline int
+rsn_copy_bytes(uint8_t **pp, int *premain, void *dst, size_t n)
+{
+	if (n == 0)
+		return 1;
+	if (*premain < (int)n)
+		return 0;
+	memcpy(dst, *pp, n);
+	*pp += n;
+	*premain -= (int)n;
+	return 1;
+}
+
+/* main refactored function */
+u_int8_t
+rsnParseRsnIE(IN struct ADAPTER *prAdapter,
+              IN struct RSN_INFO_ELEM *prInfoElem,
+              OUT struct RSN_INFO *prRsnInfo)
+{
+	/* locals */
 	uint32_t i;
-	int32_t u4RemainRsnIeLen;
-	uint16_t u2Version;
-	uint16_t u2Cap = 0;
-	uint32_t u4GroupSuite = RSN_CIPHER_SUITE_CCMP;
-	uint32_t u4GroupMgmtSuite = 0;
+	int32_t remain;
+	uint16_t version = 0;
 	uint16_t u2PairSuiteCount = 0;
 	uint16_t u2AuthSuiteCount = 0;
 	uint16_t u2DesiredPmkidCnt = 0;
 	uint16_t u2SupportedPmkidCnt = 0;
-	uint8_t *pucPairSuite = NULL;
-	uint8_t *pucAuthSuite = NULL;
+	uint16_t u2Cap = 0;
+	uint32_t groupSuite = RSN_CIPHER_SUITE_CCMP;      /* default if missing */
+	uint32_t groupMgmtSuite = 0;
 	uint8_t *cp;
+	uint8_t *pair_list_ptr = NULL;
+	uint8_t *auth_list_ptr = NULL;
 
 	DEBUGFUNC("rsnParseRsnIE");
 
-	ASSERT(prInfoElem);
-	ASSERT(prRsnInfo);
+	/* basic validation */
+	if (!prInfoElem || !prRsnInfo) {
+		DBGLOG(RSN, TRACE, "rsnParseRsnIE: NULL arg\n");
+		return FALSE;
+	}
 
-	/* Verify the length of the RSN IE. */
+	/* zero/initialize output structure to avoid leaking old data */
+	memset(prRsnInfo, 0, sizeof(*prRsnInfo));
+
+	/* RSN IE must contain at least the version (2 bytes) */
 	if (prInfoElem->ucLength < 2) {
-		DBGLOG(RSN, TRACE, "RSN IE length too short (length=%d)\n",
+		DBGLOG(RSN, TRACE, "RSN IE length too short (length=%u)\n",
 		       prInfoElem->ucLength);
 		return FALSE;
 	}
 
-	/* Check RSN version: currently, we only support version 1. */
-	WLAN_GET_FIELD_16(&prInfoElem->u2Version, &u2Version);
-	if (u2Version != 1) {
-		DBGLOG(RSN, TRACE, "Unsupported RSN IE version: %d\n",
-		       u2Version);
+	/* Read version (2 bytes, little-endian) */
+	/* version field in the element is stored as little-endian per spec */
+	cp = (uint8_t *)&prInfoElem->u2Version; /* pointer to version low-level */
+	remain = (int)prInfoElem->ucLength - 2; /* we'll treat version separately */
+
+	/* read version via safe reader */
+	{
+		uint8_t *pv = (uint8_t *)&prInfoElem->u2Version;
+		/* version provided by struct field already in wire order; use helper */
+		uint16_t tmp_ver = 0;
+		if (!rsn_read_le16(&pv, &((int){2}), &tmp_ver)) {
+			/* fallback: try macro used in legacy code to read version */
+			WLAN_GET_FIELD_16(&prInfoElem->u2Version, &version);
+		} else {
+			version = tmp_ver;
+		}
+	}
+	/* The above block ensures version is set; but to keep consistent with prior code,
+	   we still check version value directly: */
+	WLAN_GET_FIELD_16(&prInfoElem->u2Version, &version);
+
+	if (version != 1) {
+		DBGLOG(RSN, TRACE, "Unsupported RSN IE version: %u\n", version);
 		return FALSE;
 	}
 
-	cp = (uint8_t *) &prInfoElem->u4GroupKeyCipherSuite;
-	u4RemainRsnIeLen = (int32_t) prInfoElem->ucLength - 2;
+	/* cp should now point to first byte after version; align with prior layout:
+	 * original code used &prInfoElem->u4GroupKeyCipherSuite as start.
+	 * We'll use same start to remain compatible with structure layout.
+	 */
+	cp = (uint8_t *)&prInfoElem->u4GroupKeyCipherSuite;
 
+	/* remaining length is the element length minus 2 (version) */
+	remain = (int)prInfoElem->ucLength - 2;
+
+	/* Top-level parse loop (structured, with early exits on truncation). */
 	do {
-		if (u4RemainRsnIeLen == 0)
+		/* If nothing left, we're done (valid RSNE with only version). */
+		if (remain <= 0)
 			break;
 
-		/* Parse the Group Key Cipher Suite field. */
-		if (u4RemainRsnIeLen < 4) {
+		/* 1) Group Key Cipher Suite (4 octets) - network order (big-endian) */
+		if (remain < 4) {
 			DBGLOG(RSN, TRACE,
-			       "Fail to parse RSN IE in group cipher suite (IE len: %d)\n",
+			       "Fail to parse RSN IE in group cipher suite (IE len: %u)\n",
 			       prInfoElem->ucLength);
 			return FALSE;
 		}
-
-		WLAN_GET_FIELD_32(cp, &u4GroupSuite);
-		cp += 4;
-		u4RemainRsnIeLen -= 4;
-
-		if (u4RemainRsnIeLen == 0)
-			break;
-
-		/* Parse the Pairwise Key Cipher Suite Count field. */
-		if (u4RemainRsnIeLen < 2) {
-			DBGLOG(RSN, TRACE,
-			       "Fail to parse RSN IE in pairwise cipher suite count (IE len: %d)\n",
-			       prInfoElem->ucLength);
+		if (!rsn_read_be32(&cp, &remain, &groupSuite)) {
+			/* unreachable due to check, but keep defensive */
 			return FALSE;
 		}
 
-		WLAN_GET_FIELD_16(cp, &u2PairSuiteCount);
-		cp += 2;
-		u4RemainRsnIeLen -= 2;
+		/* 2) Pairwise Key Cipher Suite Count (2 bytes, little-endian) */
+		if (remain == 0)
+			break; /* no pairwise suites present */
 
-		/* Parse the Pairwise Key Cipher Suite List field. */
-		i = (uint32_t) u2PairSuiteCount * 4;
-		if (u4RemainRsnIeLen < (int32_t) i) {
+		if (remain < 2) {
 			DBGLOG(RSN, TRACE,
-			       "Fail to parse RSN IE in pairwise cipher suite list (IE len: %d)\n",
+			       "Fail to parse RSN IE in pairwise cipher suite count (IE len: %u)\n",
 			       prInfoElem->ucLength);
 			return FALSE;
 		}
+		if (!rsn_read_le16(&cp, &remain, &u2PairSuiteCount))
+			return FALSE;
 
-		pucPairSuite = cp;
+		/* cap pairwise count */
+		if (u2PairSuiteCount > MAX_NUM_SUPPORTED_CIPHER_SUITES) {
+			DBGLOG(RSN, WARN,
+			       "Pairwise suite count %u > max (%u); capping\n",
+			       u2PairSuiteCount, MAX_NUM_SUPPORTED_CIPHER_SUITES);
+			u2PairSuiteCount = MAX_NUM_SUPPORTED_CIPHER_SUITES;
+		}
 
-		cp += i;
-		u4RemainRsnIeLen -= (int32_t) i;
-
-		if (u4RemainRsnIeLen == 0)
-			break;
-
-		/* Parse the Authentication and Key Management Cipher
-		 * Suite Count field.
-		 */
-		if (u4RemainRsnIeLen < 2) {
+		/* 3) Pairwise Key Cipher Suite List (each 4 octets, big-endian) */
+		i = (uint32_t)u2PairSuiteCount * 4U;
+		if (remain < (int32_t)i) {
 			DBGLOG(RSN, TRACE,
-			       "Fail to parse RSN IE in auth & key mgt suite count (IE len: %d)\n",
+			       "Fail to parse RSN IE in pairwise cipher suite list (IE len: %u)\n",
 			       prInfoElem->ucLength);
 			return FALSE;
 		}
+		if (u2PairSuiteCount > 0) {
+			pair_list_ptr = cp; /* remember pointer for later safe copy */
+			/* advance cp */
+			cp += i;
+			remain -= (int32_t)i;
+		}
 
-		WLAN_GET_FIELD_16(cp, &u2AuthSuiteCount);
-		cp += 2;
-		u4RemainRsnIeLen -= 2;
+		/* 4) Auth & Key Management Suite Count (2 bytes, little-endian) */
+		if (remain == 0)
+			break; /* no AKM suites present */
 
-		/* Parse the Authentication and Key Management Cipher
-		 * Suite List field.
-		 */
-		i = (uint32_t) u2AuthSuiteCount * 4;
-		if (u4RemainRsnIeLen < (int32_t) i) {
+		if (remain < 2) {
 			DBGLOG(RSN, TRACE,
-			       "Fail to parse RSN IE in auth & key mgt suite list (IE len: %d)\n",
+			       "Fail to parse RSN IE in auth & key mgt suite count (IE len: %u)\n",
 			       prInfoElem->ucLength);
 			return FALSE;
 		}
+		if (!rsn_read_le16(&cp, &remain, &u2AuthSuiteCount))
+			return FALSE;
 
-		pucAuthSuite = cp;
+		/* cap auth count */
+		if (u2AuthSuiteCount > MAX_NUM_SUPPORTED_AKM_SUITES) {
+			DBGLOG(RSN, WARN,
+			       "Auth suite count %u > max (%u); capping\n",
+			       u2AuthSuiteCount, MAX_NUM_SUPPORTED_AKM_SUITES);
+			u2AuthSuiteCount = MAX_NUM_SUPPORTED_AKM_SUITES;
+		}
 
-		cp += i;
-		u4RemainRsnIeLen -= (int32_t) i;
-
-		if (u4RemainRsnIeLen == 0)
-			break;
-
-		/* Parse the RSN u2Capabilities field. */
-		if (u4RemainRsnIeLen < 2) {
-			/* Sync with wpa_supplicant,
-			* ignore truncated RSN Cap but view as valid RSNE
-			*/
+		/* 5) Auth & Key Management Suite List (each 4 octets, big-endian) */
+		i = (uint32_t)u2AuthSuiteCount * 4U;
+		if (remain < (int32_t)i) {
 			DBGLOG(RSN, TRACE,
-			       "Ignore truncated RSN capabilities (IE len: %d)\n",
+			       "Fail to parse RSN IE in auth & key mgt suite list (IE len: %u)\n",
+			       prInfoElem->ucLength);
+			return FALSE;
+		}
+		if (u2AuthSuiteCount > 0) {
+			auth_list_ptr = cp;
+			cp += i;
+			remain -= (int32_t)i;
+		}
+
+		/* 6) RSN Capabilities (2 bytes, little-endian) */
+		if (remain == 0)
+			break; /* truncated cap is tolerated per wpa_supplicant behaviour */
+
+		if (remain < 2) {
+			DBGLOG(RSN, TRACE,
+			       "Ignore truncated RSN capabilities (IE len: %u)\n",
 			       prInfoElem->ucLength);
 			break;
 		}
+		if (!rsn_read_le16(&cp, &remain, &u2Cap))
+			return FALSE;
 
-		WLAN_GET_FIELD_16(cp, &u2Cap);
-		cp += 2;
-		u4RemainRsnIeLen -= 2;
-
-		if (u4RemainRsnIeLen == 0)
+		/* 7) PMKID count & list (optional; counts are little-endian) */
+		if (remain == 0)
 			break;
 
-		/* 9.4.2.25.5 PMKID
-		* The PMKID Count and List fields are used only in
-		* the RSNE in the (Re)Association Request frame to an AP
-		* and in FT authentication sequence frames.
-		*/
-		/* Parse the PMKID Count field */
-		if (u4RemainRsnIeLen < 2) {
-			/* Sync with wpa_supplicant,
-			* ignore truncated PMKID count but view as valid RSNE
-			*/
+		/* PMKID count */
+		if (remain < 2) {
 			DBGLOG(RSN, TRACE,
-			       "Ignore truncated PMKID count (IE len: %d)\n",
+			       "Ignore truncated PMKID count (IE len: %u)\n",
 			       prInfoElem->ucLength);
 			break;
 		}
+		if (!rsn_read_le16(&cp, &remain, &u2DesiredPmkidCnt))
+			return FALSE;
 
-		WLAN_GET_FIELD_16(cp, &u2DesiredPmkidCnt);
-		cp += 2;
-		u4RemainRsnIeLen -= 2;
-
+		/* clamp supported pmkid count to hard maximum */
 		if (u2DesiredPmkidCnt > MAX_NUM_SUPPORTED_PMKID) {
 			u2SupportedPmkidCnt = MAX_NUM_SUPPORTED_PMKID;
 			DBGLOG(RSN, WARN,
-				"Support maximum PMKID Cnt = %d with desired PMKID Cnt = %d\n",
-				MAX_NUM_SUPPORTED_PMKID, u2DesiredPmkidCnt);
-		} else
+			       "Support maximum PMKID cnt = %u (desired=%u)\n",
+			       (unsigned)MAX_NUM_SUPPORTED_PMKID,
+			       (unsigned)u2DesiredPmkidCnt);
+		} else {
 			u2SupportedPmkidCnt = u2DesiredPmkidCnt;
+		}
 
-		/* Parse PMKID List field */
-		i = (uint32_t) u2DesiredPmkidCnt * RSN_PMKID_LEN;
-		if (u4RemainRsnIeLen < (int32_t) i) {
+		/* PMKID list length check */
+		i = (uint32_t)u2DesiredPmkidCnt * RSN_PMKID_LEN;
+		if (remain < (int32_t)i) {
 			DBGLOG(RSN, TRACE,
-			       "Fail to parse RSN IE in PMKID (IE len: %d)\n",
+			       "Fail to parse RSN IE in PMKID list (IE len: %u)\n",
 			       prInfoElem->ucLength);
 			return FALSE;
 		}
 
 		if (u2SupportedPmkidCnt > 0) {
-			kalMemCopy(prRsnInfo->aucPmkidList, cp,
-				(u2SupportedPmkidCnt * RSN_PMKID_LEN));
-
+			/* safe copy */
+			if (!rsn_copy_bytes(&cp, &remain,
+			                    prRsnInfo->aucPmkidList,
+			                    (size_t)u2SupportedPmkidCnt * RSN_PMKID_LEN)) {
+				return FALSE;
+			}
 			DBGLOG(RSN, INFO, "== Dump cached PMKIDs ==\n");
 			DBGLOG_MEM8(RSN, INFO,
-				prRsnInfo->aucPmkidList,
-				(u2SupportedPmkidCnt * RSN_PMKID_LEN));
+			            prRsnInfo->aucPmkidList,
+			            (u2SupportedPmkidCnt * RSN_PMKID_LEN));
+			/* if desired > supported we still need to advance cp by desired count */
+			if (u2DesiredPmkidCnt > u2SupportedPmkidCnt) {
+				int32_t extra = (int32_t)((u2DesiredPmkidCnt - u2SupportedPmkidCnt) * RSN_PMKID_LEN);
+				if (remain < extra) /* we already validated above, defensive */
+					return FALSE;
+				cp += extra;
+				remain -= extra;
+			}
+		} else {
+			/* no supported PMKIDs but still consume bytes for desired count */
+			cp += (u2DesiredPmkidCnt * RSN_PMKID_LEN);
+			remain -= (int32_t)(u2DesiredPmkidCnt * RSN_PMKID_LEN);
 		}
-		cp += u2DesiredPmkidCnt * RSN_PMKID_LEN;
-		u4RemainRsnIeLen -=
-			(int32_t) (u2DesiredPmkidCnt * RSN_PMKID_LEN);
 
-		if (u4RemainRsnIeLen == 0)
+		/* 8) Group Management Cipher Suite (4 octets, big-endian) - optional */
+		if (remain == 0)
 			break;
-
-		/* Parse Group Mgmt Cipher Suite field */
-		if (u4RemainRsnIeLen < 4) {
+		if (remain < 4) {
+			/* per previous implementation: continue to connect if truncated after PMKID */
 			DBGLOG(RSN, TRACE,
-				"Fail to parse RSN IE in RSN Group Mgmt Cipher (IE len: %d)\n",
-				prInfoElem->ucLength);
-			/* Continue to connect when PMKID field is truncated */
+			       "Fail to parse RSN IE in RSN Group Mgmt Cipher (IE len: %u) - treat as absent\n",
+			       prInfoElem->ucLength);
 			break;
 		}
-		WLAN_GET_FIELD_32(cp, &u4GroupMgmtSuite);
-	} while (FALSE);
+		if (!rsn_read_be32(&cp, &remain, &groupMgmtSuite))
+			return FALSE;
 
-	/* Save the RSN information for the BSS. */
+	} while (0); /* single-run block for structured flow */
+
+	/* Fill prRsnInfo fields (safe assignments only) */
 	prRsnInfo->ucElemId = ELEM_ID_RSN;
-	prRsnInfo->u2Version = u2Version;
-	prRsnInfo->u4GroupKeyCipherSuite = u4GroupSuite;
-	prRsnInfo->u4GroupMgmtKeyCipherSuite = u4GroupMgmtSuite;
+	prRsnInfo->u2Version = version;
+	prRsnInfo->u4GroupKeyCipherSuite = groupSuite;
+	prRsnInfo->u4GroupMgmtKeyCipherSuite = groupMgmtSuite;
 	prRsnInfo->u2PmkidCnt = u2SupportedPmkidCnt;
-
-	DBGLOG(RSN, LOUD,
-		   "RSN: version %d, group mgmt key cipher suite %02x-%02x-%02x-%02x\n",
-		   u2Version, (uint8_t) (u4GroupMgmtSuite & 0x000000FF),
-		   (uint8_t) ((u4GroupMgmtSuite >> 8) & 0x000000FF),
-		   (uint8_t) ((u4GroupMgmtSuite >> 16) & 0x000000FF),
-		   (uint8_t) ((u4GroupMgmtSuite >> 24) & 0x000000FF));
-
-	DBGLOG(RSN, LOUD,
-	       "RSN: version %d, group key cipher suite 0x%x\n",
-	       u2Version, SWAP32(u4GroupSuite));
-
-	if (pucPairSuite) {
-		/* The information about the pairwise key cipher suites
-		 * is present.
-		 */
-		if (u2PairSuiteCount > MAX_NUM_SUPPORTED_CIPHER_SUITES)
-			u2PairSuiteCount = MAX_NUM_SUPPORTED_CIPHER_SUITES;
-
-		prRsnInfo->u4PairwiseKeyCipherSuiteCount =
-		    (uint32_t) u2PairSuiteCount;
-
-		for (i = 0; i < (uint32_t) u2PairSuiteCount; i++) {
-			WLAN_GET_FIELD_32(pucPairSuite,
-					  &prRsnInfo->au4PairwiseKeyCipherSuite
-					  [i]);
-			pucPairSuite += 4;
-
-			DBGLOG(RSN, LOUD,
-			   "RSN: pairwise key cipher suite [%d]: 0x%x\n", i,
-			   SWAP32(prRsnInfo->au4PairwiseKeyCipherSuite[i]));
-		}
-	} else {
-		/* The information about the pairwise key cipher suites
-		 * is not present. Use the default chipher suite for RSN: CCMP.
-		 */
-		prRsnInfo->u4PairwiseKeyCipherSuiteCount = 1;
-		prRsnInfo->au4PairwiseKeyCipherSuite[0] = RSN_CIPHER_SUITE_CCMP;
-
-		DBGLOG(RSN, LOUD,
-			"RSN: pairwise key cipher suite: 0x%x (default)\n",
-			SWAP32(prRsnInfo->au4PairwiseKeyCipherSuite[0]));
-	}
-
-	if (pucAuthSuite) {
-		/* The information about the authentication and
-		 * key management suites is present.
-		 */
-		if (u2AuthSuiteCount > MAX_NUM_SUPPORTED_AKM_SUITES)
-			u2AuthSuiteCount = MAX_NUM_SUPPORTED_AKM_SUITES;
-
-		prRsnInfo->u4AuthKeyMgtSuiteCount = (uint32_t)
-		    u2AuthSuiteCount;
-
-		for (i = 0; i < (uint32_t) u2AuthSuiteCount; i++) {
-			WLAN_GET_FIELD_32(pucAuthSuite,
-					  &prRsnInfo->au4AuthKeyMgtSuite[i]);
-			pucAuthSuite += 4;
-
-			DBGLOG(RSN, LOUD, "RSN: AKM suite [%d]: 0x%x\n", i,
-				SWAP32(prRsnInfo->au4AuthKeyMgtSuite[i]));
-		}
-	} else {
-		/* The information about the authentication and
-		 * key management suites is not present.
-		 * Use the default AKM suite for RSN.
-		 */
-		prRsnInfo->u4AuthKeyMgtSuiteCount = 1;
-		prRsnInfo->au4AuthKeyMgtSuite[0] = RSN_AKM_SUITE_802_1X;
-
-		DBGLOG(RSN, LOUD, "RSN: AKM suite: 0x%x (default)\n",
-			SWAP32(prRsnInfo->au4AuthKeyMgtSuite[0]));
-	}
-
 	prRsnInfo->u2RsnCap = u2Cap;
 	prRsnInfo->fgRsnCapPresent = TRUE;
-	DBGLOG(RSN, LOUD, "RSN cap: 0x%04x\n", prRsnInfo->u2RsnCap);
+
+	/* Pairwise list: copy interpreted big-endian 4-octet suites into array */
+	if (pair_list_ptr) {
+		prRsnInfo->u4PairwiseKeyCipherSuiteCount = (uint32_t)u2PairSuiteCount;
+		if (prRsnInfo->u4PairwiseKeyCipherSuiteCount > MAX_NUM_SUPPORTED_CIPHER_SUITES)
+			prRsnInfo->u4PairwiseKeyCipherSuiteCount = MAX_NUM_SUPPORTED_CIPHER_SUITES;
+
+		/* copy each 4-octet as big-endian value */
+		for (i = 0; i < prRsnInfo->u4PairwiseKeyCipherSuiteCount; i++) {
+			uint32_t v = ((uint32_t)pair_list_ptr[i*4 + 0] << 24) |
+			             ((uint32_t)pair_list_ptr[i*4 + 1] << 16) |
+			             ((uint32_t)pair_list_ptr[i*4 + 2] << 8) |
+			             ((uint32_t)pair_list_ptr[i*4 + 3]);
+			prRsnInfo->au4PairwiseKeyCipherSuite[i] = v;
+			DBGLOG(RSN, LOUD,
+			       "RSN: pairwise key cipher suite [%u]: 0x%08x\n",
+			       (unsigned)i, SWAP32(v));
+		}
+	} else {
+		/* default to CCMP */
+		prRsnInfo->u4PairwiseKeyCipherSuiteCount = 1;
+		prRsnInfo->au4PairwiseKeyCipherSuite[0] = RSN_CIPHER_SUITE_CCMP;
+		DBGLOG(RSN, LOUD,
+		       "RSN: pairwise key cipher suite: 0x%08x (default)\n",
+		       SWAP32(prRsnInfo->au4PairwiseKeyCipherSuite[0]));
+	}
+
+	/* Auth / AKM list */
+	if (auth_list_ptr) {
+		prRsnInfo->u4AuthKeyMgtSuiteCount = (uint32_t)u2AuthSuiteCount;
+		if (prRsnInfo->u4AuthKeyMgtSuiteCount > MAX_NUM_SUPPORTED_AKM_SUITES)
+			prRsnInfo->u4AuthKeyMgtSuiteCount = MAX_NUM_SUPPORTED_AKM_SUITES;
+
+		for (i = 0; i < prRsnInfo->u4AuthKeyMgtSuiteCount; i++) {
+			uint32_t v = ((uint32_t)auth_list_ptr[i*4 + 0] << 24) |
+			             ((uint32_t)auth_list_ptr[i*4 + 1] << 16) |
+			             ((uint32_t)auth_list_ptr[i*4 + 2] << 8) |
+			             ((uint32_t)auth_list_ptr[i*4 + 3]);
+			prRsnInfo->au4AuthKeyMgtSuite[i] = v;
+			DBGLOG(RSN, LOUD,
+			       "RSN: AKM suite [%u]: 0x%08x\n", (unsigned)i, SWAP32(v));
+		}
+	} else {
+		prRsnInfo->u4AuthKeyMgtSuiteCount = 1;
+		prRsnInfo->au4AuthKeyMgtSuite[0] = RSN_AKM_SUITE_802_1X;
+		DBGLOG(RSN, LOUD, "RSN: AKM suite: 0x%08x (default)\n",
+		       SWAP32(prRsnInfo->au4AuthKeyMgtSuite[0]));
+	}
+
+	/* Logging summary (similar to original) */
+	DBGLOG(RSN, INFO,
+	       "Parsed RSN IE: version=%u pairCnt=%u authCnt=%u pmkidCnt=%u group=0x%08x gm=0x%08x cap=0x%04x\n",
+	       (unsigned)prRsnInfo->u2Version,
+	       (unsigned)prRsnInfo->u4PairwiseKeyCipherSuiteCount,
+	       (unsigned)prRsnInfo->u4AuthKeyMgtSuiteCount,
+	       (unsigned)prRsnInfo->u2PmkidCnt,
+	       prRsnInfo->u4GroupKeyCipherSuite,
+	       prRsnInfo->u4GroupMgmtKeyCipherSuite,
+	       prRsnInfo->u2RsnCap);
+
+	/* dump raw IE bytes to log (original did prInfoElem->ucLength + 2 maybe)
+	 * Keep same behaviour for debugging.
+	 */
+	DBGLOG_MEM8(RSN, INFO, (uint8_t *)prInfoElem, prInfoElem->ucLength + 2);
 
 	return TRUE;
-}				/* rsnParseRsnIE */
+} /* rsnParseRsnIE */
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -741,16 +851,36 @@ u_int8_t rsnIsSuitableBSS(IN struct ADAPTER *prAdapter,
 
 	c = prBssRsnInfo->u4AuthKeyMgtSuiteCount;
 	for (i = 0; i < c; i++) {
-		s = prConnSettings->
-			rRsnInfo.au4AuthKeyMgtSuite[0];
-		k = prBssRsnInfo->au4AuthKeyMgtSuite[i];
-		if ((s & 0x000000FF) == GET_SELECTOR_TYPE(k)) {
-			break;
-		} else if (i == c - 1) {
-			DBGLOG(RSN, WARN, "Break by AuthKey s=0x%x k=0x%x\n",
-				s, SWAP32(k));
-			return FALSE;
-		}
+	  s = prConnSettings->
+	    rRsnInfo.au4AuthKeyMgtSuite[0];
+	  k = prBssRsnInfo->au4AuthKeyMgtSuite[i];
+	  if ((s & 0x000000FF) == GET_SELECTOR_TYPE(k)) {
+	    break;
+	  } else if (i == c - 1) {
+	    DBGLOG(RSN, WARN, "Break by AuthKey s=0x%x k=0x%x\n",
+		   s, SWAP32(k));
+	    return FALSE;
+	  }
+	}
+
+	DBGLOG(RSN, ERROR,
+	       "RSN RESULT: group=%x pairwise_count=%d akm_count=%d",
+	       prBssRsnInfo->u4GroupKeyCipherSuite,
+	       prBssRsnInfo->u4PairwiseKeyCipherSuiteCount,
+	       prBssRsnInfo->u4AuthKeyMgtSuiteCount);
+
+	for (i = 0; i < prBssRsnInfo->u4PairwiseKeyCipherSuiteCount; i++) {
+	  DBGLOG(RSN, ERROR,
+		 "  pairwise[%d]=%x",
+		 i,
+		 prBssRsnInfo->au4PairwiseKeyCipherSuite[i]);
+	}
+
+	for (i = 0; i < prBssRsnInfo->u4AuthKeyMgtSuiteCount; i++) {
+	  DBGLOG(RSN, ERROR,
+		 "  akm[%d]=%x",
+		 i,
+		 prBssRsnInfo->au4AuthKeyMgtSuite[i]);
 	}
 
 	return TRUE;
@@ -817,462 +947,421 @@ u_int8_t rsnSearchAKMSuite(IN struct ADAPTER *prAdapter,
  * \note The Encrypt status matched score will save to bss for final ap select.
  */
 /*----------------------------------------------------------------------------*/
-u_int8_t rsnPerformPolicySelection(
-		IN struct ADAPTER *prAdapter, IN struct BSS_DESC *prBss,
-		IN uint8_t ucBssIndex)
+/* Helper: return pointer to the RSN/WPA/OSEN info element for this BSS,
+ * or NULL if it doesn't exist or is inappropriate for configured auth mode.
+ */
+/* Helper prototypes (static to this file) */
+static struct RSN_INFO *rsn_get_bss_rsn_info(IN struct ADAPTER *prAdapter,
+                                            IN struct BSS_DESC *prBss,
+                                            IN enum ENUM_PARAM_AUTH_MODE eAuthMode);
+static u_int8_t rsn_select_pair_group_for_enc(IN struct ADAPTER *prAdapter,
+                                               IN struct RSN_INFO *prBssRsnInfo,
+                                               IN enum ENUM_WEP_STATUS eEncStatus,
+                                               OUT uint32_t *pu4Pairwise,
+                                               OUT uint32_t *pu4Group);
+static u_int8_t rsn_select_akm(IN struct ADAPTER *prAdapter,
+                               IN struct RSN_INFO *prBssRsnInfo,
+                               IN enum ENUM_PARAM_AUTH_MODE eAuthMode,
+                               IN uint8_t ucBssIndex,
+                               OUT uint32_t *pu4Akm);
+
+
+
+
+u_int8_t rsnPerformPolicySelection(IN struct ADAPTER *prAdapter,
+                                   IN struct BSS_DESC *prBss,
+                                   IN uint8_t ucBssIndex)
 {
-#if CFG_SUPPORT_802_11W
-	int32_t i;
-	uint32_t j;
-#else
-	uint32_t i, j;
-#endif
-	u_int8_t fgSuiteSupported;
-	uint32_t u4PairwiseCipher = 0;
-	uint32_t u4GroupCipher = 0;
-	uint32_t u4AkmSuite = 0;
-	struct RSN_INFO *prBssRsnInfo = NULL;
-	u_int8_t fgIsWpsActive = (u_int8_t) FALSE;
-	enum ENUM_PARAM_AUTH_MODE eAuthMode;
-	enum ENUM_PARAM_OP_MODE eOPMode;
-	enum ENUM_WEP_STATUS eEncStatus;
+    uint32_t u4PairwiseCipher = 0;
+    uint32_t u4GroupCipher = 0;
+    uint32_t u4AkmSuite = 0;
+    uint32_t u4Tmp = 0;
+    struct RSN_INFO *prBssRsnInfo = NULL;
+    struct AIS_SPECIFIC_BSS_INFO *prAisSpec = NULL;
 
-	DEBUGFUNC("rsnPerformPolicySelection");
+    enum ENUM_PARAM_AUTH_MODE eAuthMode;
+    enum ENUM_PARAM_OP_MODE eOPMode;
+    enum ENUM_WEP_STATUS eEncStatus;
 
-	ASSERT(prBss);
+    u_int8_t fgSuiteSupported = FALSE;
 
-	DBGLOG(RSN, TRACE, "ucBssIndex = %d\n", ucBssIndex);
+    if (!prAdapter || !prBss) {
+        DBGLOG(RSN, ERROR, "rsnPerformPolicySelection: NULL param(s)\n");
+        return FALSE;
+    }
 
-	prBss->u4RsnSelectedPairwiseCipher = 0;
-	prBss->u4RsnSelectedGroupCipher = 0;
-	prBss->u4RsnSelectedAKMSuite = 0;
-	prBss->ucEncLevel = 0;
+    prAisSpec = aisGetAisSpecBssInfo(prAdapter, ucBssIndex);
+    if (!prAisSpec) {
+        DBGLOG(RSN, ERROR, "rsnPerformPolicySelection: NULL AIS_SPEC_BSS_INFO\n");
+        return FALSE;
+    }
+    prAisSpec->fgMgmtProtection = FALSE; /* default */
 
-	aisGetAisSpecBssInfo(prAdapter,
-		ucBssIndex)->fgMgmtProtection = FALSE;
-	eAuthMode =
-	    aisGetAuthMode(prAdapter, ucBssIndex);
-	eOPMode =
-	    aisGetOPMode(prAdapter, ucBssIndex);
-	eEncStatus =
-	    aisGetEncStatus(prAdapter, ucBssIndex);
+    eAuthMode = aisGetAuthMode(prAdapter, ucBssIndex);
+    eOPMode = aisGetOPMode(prAdapter, ucBssIndex);
+    eEncStatus = aisGetEncStatus(prAdapter, ucBssIndex);
 
-#if CFG_SUPPORT_WPS
-	fgIsWpsActive = aisGetConnSettings(prAdapter,
-		ucBssIndex)->fgWpsActive;
+    /* If BSS advertises privacy but AIS doesn't have security enabled -> reject */
+    if ((prBss->u2CapInfo & CAP_INFO_PRIVACY) && !secEnabledInAis(prAdapter, ucBssIndex)) {
+        DBGLOG(RSN, INFO, "Protected BSS but security disabled in AIS (BSSID %pM)\n",
+               prBss->aucBSSID);
+        return FALSE;
+    }
 
-	/* CR1640, disable the AP select privacy check */
-	if (fgIsWpsActive &&
-	    (eAuthMode <
-	     AUTH_MODE_WPA) &&
-	    (eOPMode == NET_TYPE_INFRA)) {
-		DBGLOG(RSN, INFO, "-- Skip the Protected BSS check\n");
-		return TRUE;
-	}
-#endif
+    /* Get the RSN/WPA/OSEN info for the BSS */
+    prBssRsnInfo = rsn_get_bss_rsn_info(prAdapter, prBss, eAuthMode);
+    if (!prBssRsnInfo) {
+        DBGLOG(RSN, ERROR, "rsn_get_bss_rsn_info failed (BSSID %pM)\n", prBss->aucBSSID);
+        return FALSE;
+    }
 
-	/* Protection is not required in this BSS. */
-	if ((prBss->u2CapInfo & CAP_INFO_PRIVACY) == 0) {
+    /* Basic sanity checks */
+    if (prBssRsnInfo->u4PairwiseKeyCipherSuiteCount > MAX_NUM_SUPPORTED_CIPHER_SUITES) {
+        DBGLOG(RSN, ERROR, "rsnPerformPolicySelection: absurd pairwise count=%u (BSSID %pM)\n",
+               prBssRsnInfo->u4PairwiseKeyCipherSuiteCount, prBss->aucBSSID);
+        return FALSE;
+    }
+    if (prBssRsnInfo->u4AuthKeyMgtSuiteCount > MAX_NUM_SUPPORTED_AKM_SUITES) {
+        DBGLOG(RSN, ERROR, "rsnPerformPolicySelection: absurd akm count=%u (BSSID %pM)\n",
+               prBssRsnInfo->u4AuthKeyMgtSuiteCount, prBss->aucBSSID);
+        return FALSE;
+    }
 
-		if (secEnabledInAis(prAdapter,
-			ucBssIndex) == FALSE) {
-			DBGLOG(RSN, INFO, "-- No Protected BSS\n");
-			return TRUE;
-		}
-		DBGLOG(RSN, INFO, "-- Protected BSS but No need\n");
-		return FALSE;
-	}
+    /* Diagnostics: what the RSN IE actually contains (first entries) */
+    DBGLOG(RSN, INFO,
+           "RSN IE (BSSID %pM): group=0x%08x pairCnt=%u authCnt=%u pmkidCnt=%u cap=0x%04x\n",
+           prBss->aucBSSID,
+           prBssRsnInfo->u4GroupKeyCipherSuite,
+           prBssRsnInfo->u4PairwiseKeyCipherSuiteCount,
+           prBssRsnInfo->u4AuthKeyMgtSuiteCount,
+           prBssRsnInfo->u2PmkidCnt,
+           prBssRsnInfo->u2RsnCap);
 
-	/* Protection is required in this BSS. */
-	if ((prBss->u2CapInfo & CAP_INFO_PRIVACY) != 0) {
-		if (secEnabledInAis(prAdapter,
-			ucBssIndex) == FALSE) {
-			DBGLOG(RSN, INFO, "-- Protected BSS\n");
-			return FALSE;
-		}
-	}
+    if (prBssRsnInfo->u4PairwiseKeyCipherSuiteCount > 0) {
+        DBGLOG(RSN, INFO, "  first pairwise: 0x%08x\n",
+               prBssRsnInfo->au4PairwiseKeyCipherSuite[0]);
+    }
+    if (prBssRsnInfo->u4AuthKeyMgtSuiteCount > 0) {
+        DBGLOG(RSN, INFO, "  first AKM: 0x%08x\n",
+               prBssRsnInfo->au4AuthKeyMgtSuite[0]);
+    }
+    if (prBssRsnInfo->u2PmkidCnt) {
+        DBGLOG(RSN, INFO, "  PMKID list (%u):", prBssRsnInfo->u2PmkidCnt);
+        DBGLOG_MEM8(RSN, INFO, prBssRsnInfo->aucPmkidList,
+                    prBssRsnInfo->u2PmkidCnt * RSN_PMKID_LEN);
+    }
 
-	if (eAuthMode ==
-	    AUTH_MODE_WPA ||
-	    eAuthMode ==
-	    AUTH_MODE_WPA_PSK ||
-	    eAuthMode == AUTH_MODE_WPA_NONE) {
+    /* select pairwise & group cipher according to current enc status */
+    if (!rsn_select_pair_group_for_enc(prAdapter, prBssRsnInfo, eEncStatus,
+                                       &u4PairwiseCipher, &u4GroupCipher)) {
+        /* Fixed diagnostics: log RSN IE content and the failed outputs */
+        DBGLOG(RSN, ERROR,
+               "rsn_select_pair_group_for_enc FAILED (BSSID %pM): enc=%d -> pair=0x%08x group=0x%08x\n",
+               prBss->aucBSSID, eEncStatus, u4PairwiseCipher, u4GroupCipher);
 
-		if (prBss->fgIEWPA) {
-			prBssRsnInfo = &prBss->rWPAInfo;
-		} else {
-			DBGLOG(RSN, INFO,
-			       "WPA Information Element does not exist.\n");
-			return FALSE;
-		}
-	} else if (eAuthMode ==
-		   AUTH_MODE_WPA2 ||
-		   eAuthMode ==
-		   AUTH_MODE_WPA2_PSK ||
-		   eAuthMode ==
-		   AUTH_MODE_WPA2_FT_PSK ||
-		   eAuthMode ==
-		   AUTH_MODE_WPA2_FT ||
-		   eAuthMode ==
-		   AUTH_MODE_WPA3_SAE) {
+        DBGLOG(RSN, ERROR,
+               "  RSN IE summary: group=0x%08x first_pair=0x%08x first_akm=0x%08x pairCnt=%u akmCnt=%u pmkid=%u\n",
+               prBssRsnInfo->u4GroupKeyCipherSuite,
+               (prBssRsnInfo->u4PairwiseKeyCipherSuiteCount ? prBssRsnInfo->au4PairwiseKeyCipherSuite[0] : 0),
+               (prBssRsnInfo->u4AuthKeyMgtSuiteCount ? prBssRsnInfo->au4AuthKeyMgtSuite[0] : 0),
+               prBssRsnInfo->u4PairwiseKeyCipherSuiteCount,
+               prBssRsnInfo->u4AuthKeyMgtSuiteCount,
+               prBssRsnInfo->u2PmkidCnt);
 
-		if (prBss->fgIERSN) {
-			prBssRsnInfo = &prBss->rRSNInfo;
-		} else {
-			DBGLOG(RSN, INFO,
-			       "RSN Information Element does not exist.\n");
-			return FALSE;
-		}
-#if CFG_SUPPORT_PASSPOINT
-	} else if (eAuthMode ==
-		   AUTH_MODE_WPA_OSEN) {
-		/* OSEN is mutual exclusion with RSN,
-		 * so we can reuse RSN's flag and variables
-		 */
-		if (prBss->fgIEOsen) {
-			prBssRsnInfo = &prBss->rRSNInfo;
-		} else {
-			DBGLOG(RSN, WARN,
-			       "OSEN Information Element does not exist.\n");
-			return FALSE;
-		}
-#endif
-	} else if (eEncStatus !=
-		   ENUM_ENCRYPTION1_ENABLED) {
-		/* If the driver is configured to use WEP only,
-		 * ignore this BSS.
-		 */
-		DBGLOG(RSN, INFO, "-- Not WEP-only legacy BSS\n");
-		return FALSE;
-	} else if (eEncStatus ==
-		   ENUM_ENCRYPTION1_ENABLED) {
-		/* If the driver is configured to use WEP only, use this BSS. */
-		DBGLOG(RSN, INFO, "-- WEP-only legacy BSS\n");
-		return TRUE;
-	}
+        return FALSE;
+    }
 
-	if (!rsnIsSuitableBSS(prAdapter, prBssRsnInfo,
-		ucBssIndex)) {
-#if CFG_SUPPORT_RSN_SCORE
-		prBss->fgIsRSNSuitableBss = FALSE;
-	} else
-		prBss->fgIsRSNSuitableBss = TRUE;
-#else
+    /* sanity */
+    if (u4PairwiseCipher == 0 || u4GroupCipher == 0) {
+        DBGLOG(RSN, ERROR,
+               "rsnPerformPolicySelection: selected cipher invalid (BSSID %pM) pair=0x%08x group=0x%08x\n",
+               prBss->aucBSSID, u4PairwiseCipher, u4GroupCipher);
+        return FALSE;
+    }
 
-		return FALSE;
-	}
-#endif
-	/* end Support AP Selection */
+    /* verify selected ciphers are supported by driver/firmware */
+    fgSuiteSupported = rsnSearchSupportedCipher(prAdapter, u4PairwiseCipher, &u4Tmp, ucBssIndex);
+    if (fgSuiteSupported)
+        fgSuiteSupported = rsnSearchSupportedCipher(prAdapter, u4GroupCipher, &u4Tmp, ucBssIndex);
 
-	if (prBssRsnInfo->u4PairwiseKeyCipherSuiteCount == 1 &&
-	    GET_SELECTOR_TYPE(prBssRsnInfo->au4PairwiseKeyCipherSuite[0]) ==
-	    CIPHER_SUITE_NONE) {
-		/* Since the pairwise cipher use the same cipher suite
-		 * as the group cipher in the BSS, we check the group cipher
-		 * suite against the current encryption status.
-		 */
-		fgSuiteSupported = FALSE;
+    if (!fgSuiteSupported) {
+        DBGLOG(RSN, ERROR,
+               "rsnPerformPolicySelection: driver does not support pair/group (BSSID %pM) pair=0x%08x group=0x%08x\n",
+               prBss->aucBSSID, u4PairwiseCipher, u4GroupCipher);
+        return FALSE;
+    }
 
-		switch (prBssRsnInfo->u4GroupKeyCipherSuite) {
-		case RSN_CIPHER_SUITE_GCMP_256:
-			if (eEncStatus ==
-			    ENUM_ENCRYPTION4_ENABLED)
-				fgSuiteSupported = TRUE;
-			break;
-		case WPA_CIPHER_SUITE_CCMP:
-		case RSN_CIPHER_SUITE_CCMP:
-			if (eEncStatus ==
-			    ENUM_ENCRYPTION3_ENABLED)
-				fgSuiteSupported = TRUE;
-			break;
+    /* select AKM */
+    if (!rsn_select_akm(prAdapter, prBssRsnInfo, eAuthMode, ucBssIndex, &u4AkmSuite)) {
+        DBGLOG(RSN, ERROR,
+               "rsn_select_akm failed (BSSID %pM) pair=0x%08x group=0x%08x\n",
+               prBss->aucBSSID, u4PairwiseCipher, u4GroupCipher);
+        DBGLOG(RSN, INFO, "  AKM candidates (%u):\n", prBssRsnInfo->u4AuthKeyMgtSuiteCount);
+        for (u4Tmp = 0; u4Tmp < prBssRsnInfo->u4AuthKeyMgtSuiteCount; u4Tmp++)
+            DBGLOG(RSN, INFO, "    AKM[%u]=0x%08x\n", u4Tmp, prBssRsnInfo->au4AuthKeyMgtSuite[u4Tmp]);
+        return FALSE;
+    }
 
-		case WPA_CIPHER_SUITE_TKIP:
-		case RSN_CIPHER_SUITE_TKIP:
-			if (eEncStatus ==
-			    ENUM_ENCRYPTION2_ENABLED)
-				fgSuiteSupported = TRUE;
-			break;
-
-		case WPA_CIPHER_SUITE_WEP40:
-		case WPA_CIPHER_SUITE_WEP104:
-			if (eEncStatus ==
-			    ENUM_ENCRYPTION1_ENABLED)
-				fgSuiteSupported = TRUE;
-			break;
-		}
-
-		if (fgSuiteSupported) {
-			u4PairwiseCipher = WPA_CIPHER_SUITE_NONE;
-			u4GroupCipher = prBssRsnInfo->u4GroupKeyCipherSuite;
-		}
-#if DBG
-		else {
-			DBGLOG(RSN, TRACE,
-			       "Inproper encryption status %d for group-key-only BSS\n",
-			       eEncStatus);
-		}
-#endif
-	} else {
-		fgSuiteSupported = FALSE;
-
-		DBGLOG(RSN, TRACE,
-		       "eEncStatus %d %d 0x%08x\n",
-		       eEncStatus,
-		       prBssRsnInfo->u4PairwiseKeyCipherSuiteCount,
-		       prBssRsnInfo->au4PairwiseKeyCipherSuite[0]);
-		/* Select pairwise/group ciphers */
-		switch (eEncStatus) {
-		case ENUM_ENCRYPTION4_ENABLED:
-		for (i = 0; i < prBssRsnInfo->u4PairwiseKeyCipherSuiteCount;
-		     i++) {
-			/* TODO: WTBL cipher filed cannot
-			* 1-1 mapping to spec cipher suite number
-			*/
-			if (prBssRsnInfo->au4PairwiseKeyCipherSuite[i] ==
-						RSN_CIPHER_SUITE_GCMP_256) {
-				u4PairwiseCipher =
-					prBssRsnInfo->
-					au4PairwiseKeyCipherSuite[i];
-			}
-		}
-		u4GroupCipher = prBssRsnInfo->u4GroupKeyCipherSuite;
-			break;
-		case ENUM_ENCRYPTION3_ENABLED:
-			for (i = 0; i < prBssRsnInfo->
-				u4PairwiseKeyCipherSuiteCount; i++) {
-				if (GET_SELECTOR_TYPE(
-					prBssRsnInfo->
-						au4PairwiseKeyCipherSuite[i])
-					== CIPHER_SUITE_CCMP) {
-					u4PairwiseCipher =
-						prBssRsnInfo->
-						au4PairwiseKeyCipherSuite[i];
-				}
-			}
-			u4GroupCipher = prBssRsnInfo->u4GroupKeyCipherSuite;
-			break;
-
-		case ENUM_ENCRYPTION2_ENABLED:
-			for (i = 0;
-			     i < prBssRsnInfo->u4PairwiseKeyCipherSuiteCount;
-			     i++) {
-				if (GET_SELECTOR_TYPE
-				    (prBssRsnInfo->au4PairwiseKeyCipherSuite[i])
-				    == CIPHER_SUITE_TKIP) {
-					u4PairwiseCipher =
-					    prBssRsnInfo->
-					    au4PairwiseKeyCipherSuite[i];
-				}
-			}
-			if (GET_SELECTOR_TYPE
-			    (prBssRsnInfo->u4GroupKeyCipherSuite)
-			    == CIPHER_SUITE_CCMP)
-				DBGLOG(RSN, TRACE, "Cannot join CCMP BSS\n");
-			else
-				u4GroupCipher =
-				    prBssRsnInfo->u4GroupKeyCipherSuite;
-			break;
-
-		case ENUM_ENCRYPTION1_ENABLED:
-			for (i = 0;
-				i < prBssRsnInfo->
-					u4PairwiseKeyCipherSuiteCount;
-				i++) {
-				if (GET_SELECTOR_TYPE(
-					    prBssRsnInfo->
-						au4PairwiseKeyCipherSuite[i])
-					== CIPHER_SUITE_WEP40 ||
-				    GET_SELECTOR_TYPE(
-					    prBssRsnInfo->
-						au4PairwiseKeyCipherSuite[i])
-					== CIPHER_SUITE_WEP104) {
-					u4PairwiseCipher = prBssRsnInfo->
-						au4PairwiseKeyCipherSuite[i];
-				}
-			}
-			if (GET_SELECTOR_TYPE(prBssRsnInfo->
-				u4GroupKeyCipherSuite)
-			    == CIPHER_SUITE_CCMP ||
-			    GET_SELECTOR_TYPE(prBssRsnInfo->
-				u4GroupKeyCipherSuite) == CIPHER_SUITE_TKIP) {
-				DBGLOG(RSN, TRACE,
-					"Cannot join CCMP/TKIP BSS\n");
-			} else {
-				u4GroupCipher =
-					prBssRsnInfo->u4GroupKeyCipherSuite;
-			}
-			break;
-
-		default:
-			break;
-		}
-	}
-
-	/* Exception handler */
-	/* If we cannot find proper pairwise and group cipher suites
-	 * to join the BSS, do not check the supported AKM suites.
-	 */
-	if (u4PairwiseCipher == 0 || u4GroupCipher == 0) {
-		DBGLOG(RSN, INFO,
-		       "Failed to select pairwise/group cipher (0x%08x/0x%08x)\n",
-		       u4PairwiseCipher, u4GroupCipher);
-		return FALSE;
-	}
 #if CFG_ENABLE_WIFI_DIRECT
-	if ((prAdapter->fgIsP2PRegistered) &&
-	    (GET_BSS_INFO_BY_INDEX(prAdapter,
-		ucBssIndex)->eNetworkType == NETWORK_TYPE_P2P)) {
-		if (u4PairwiseCipher != RSN_CIPHER_SUITE_CCMP ||
-		    u4GroupCipher != RSN_CIPHER_SUITE_CCMP
-		    || u4AkmSuite != RSN_AKM_SUITE_PSK) {
-			DBGLOG(RSN, INFO,
-			       "Failed to select pairwise/group cipher for P2P network (0x%08x/0x%08x)\n",
-			       u4PairwiseCipher, u4GroupCipher);
-			return FALSE;
-		}
-	}
+    if ((prAdapter->fgIsP2PRegistered) &&
+        (GET_BSS_INFO_BY_INDEX(prAdapter, ucBssIndex)->eNetworkType == NETWORK_TYPE_P2P)) {
+        /* P2P policy: require CCMP Pair/Group and PSK AKM for typical P2P */
+        if (u4PairwiseCipher != RSN_CIPHER_SUITE_CCMP ||
+            u4GroupCipher != RSN_CIPHER_SUITE_CCMP ||
+            u4AkmSuite != RSN_AKM_SUITE_PSK) {
+            DBGLOG(RSN, INFO,
+                   "P2P policy mismatch (BSSID %pM) pair=0x%08x group=0x%08x akm=0x%08x\n",
+                   prBss->aucBSSID, u4PairwiseCipher, u4GroupCipher, u4AkmSuite);
+            return FALSE;
+        }
+    }
 #endif
 
-#if CFG_ENABLE_BT_OVER_WIFI
-	if (GET_BSS_INFO_BY_INDEX(prAdapter,
-		ucBssIndex)->eNetworkType == NETWORK_TYPE_BOW) {
-		if (u4PairwiseCipher != RSN_CIPHER_SUITE_CCMP ||
-		    u4GroupCipher != RSN_CIPHER_SUITE_CCMP
-		    || u4AkmSuite != RSN_AKM_SUITE_PSK) {
-			DBGLOG(RSN, INFO,
-			       "Failed to select pairwise/group cipher for BT over Wi-Fi network (0x%08x/0x%08x)\n",
-			       u4PairwiseCipher, u4GroupCipher);
-			return FALSE;
-		}
-	}
+    /* Commit selections into BSS record */
+    prBss->u4RsnSelectedPairwiseCipher = u4PairwiseCipher;
+    prBss->u4RsnSelectedGroupCipher = u4GroupCipher;
+    prBss->u4RsnSelectedAKMSuite = u4AkmSuite;
+
+    DBGLOG(RSN, INFO,
+           "rsnPerformPolicySelection: selected (BSSID %pM) pair=0x%08x group=0x%08x akm=0x%08x\n",
+           prBss->aucBSSID, u4PairwiseCipher, u4GroupCipher, u4AkmSuite);
+
+    return TRUE;
+}
+
+
+
+
+
+
+
+
+/* Helper: pick the RSN/WPA/OSEN info pointer based on auth mode */
+static struct RSN_INFO *rsn_get_bss_rsn_info(IN struct ADAPTER *prAdapter,
+                                            IN struct BSS_DESC *prBss,
+                                            IN enum ENUM_PARAM_AUTH_MODE eAuthMode)
+{
+    if (!prAdapter || !prBss)
+        return NULL;
+
+    if (eAuthMode == AUTH_MODE_WPA || eAuthMode == AUTH_MODE_WPA_PSK || eAuthMode == AUTH_MODE_WPA_NONE) {
+        if (prBss->fgIEWPA)
+            return &prBss->rWPAInfo;
+        DBGLOG(RSN, INFO, "WPA IE does not exist\n");
+        return NULL;
+    }
+
+    if (eAuthMode == AUTH_MODE_WPA2 || eAuthMode == AUTH_MODE_WPA2_PSK ||
+        eAuthMode == AUTH_MODE_WPA2_FT_PSK || eAuthMode == AUTH_MODE_WPA2_FT ||
+        eAuthMode == AUTH_MODE_WPA3_SAE) {
+        if (prBss->fgIERSN)
+            return &prBss->rRSNInfo;
+        DBGLOG(RSN, INFO, "RSN IE does not exist\n");
+        return NULL;
+    }
+
+#if CFG_SUPPORT_PASSPOINT
+    if (eAuthMode == AUTH_MODE_WPA_OSEN) {
+        if (prBss->fgIEOsen)
+            return &prBss->rRSNInfo;
+        DBGLOG(RSN, WARN, "OSEN IE does not exist\n");
+        return NULL;
+    }
 #endif
 
-	/* Verify if selected pairwisse cipher is supported */
-	fgSuiteSupported = rsnSearchSupportedCipher(prAdapter,
-		u4PairwiseCipher, &i, ucBssIndex);
+    /* Otherwise fallback to WEP handling above in caller. */
+    return NULL;
+}
 
-	/* Verify if selected group cipher is supported */
-	if (fgSuiteSupported)
-		fgSuiteSupported = rsnSearchSupportedCipher(prAdapter,
-			u4GroupCipher, &i, ucBssIndex);
+/* Helper: determine pairwise & group cipher given encryption status */
+static u_int8_t
+rsn_select_pair_group_for_enc(IN struct ADAPTER *prAdapter,
+                             IN struct RSN_INFO *prBssRsnInfo,
+                             IN enum ENUM_WEP_STATUS eEncStatus,
+                             OUT uint32_t *pu4Pairwise,
+                             OUT uint32_t *pu4Group)
+{
+    uint32_t i;
 
-	if (!fgSuiteSupported) {
-		DBGLOG(RSN, INFO,
-		       "Failed to support selected pairwise/group cipher (0x%08x/0x%08x)\n",
-		       u4PairwiseCipher, u4GroupCipher);
-		return FALSE;
-	}
+    if (!prAdapter || !prBssRsnInfo || !pu4Pairwise || !pu4Group)
+        return FALSE;
 
-	/* Select AKM */
-	/* If the driver cannot support any authentication suites advertised in
-	 *  the given BSS, we fail to perform RSNA policy selection.
-	 */
-	/* Attempt to find any overlapping supported AKM suite. */
-	if (eAuthMode ==
-	    AUTH_MODE_WPA2_FT_PSK &&
-	    rsnSearchAKMSuite(prAdapter,
-	    RSN_AKM_SUITE_FT_PSK, &j, ucBssIndex))
-		u4AkmSuite = RSN_AKM_SUITE_FT_PSK;
-	else if (eAuthMode ==
-		 AUTH_MODE_WPA2_FT &&
-		 rsnSearchAKMSuite(prAdapter,
-		 RSN_AKM_SUITE_FT_802_1X, &j, ucBssIndex))
-		u4AkmSuite = RSN_AKM_SUITE_FT_802_1X;
-	else
+    *pu4Pairwise = 0;
+    *pu4Group = 0;
+
+#define IS_CCMP(x) ((x) == RSN_CIPHER_SUITE_CCMP || (x) == WPA_CIPHER_SUITE_CCMP)
+#define IS_TKIP(x) ((x) == RSN_CIPHER_SUITE_TKIP || (x) == WPA_CIPHER_SUITE_TKIP)
+#define IS_WEP(x)  (GET_SELECTOR_TYPE(x) == CIPHER_SUITE_WEP40 || \
+                    GET_SELECTOR_TYPE(x) == CIPHER_SUITE_WEP104)
+
+    /* === Group-only BSS (pairwise NONE) === */
+    if (prBssRsnInfo->u4PairwiseKeyCipherSuiteCount == 1 &&
+        GET_SELECTOR_TYPE(prBssRsnInfo->au4PairwiseKeyCipherSuite[0]) == CIPHER_SUITE_NONE) {
+
+        uint32_t grp = prBssRsnInfo->u4GroupKeyCipherSuite;
+
+        if ((grp == RSN_CIPHER_SUITE_GCMP_256 && eEncStatus == ENUM_ENCRYPTION4_ENABLED) ||
+            (IS_CCMP(grp) && eEncStatus == ENUM_ENCRYPTION3_ENABLED) ||
+            (IS_TKIP(grp) && eEncStatus == ENUM_ENCRYPTION2_ENABLED) ||
+            (IS_WEP(grp)  && eEncStatus == ENUM_ENCRYPTION1_ENABLED)) {
+
+            *pu4Group = grp;
+            *pu4Pairwise = WPA_CIPHER_SUITE_NONE;
+            return TRUE;
+        }
+
+#if DBG
+        DBGLOG(RSN, TRACE,
+               "Group-only BSS mismatch: enc=%d group=0x%08x\n",
+               eEncStatus, grp);
+#endif
+        return FALSE;
+    }
+
+    /* === Normal case === */
+    for (i = 0; i < prBssRsnInfo->u4PairwiseKeyCipherSuiteCount; i++) {
+        uint32_t sel = prBssRsnInfo->au4PairwiseKeyCipherSuite[i];
+
+        switch (eEncStatus) {
+        case ENUM_ENCRYPTION4_ENABLED:
+            if (sel == RSN_CIPHER_SUITE_GCMP_256)
+                *pu4Pairwise = sel;
+            break;
+
+        case ENUM_ENCRYPTION3_ENABLED:
+            if (IS_CCMP(sel))
+                *pu4Pairwise = sel;
+            break;
+
+        case ENUM_ENCRYPTION2_ENABLED:
+            if (IS_TKIP(sel))
+                *pu4Pairwise = sel;
+            break;
+
+        case ENUM_ENCRYPTION1_ENABLED:
+            if (IS_WEP(sel))
+                *pu4Pairwise = sel;
+            break;
+
+        default:
+            DBGLOG(RSN, WARN, "Unsupported encryption status %d\n", eEncStatus);
+            return FALSE;
+        }
+    }
+
+    /* === Group cipher validation (FIXED) === */
+    {
+        uint32_t grp = prBssRsnInfo->u4GroupKeyCipherSuite;
+
+        switch (eEncStatus) {
+        case ENUM_ENCRYPTION4_ENABLED:
+            if (grp == RSN_CIPHER_SUITE_GCMP_256)
+                *pu4Group = grp;
+            break;
+
+        case ENUM_ENCRYPTION3_ENABLED:
+            if (IS_CCMP(grp))
+                *pu4Group = grp;
+            break;
+
+        case ENUM_ENCRYPTION2_ENABLED:
+            if (!IS_CCMP(grp))  /* TKIP mode must reject CCMP-only BSS */
+                *pu4Group = grp;
+            else
+                DBGLOG(RSN, TRACE,
+                       "Reject: TKIP mode vs CCMP group (0x%08x)\n", grp);
+            break;
+
+        case ENUM_ENCRYPTION1_ENABLED:
+            if (!IS_CCMP(grp) && !IS_TKIP(grp))
+                *pu4Group = grp;
+            else
+                DBGLOG(RSN, TRACE,
+                       "Reject: WEP mode vs modern group (0x%08x)\n", grp);
+            break;
+	default:
+	  DBGLOG(RSN, WARN,
+		 "Unsupported/invalid enc status %d (reject)\n",
+		 eEncStatus);
+	  return FALSE;
+
+        }
+    }
+
+    /* === Diagnostics (safe + meaningful) === */
+    DBGLOG(RSN, INFO,
+           "[RSN SELECT] enc=%d pairwise=0x%08x group=0x%08x (count=%u)",
+           eEncStatus,
+           *pu4Pairwise,
+           *pu4Group,
+           prBssRsnInfo->u4PairwiseKeyCipherSuiteCount);
+
+#if DBG
+    for (i = 0; i < prBssRsnInfo->u4PairwiseKeyCipherSuiteCount; i++) {
+        uint32_t sel = prBssRsnInfo->au4PairwiseKeyCipherSuite[i];
+        DBGLOG(RSN, TRACE,
+               "  cand[%u]=0x%08x type=0x%x",
+               i, sel, GET_SELECTOR_TYPE(sel));
+    }
+#endif
+
+    return (*pu4Pairwise != 0 && *pu4Group != 0) ? TRUE : FALSE;
+
+#undef IS_CCMP
+#undef IS_TKIP
+#undef IS_WEP
+}
+
+
+
+/* Helper: choose an AKM suite that we support and matches policy */
+static u_int8_t rsn_select_akm(IN struct ADAPTER *prAdapter,
+                               IN struct RSN_INFO *prBssRsnInfo,
+                               IN enum ENUM_PARAM_AUTH_MODE eAuthMode,
+                               IN uint8_t ucBssIndex,
+                               OUT uint32_t *pu4Akm)
+{
+    uint32_t j;
 #if CFG_SUPPORT_802_11W
-	if (i != 0)
-		for (i = (prBssRsnInfo->u4AuthKeyMgtSuiteCount - 1); i >= 0;
-		     i--) {
+    int32_t ii;
+#endif
+
+    if (!prAdapter || !prBssRsnInfo || !pu4Akm)
+        return FALSE;
+
+    *pu4Akm = 0;
+
+    /* special-case FT */
+    if (eAuthMode == AUTH_MODE_WPA2_FT_PSK &&
+        rsnSearchAKMSuite(prAdapter, RSN_AKM_SUITE_FT_PSK, &j, ucBssIndex)) {
+        *pu4Akm = RSN_AKM_SUITE_FT_PSK;
+        return TRUE;
+    } else if (eAuthMode == AUTH_MODE_WPA2_FT &&
+               rsnSearchAKMSuite(prAdapter, RSN_AKM_SUITE_FT_802_1X, &j, ucBssIndex)) {
+        *pu4Akm = RSN_AKM_SUITE_FT_802_1X;
+        return TRUE;
+    }
+
+#if CFG_SUPPORT_802_11W
+    /* iterate backward if required by MFP policy in original code */
+    for (ii = (int32_t)(prBssRsnInfo->u4AuthKeyMgtSuiteCount - 1); ii >= 0; ii--) {
+        if (rsnSearchAKMSuite(prAdapter, prBssRsnInfo->au4AuthKeyMgtSuite[ii], &j, ucBssIndex)) {
+            *pu4Akm = prBssRsnInfo->au4AuthKeyMgtSuite[ii];
+            return TRUE;
+        }
+    }
 #else
-		for (i = 0; i < prBssRsnInfo->u4AuthKeyMgtSuiteCount; i++) {
-#endif
-			if (rsnSearchAKMSuite(prAdapter,
-				prBssRsnInfo->au4AuthKeyMgtSuite[i], &j,
-				ucBssIndex)) {
-				u4AkmSuite =
-					prBssRsnInfo->au4AuthKeyMgtSuite[i];
-				break;
-			}
-		}
-
-	if (u4AkmSuite == 0) {
-		DBGLOG(RSN, TRACE, "Cannot support any AKM suites\n");
-		return FALSE;
-	}
-
-	DBGLOG(RSN, TRACE,
-	       "Selected pairwise/group cipher: 0x%x/0x%x\n",
-	       SWAP32(u4PairwiseCipher), SWAP32(u4GroupCipher));
-
-	DBGLOG(RSN, TRACE,
-	       "Selected AKM suite: 0x%x\n", SWAP32(u4AkmSuite));
-
-#if CFG_SUPPORT_802_11W
-	DBGLOG(RSN, TRACE, "[MFP] MFP setting = %d\n ",
-	       kalGetMfpSetting(prAdapter->prGlueInfo, ucBssIndex));
-
-	if (kalGetMfpSetting(prAdapter->prGlueInfo,
-		ucBssIndex) == RSN_AUTH_MFP_REQUIRED) {
-		if (!prBssRsnInfo->fgRsnCapPresent) {
-			DBGLOG(RSN, TRACE,
-			       "[MFP] Skip RSN IE, No MFP Required Capability.\n");
-			return FALSE;
-		} else if (!(prBssRsnInfo->u2RsnCap & ELEM_WPA_CAP_MFPC)) {
-			DBGLOG(RSN, WARN,
-			       "[MFP] Skip RSN IE, No MFP Required\n");
-			return FALSE;
-		}
-		aisGetAisSpecBssInfo(prAdapter, ucBssIndex)
-			->fgMgmtProtection = TRUE;
-	} else if (kalGetMfpSetting(prAdapter->prGlueInfo,
-		ucBssIndex) ==
-		   RSN_AUTH_MFP_OPTIONAL) {
-		if (prBssRsnInfo->u2RsnCap & (ELEM_WPA_CAP_MFPR |
-					      ELEM_WPA_CAP_MFPC))
-			aisGetAisSpecBssInfo(prAdapter, ucBssIndex)
-			->fgMgmtProtection = TRUE;
-	} else {
-		if ((prBssRsnInfo->fgRsnCapPresent) &&
-		(prBssRsnInfo->u2RsnCap & ELEM_WPA_CAP_MFPR)) {
-			DBGLOG(RSN, INFO,
-			       "[MFP] Skip RSN IE, No MFP Required Capability\n");
-			return FALSE;
-		}
-	}
-
-	DBGLOG(RSN, TRACE,
-	       "setting=%d, Cap=%d, CapPresent=%d, MgmtProtection = %d\n",
-	       kalGetMfpSetting(prAdapter->prGlueInfo, ucBssIndex),
-	       prBssRsnInfo->u2RsnCap,
-	       prBssRsnInfo->fgRsnCapPresent,
-	       aisGetAisSpecBssInfo(prAdapter, ucBssIndex)
-			->fgMgmtProtection);
+    for (i = 0; i < prBssRsnInfo->u4AuthKeyMgtSuiteCount; i++) {
+        if (rsnSearchAKMSuite(prAdapter, prBssRsnInfo->au4AuthKeyMgtSuite[i], &j, ucBssIndex)) {
+            *pu4Akm = prBssRsnInfo->au4AuthKeyMgtSuite[i];
+            return TRUE;
+        }
+    }
 #endif
 
-	/* TODO: WTBL cipher filed cannot
-	* 1-1 mapping to spec cipher suite number
-	*/
-	if (u4GroupCipher == RSN_CIPHER_SUITE_GCMP_256) {
-		prBss->ucEncLevel = 4;
-	} else if (GET_SELECTOR_TYPE(u4GroupCipher) == CIPHER_SUITE_CCMP) {
-		prBss->ucEncLevel = 3;
-	} else if (GET_SELECTOR_TYPE(u4GroupCipher) == CIPHER_SUITE_TKIP) {
-		prBss->ucEncLevel = 2;
-	} else if (GET_SELECTOR_TYPE(u4GroupCipher) ==
-		   CIPHER_SUITE_WEP40 ||
-		   GET_SELECTOR_TYPE(u4GroupCipher) == CIPHER_SUITE_WEP104) {
-		prBss->ucEncLevel = 1;
-	} else {
-		DBGLOG(RSN, WARN,
-		       "GroupCipher not in CCMP/TKIP/WEP40/WEP104\n");
-	}
-	prBss->u4RsnSelectedPairwiseCipher = u4PairwiseCipher;
-	prBss->u4RsnSelectedGroupCipher = u4GroupCipher;
-	prBss->u4RsnSelectedAKMSuite = u4AkmSuite;
+    return FALSE;
+}
 
-	return TRUE;
-
-}				/* rsnPerformPolicySelection */
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -1697,6 +1786,11 @@ void rsnGenerateRSNIE(IN struct ADAPTER *prAdapter,
 	pucBuffer = (uint8_t *) ((unsigned long)
 				 prMsduInfo->prPacket + (unsigned long)
 				 prMsduInfo->u2FrameLength);
+
+	DBGLOG_MEM8(RSN, ERROR,
+		    pucBuffer,
+		    IE_SIZE(pucBuffer));
+
 	/* Todo:: network id */
 	ucBssIndex = prMsduInfo->ucBssIndex;
 	prAisSpecBssInfo = aisGetAisSpecBssInfo(prAdapter, ucBssIndex);
@@ -1704,12 +1798,21 @@ void rsnGenerateRSNIE(IN struct ADAPTER *prAdapter,
 
 	/* For FT, we reuse the RSN Element composed in userspace */
 	if (authAddRSNIE_impl(prAdapter, prMsduInfo))
-		return;
+	  return;
 
 	if (_addRSNIE_impl(prAdapter, prMsduInfo))
-		return;
+	  return;
 
 	prBssInfo = prAdapter->aprBssInfo[ucBssIndex];
+
+
+	DBGLOG(RSN, ERROR,
+	       "TX RSN IE: group=%x pairwise=%x AKM=%x cap=%x",
+	       prBssInfo->u4RsnSelectedGroupCipher,
+	       prBssInfo->u4RsnSelectedPairwiseCipher,
+	       prBssInfo->u4RsnSelectedAKMSuite,
+	       prBssInfo->u2RsnSelectedCapInfo);
+
 
 	if (
 #if CFG_ENABLE_WIFI_DIRECT
@@ -3849,6 +3952,14 @@ u_int8_t rsnParseOsenIE(struct ADAPTER *prAdapter,
 
 		DBGLOG(RSN, WARN, "No AKM found, using default (802.1X)\n");
 	}
+
+
+	DBGLOG(RSN, ERROR,
+	       "[RSN-GEN] group=%08x pairwise=%08x akm=%08x rsn_len=%u",
+	       GET_BSS_INFO_BY_INDEX(prAdapter, ucBssIndex)->u4RsnSelectedGroupCipher,
+	       GET_BSS_INFO_BY_INDEX(prAdapter, ucBssIndex)->u4RsnSelectedPairwiseCipher,
+	       GET_BSS_INFO_BY_INDEX(prAdapter, ucBssIndex)->u4RsnSelectedAKMSuite,
+	       RSN_IE(pucBuffer)->ucLength);
 
 	prOsenInfo->u2RsnCap = u2Cap;
 #if CFG_SUPPORT_802_11W

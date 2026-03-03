@@ -86,6 +86,15 @@
  */
 #define RX_RESPONSE_TIMEOUT (3000)
 
+/* Maximum bytes to hex-dump from packet and descriptor */
+#define HAL_RX_DUMP_BYTES      32
+#define HAL_RX_DESC_DWORDS     4   /* how many u32s to dump from prRxStatus */
+
+enum {
+    HAL_RX_TYPE7_ACCEPTED = 1,
+    HAL_RX_TYPE7_DROPPED = 0,
+};
+
 
 /*******************************************************************************
  *                             D A T A   T Y P E S
@@ -116,6 +125,13 @@ static void halResetMsduToken(IN struct ADAPTER *prAdapter);
 uint32_t mt79xx_pci_function_recover(struct pci_dev *pdev,
 					    struct GLUE_INFO *prGlueInfo);
 
+/* prototype so callers don't see an implicit decl */
+#if 0
+static int hal_rx_handle_type7(IN struct ADAPTER *prAdapter,
+                               IN struct SW_RFB *prSwRfb,
+                               IN struct RX_DESC_OPS_T *prRxDescOps,
+                               IN void *prRxStatus);
+#endif
 /*******************************************************************************
  *                              F U N C T I O N S
  *******************************************************************************
@@ -1545,216 +1561,466 @@ void halSerHifReset(IN struct ADAPTER *prAdapter)
 {
 }
 
-void halRxReceiveRFBs(IN struct ADAPTER *prAdapter, uint32_t u4Port,
-	uint8_t fgRxData)
+
+/* File-scoped port guard (preserve original static behavior) */
+static int32_t ai4PortLock[RX_RING_MAX];
+
+/* Helper: pull free SW_RFBs into a local queue (minimizes lock hold time)
+ * Inputs:
+ *   prAdapter, u4Port, prRxCtrl, prGlueInfo, initial u4RxCnt (requested number)
+ * Outputs:
+ *   prRxQue (initialized and filled)
+ * Returns: actual number pulled (u4RxCnt pulled)
+ */
+static uint32_t hal_rx_pull_free_rfbs(IN struct ADAPTER *prAdapter,
+                                      IN uint32_t u4Port,
+                                      IN struct RX_CTRL *prRxCtrl,
+                                      IN struct GLUE_INFO *prGlueInfo,
+                                      IN uint32_t u4RequestedCnt,
+                                      OUT struct QUE *prRxQue)
 {
-	struct RX_CTRL *prRxCtrl;
-	struct SW_RFB *prSwRfb = (struct SW_RFB *) NULL;
-	uint8_t *pucBuf = NULL;
-	void *prRxStatus;
-	u_int8_t fgStatus;
-	uint32_t u4RxCnt;
-	struct RX_DESC_OPS_T *prRxDescOps;
-	struct RTMP_RX_RING *prRxRing;
-	struct QUE rFreeRxQue;
-	struct QUE *prRxQue = &rFreeRxQue;
-	static int32_t ai4PortLock[RX_RING_MAX];
-	struct GLUE_INFO *prGlueInfo;
+    KAL_SPIN_LOCK_DECLARATION();
 
-	KAL_SPIN_LOCK_DECLARATION();
+    struct SW_RFB *prSwRfb;
+    uint32_t u4Left = u4RequestedCnt;
 
-	/* Port idx sanity */
-	if (u4Port >= RX_RING_MAX) {
-		DBGLOG(RX, ERROR, "Invalid P[%u]\n", u4Port);
-		return;
-	}
+    QUEUE_INITIALIZE(prRxQue);
 
-	if (GLUE_INC_REF_CNT(ai4PortLock[u4Port]) > 1) {
-		/* Single user allowed per port read */
-		DBGLOG(RX, WARN, "Single user only P[%u] [%d]\n", u4Port,
-			GLUE_GET_REF_CNT(ai4PortLock[u4Port]));
-		goto end;
-	}
-
-	DEBUGFUNC("nicRxPCIeReceiveRFBs");
-
-	ASSERT(prAdapter);
-
-	prRxCtrl = &prAdapter->rRxCtrl;
-	ASSERT(prRxCtrl);
-	prRxDescOps = prAdapter->chip_info->prRxDescOps;
-	ASSERT(prRxDescOps->nic_rxd_get_rx_byte_count);
-	ASSERT(prRxDescOps->nic_rxd_get_pkt_type);
-	ASSERT(prRxDescOps->nic_rxd_get_wlan_idx);
-#if DBG
-	ASSERT(prRxDescOps->nic_rxd_get_sec_mode);
-#endif /* DBG */
-	prGlueInfo = prAdapter->prGlueInfo;
-
-
-	if (!prRxCtrl->rFreeSwRfbList.u4NumElem) {
-		DBGLOG(RX, WARN, "No More RFB for P[%u] 1\n", u4Port);
-		prAdapter->u4NoMoreRfb |= BIT(u4Port);
-		goto end;
-	}
-
-	/* unset no more rfb port bit */
-	prAdapter->u4NoMoreRfb &= ~BIT(u4Port);
-
-	u4RxCnt = halWpdmaGetRxDmaDoneCnt(prAdapter->prGlueInfo, u4Port);
-
-	if (!u4RxCnt) {
-		/* No data in DMA, return directly */
-		goto end;
-	}
-	QUEUE_INITIALIZE(prRxQue);
-
-	DBGLOG(RX, LOUD, "halRxReceiveRFBs: u4RxCnt:%d\n", u4RxCnt);
-
-	prRxRing = &prAdapter->prGlueInfo->rHifInfo.RxRing[u4Port];
-
-	kalDevRegRead(prAdapter->prGlueInfo,
-		prRxRing->hw_cidx_addr, &prRxRing->RxCpuIdx);
-
-	/* Dispatch SwRFBs as more as possible in single lock */
-	KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
-	while (u4RxCnt-- && prRxCtrl->rFreeSwRfbList.u4NumElem) {
+    KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
+    while (u4Left-- && prRxCtrl->rFreeSwRfbList.u4NumElem) {
 #if CFG_SUPPORT_RX_NAPI
-		/* if fifo exhausted, stop deQ and schedule NAPI */
-		if (prGlueInfo->prRxDirectNapi &&
-			KAL_FIFO_IS_FULL(&prGlueInfo->rRxKfifoQ)) {
-			kal_napi_schedule(prGlueInfo->prRxDirectNapi);
-			DBGLOG_LIMITED(RX, ERROR, "Fifo exhausted(%d)\n",
-				KAL_FIFO_LEN(&prGlueInfo->rRxKfifoQ));
-			break;
-		}
+        /* if fifo exhausted, stop deQ and schedule NAPI */
+        if (prGlueInfo->prRxDirectNapi && KAL_FIFO_IS_FULL(&prGlueInfo->rRxKfifoQ)) {
+            kal_napi_schedule(prGlueInfo->prRxDirectNapi);
+            DBGLOG_LIMITED(RX, ERROR, "Fifo exhausted(%d)\n",
+                           KAL_FIFO_LEN(&prGlueInfo->rRxKfifoQ));
+            break;
+        }
 #endif
-		QUEUE_REMOVE_HEAD(&prRxCtrl->rFreeSwRfbList,
-			prSwRfb, struct SW_RFB *);
-		if (!prSwRfb) {
-			DBGLOG(RX, WARN, "No More RFB for P[%u] 2\n", u4Port);
-			prAdapter->u4NoMoreRfb |= BIT(u4Port);
-			break;
-		}
-		QUEUE_INSERT_TAIL(prRxQue, &prSwRfb->rQueEntry);
-	}
-	KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
-	u4RxCnt = prRxQue->u4NumElem;
+        QUEUE_REMOVE_HEAD(&prRxCtrl->rFreeSwRfbList, prSwRfb, struct SW_RFB *);
+        if (!prSwRfb) {
+            DBGLOG(RX, WARN, "No More RFB for P[%u] (pull phase)\n", u4Port);
+            prAdapter->u4NoMoreRfb |= BIT(u4Port);
+            break;
+        }
+        QUEUE_INSERT_TAIL(prRxQue, &prSwRfb->rQueEntry);
+    }
+    KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
 
-	while (QUEUE_IS_NOT_EMPTY(prRxQue)) {
-		QUEUE_REMOVE_HEAD(prRxQue, prSwRfb, struct SW_RFB *);
-
-		if (!prSwRfb) {
-			DBGLOG(RX, WARN, "No More RFB for P[%u] 3\n", u4Port);
-			prAdapter->u4NoMoreRfb |= BIT(u4Port);
-			break;
-		}
-
-		if (fgRxData) {
-			fgStatus = kalDevReadData(prAdapter->prGlueInfo,
-				u4Port, prSwRfb);
-		} else {
-			pucBuf = prSwRfb->pucRecvBuff;
-			ASSERT(pucBuf);
-
-			fgStatus = kalDevPortRead(prAdapter->prGlueInfo,
-				u4Port, CFG_RX_MAX_PKT_SIZE,
-				pucBuf, CFG_RX_MAX_PKT_SIZE);
-		}
-		if (!fgStatus) {
-			KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
-			QUEUE_INSERT_TAIL(&prRxCtrl->rFreeSwRfbList,
-				&prSwRfb->rQueEntry);
-			KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
-
-			continue;
-		}
-
-		prRxStatus = prSwRfb->prRxStatus;
-		ASSERT(prRxStatus);
-
-		prSwRfb->ucPacketType =
-			prRxDescOps->nic_rxd_get_pkt_type(prRxStatus);
-
-		/* * H-FIX: The MT7902 Firmware reports scan results as Type 7.
-		 * In some cases, the PDMA layer fails to update u2PacketLen, 
-		 * causing the hardware interrupt to loop indefinitely.
-		 */
-		if (prSwRfb->ucPacketType == 7) {
-			uint16_t u2HwLen = prRxDescOps->nic_rxd_get_rx_byte_count(prRxStatus);
-			
-			if (prSwRfb->u2PacketLen == 0 && u2HwLen > 0) {
-				DBGLOG(RX, WARN, "[H-FIX] Correcting Type 7 Len: 0 -> %u\n", u2HwLen);
-				prSwRfb->u2PacketLen = u2HwLen;
-				prSwRfb->u2RxByteCount = u2HwLen;
-				if (prSwRfb->pvPacket) {
-					skb_put((struct sk_buff *)prSwRfb->pvPacket, u2HwLen);
-				}
-			}
-		}
-
-		DBGLOG(RX, WARN, "[PDMA-RX] port=%u pkt_type=%u\n", u4Port, prSwRfb->ucPacketType);
-
-		if (prSwRfb->ucPacketType == RX_PKT_TYPE_MSDU_REPORT) {
-			nicRxProcessMsduReport(prAdapter, prSwRfb);
-			continue;
-		}
-
-		if (prSwRfb->ucPacketType == RX_PKT_TYPE_RX_REPORT) {
-			nicRxProcessRxReport(prAdapter, prSwRfb);
-			nicRxReturnRFB(prAdapter, prSwRfb);
-			continue;
-		}
-
-		GLUE_RX_SET_PKT_INT_TIME(prSwRfb->pvPacket,
-			prAdapter->prGlueInfo->u8HifIntTime);
-		GLUE_RX_SET_PKT_RX_TIME(prSwRfb->pvPacket, sched_clock());
-
-		prSwRfb->ucStaRecIdx =
-			secGetStaIdxByWlanIdx(
-				prAdapter,
-				prRxDescOps->nic_rxd_get_wlan_idx(prRxStatus));
-
-		if (HAL_IS_RX_DIRECT(prAdapter) &&
-			prSwRfb->ucPacketType == RX_PKT_TYPE_RX_DATA) {
-#if CFG_SUPPORT_RX_NAPI
-			/* If RxDirectNapi and RxFfifo available, run NAPI mode
-			* Otherwise, goto default RX-direct policy
-			*/
-			if (prGlueInfo->prRxDirectNapi &&
-				KAL_FIFO_IN(&prGlueInfo->rRxKfifoQ, prSwRfb))
-				kal_napi_schedule(prGlueInfo->prRxDirectNapi);
-			else
-#endif
-			{
-				nicRxProcessPacketType(prAdapter, prSwRfb);
-			}
-		} else {
-			KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_QUE);
-			QUEUE_INSERT_TAIL(&prRxCtrl->rReceivedRfbList,
-				&prSwRfb->rQueEntry);
-			RX_INC_CNT(prRxCtrl, RX_MPDU_TOTAL_COUNT);
-			KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_QUE);
-		}
-	}
-
-	if (prRxRing->fgSwRead) {
-		kalDevRegWrite(prAdapter->prGlueInfo,
-			prRxRing->hw_cidx_addr, prRxRing->RxCpuIdx);
-		prRxRing->fgSwRead = false;
-	}
-
-	if (prRxQue->u4NumElem) {
-		/* Pending SwRfbs there? Flush back to rFreeSwRfbList */
-		KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
-		QUEUE_CONCATENATE_QUEUES(&prRxCtrl->rFreeSwRfbList,
-			prRxQue);
-		KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
-	}
-
-end:
-	GLUE_DEC_REF_CNT(ai4PortLock[u4Port]);
+    return prRxQue->u4NumElem;
 }
+
+
+static void hal_rx_process_event_rfbs(struct ADAPTER *prAdapter,
+                                      struct QUE *prRxQue)
+{
+    struct SW_RFB *prSwRfb;
+
+    while (QUEUE_IS_NOT_EMPTY(prRxQue)) {
+        QUEUE_REMOVE_HEAD(prRxQue, prSwRfb, struct SW_RFB *);
+
+        if (!prSwRfb)
+            break;
+
+        /* read already done */
+
+        /* DO NOT use data RX descriptor parsing */
+
+        /* pass directly to MCU event handler */
+        nicRxProcessEventPacket(prAdapter, prSwRfb);
+
+        nicRxReturnRFB(prAdapter, prSwRfb);
+    }
+}
+
+/* Helper: process each SW_RFB from prRxQue
+ * - reads data (fgRxData decides which read primitive)
+ * - applies H-FIX for pkt_type==7
+ * - dispatches packet-type specific handlers
+ * - either calls nicRxProcessPacketType (RX-direct) or enqueues into rReceivedRfbList
+ *
+ * Inputs:
+ *   prAdapter, u4Port, fgRxData, prRxDescOps, prRxRing, prRxQue
+ */
+static void hal_rx_process_rfbs(IN struct ADAPTER *prAdapter,
+                                IN uint32_t u4Port,
+                                IN uint8_t fgRxData,
+                                IN struct RX_DESC_OPS_T *prRxDescOps,
+                                IN struct RTMP_RX_RING *prRxRing,
+                                IN struct QUE *prRxQue)
+{
+
+
+    if (u4Port == 1) {
+	/* THIS IS MCU EVENT RING */
+	hal_rx_process_event_rfbs(prAdapter, prRxQue);
+	return;
+    }
+    KAL_SPIN_LOCK_DECLARATION();
+    struct RX_CTRL *prRxCtrl = &prAdapter->rRxCtrl;
+    struct SW_RFB *prSwRfb = NULL;
+    uint8_t *pucBuf = NULL;
+    void *prRxStatus = NULL;
+    u_int8_t fgStatus;
+    //struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
+
+    while (QUEUE_IS_NOT_EMPTY(prRxQue)) {
+        QUEUE_REMOVE_HEAD(prRxQue, prSwRfb, struct SW_RFB *);
+        if (!prSwRfb) {
+            DBGLOG(RX, WARN, "No More RFB for P[%u] (process phase)\n", u4Port);
+            prAdapter->u4NoMoreRfb |= BIT(u4Port);
+            break;
+        }
+
+        /* read data into prSwRfb */
+        if (fgRxData) {
+            fgStatus = kalDevReadData(prAdapter->prGlueInfo, u4Port, prSwRfb);
+        } else {
+            pucBuf = prSwRfb->pucRecvBuff;
+            ASSERT(pucBuf);
+            fgStatus = kalDevPortRead(prAdapter->prGlueInfo,
+                                     u4Port,
+                                     CFG_RX_MAX_PKT_SIZE,
+                                     pucBuf,
+                                     CFG_RX_MAX_PKT_SIZE);
+        }
+
+        if (!fgStatus) {
+            /* read failed: return RFB to free list */
+            KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
+            QUEUE_INSERT_TAIL(&prRxCtrl->rFreeSwRfbList, &prSwRfb->rQueEntry);
+            KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
+            continue;
+        }
+
+        /* Validate rx status pointer and extract packet metadata */
+        prRxStatus = prSwRfb->prRxStatus;
+        ASSERT(prRxStatus);
+	uint32_t u4Len = prRxDescOps->nic_rxd_get_rx_byte_count(prRxStatus);
+	uint32_t u4WlanIdx = prRxDescOps->nic_rxd_get_wlan_idx(prRxStatus);
+	uint32_t u4SecMode = prRxDescOps->nic_rxd_get_sec_mode(prRxStatus);
+
+	DBGLOG(RX, WARN,
+	       "[RXD] type=%u len=%u wlan_idx=%u sec=%u\n",
+	       prSwRfb->ucPacketType,
+	       u4Len,
+	       u4WlanIdx,
+	       u4SecMode);
+
+        prSwRfb->ucPacketType = prRxDescOps->nic_rxd_get_pkt_type(prRxStatus);
+
+	uint16_t u2RxByteCount = prRxDescOps->nic_rxd_get_rx_byte_count(prRxStatus);
+	uint8_t ucWlanIdx = prRxDescOps->nic_rxd_get_wlan_idx(prRxStatus);
+	uint8_t ucSecMode = prRxDescOps->nic_rxd_get_sec_mode(prRxStatus);
+
+	DBGLOG(RX, WARN,
+	       "[RXD] port=%u type=%u len=%u wlan_idx=%u sec=%u\n",
+	       u4Port,
+	       prSwRfb->ucPacketType,
+	       u2RxByteCount,
+	       ucWlanIdx,
+	       ucSecMode);
+
+	/* dump suspicious small packets */
+	if (u2RxByteCount <= 64) {
+	  uint8_t *buf = prSwRfb->pucRecvBuff;
+	  if (buf) {
+	    DBGLOG_MEM8(RX, WARN, buf, u2RxByteCount);
+	  }
+	}
+
+        DBGLOG(RX, WARN, "[PDMA-RX] port=%u pkt_type=%u\n", u4Port, prSwRfb->ucPacketType);
+
+        /* packet-type specific handling */
+        if (prSwRfb->ucPacketType == RX_PKT_TYPE_MSDU_REPORT) {
+            nicRxProcessMsduReport(prAdapter, prSwRfb);
+            continue;
+        }
+
+        if (prSwRfb->ucPacketType == RX_PKT_TYPE_RX_REPORT) {
+            nicRxProcessRxReport(prAdapter, prSwRfb);
+            nicRxReturnRFB(prAdapter, prSwRfb);
+            continue;
+        }
+
+        /* annotate timestamps */
+        GLUE_RX_SET_PKT_INT_TIME(prSwRfb->pvPacket, prAdapter->prGlueInfo->u8HifIntTime);
+        GLUE_RX_SET_PKT_RX_TIME(prSwRfb->pvPacket, sched_clock());
+
+        /* determine STA index from wlan index in descriptor */
+        prSwRfb->ucStaRecIdx = secGetStaIdxByWlanIdx(
+            prAdapter,
+            prRxDescOps->nic_rxd_get_wlan_idx(prRxStatus));
+
+	if (prSwRfb->ucPacketType == RX_PKT_TYPE_RX_DATA) {
+	  uint8_t *p = prSwRfb->pucRecvBuff;
+
+	  if (p[0] == 0xff && p[1] == 0xff) {
+	    DBGLOG(RX, ERROR, "[RXD] garbage frame detected\n");
+	  }
+
+	  /* optional: dump first bytes */
+	  DBGLOG_MEM8(RX, INFO, p, 32);
+	}
+
+
+        /* RX-direct: data path optimization */
+        if (HAL_IS_RX_DIRECT(prAdapter) && prSwRfb->ucPacketType == RX_PKT_TYPE_RX_DATA) {
+#if CFG_SUPPORT_RX_NAPI
+            if (prAdapter->prGlueInfo->prRxDirectNapi && KAL_FIFO_IN(&prAdapter->prGlueInfo->rRxKfifoQ, prSwRfb)) {
+                kal_napi_schedule(prAdapter->prGlueInfo->prRxDirectNapi);
+            } else
+#endif
+            {
+                nicRxProcessPacketType(prAdapter, prSwRfb);
+            }
+        } else {
+            /* normal path: push to received list */
+            KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_QUE);
+            QUEUE_INSERT_TAIL(&prRxCtrl->rReceivedRfbList, &prSwRfb->rQueEntry);
+            RX_INC_CNT(prRxCtrl, RX_MPDU_TOTAL_COUNT);
+            KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_QUE);
+        }
+    } /* end while prRxQue */
+}
+
+
+static void hal_rx_writeback_and_cleanup(IN struct ADAPTER *prAdapter,
+                                         IN struct RTMP_RX_RING *prRxRing,
+                                         IN struct QUE *prRxQue)
+{
+    KAL_SPIN_LOCK_DECLARATION();
+    struct RX_CTRL *prRxCtrl = &prAdapter->rRxCtrl;
+
+    /* If SW consumed ring entries, write back CPU idx to hardware */
+    if (prRxRing->fgSwRead) {
+        kalDevRegWrite(prAdapter->prGlueInfo, prRxRing->hw_cidx_addr, prRxRing->RxCpuIdx);
+        prRxRing->fgSwRead = false;
+    }
+
+    /* If we left any SW_RFBs queued (not processed), return them to free list */
+    if (prRxQue->u4NumElem) {
+        KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
+        QUEUE_CONCATENATE_QUEUES(&prRxCtrl->rFreeSwRfbList, prRxQue);
+        KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
+    }
+}
+
+
+/*
+ * Analyze Type 7 (scan/event) RX and decide whether to accept using HW
+ * length, or drop it. Returns HAL_RX_TYPE7_ACCEPTED if the RFB is OK for
+ * upper layers (after possibly fixing lengths), HAL_RX_TYPE7_DROPPED if
+ * the RFB must be dropped (and returned to free list).
+ *
+ * This function performs diagnostic logging (rate-limited) to help
+ * debug mis-parsed descriptors.
+ */
+#if 0
+static int hal_rx_handle_type7(IN struct ADAPTER *prAdapter,
+                               IN struct SW_RFB *prSwRfb,
+                               IN struct RX_DESC_OPS_T *prRxDescOps,
+                               IN void *prRxStatus)
+{
+    uint16_t u2HwLen = 0;
+    uint16_t u2SwLen = prSwRfb->u2PacketLen;
+    //struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
+    uint32_t i;
+    uint32_t *pu4Desc = (uint32_t *)prRxStatus;
+    uint8_t *pucBuf = prSwRfb->pucRecvBuff;
+    uint32_t u4WlanIdx = (uint32_t)-1;
+    uint32_t u4SecMode = (uint32_t)-1;
+    bool hw_len_ok = false;
+
+    /* Try to fetch hardware byte count if operation exists */
+    if (prRxDescOps && prRxDescOps->nic_rxd_get_rx_byte_count) {
+        u2HwLen = prRxDescOps->nic_rxd_get_rx_byte_count(prRxStatus);
+    }
+
+    /* optionally read wlan idx & sec mode for more context */
+    if (prRxDescOps && prRxDescOps->nic_rxd_get_wlan_idx)
+        u4WlanIdx = prRxDescOps->nic_rxd_get_wlan_idx(prRxStatus);
+
+    if (prRxDescOps && prRxDescOps->nic_rxd_get_sec_mode)
+        u4SecMode = prRxDescOps->nic_rxd_get_sec_mode(prRxStatus);
+
+    /* Validate the HW length */
+    if (u2HwLen > 0 && u2HwLen <= CFG_RX_MAX_PKT_SIZE)
+        hw_len_ok = true;
+
+    /*
+     * If software packet length is zero but HW length is sane, accept it
+     * but *log the event* (rate-limited). This preserves compatibility for
+     * the legitimate PDMA/firmware combos that zero u2PacketLen.
+     *
+     * Otherwise, drop and log (with descriptor and payload sample) so we
+     * can diagnose what's being produced by the hardware.
+     */
+    if (u2SwLen == 0 && hw_len_ok) {
+        /* Accept after short log */
+        if (printk_ratelimit()) {
+            DBGLOG_LIMITED(RX, WARN,
+                "[H-FIX] Type7: zero sw len, using hw_len=%u wlan_idx=%u sec=%u\n",
+                u2HwLen, u4WlanIdx, u4SecMode);
+        }
+
+        prSwRfb->u2PacketLen = u2HwLen;
+        prSwRfb->u2RxByteCount = u2HwLen;
+        if (prSwRfb->pvPacket) {
+            /* extend skb so upper layers see payload */
+            skb_put((struct sk_buff *)prSwRfb->pvPacket, u2HwLen);
+        }
+        return HAL_RX_TYPE7_ACCEPTED;
+    }
+
+    /* If sw len non-zero and reasonable, accept silently */
+    if (u2SwLen > 0 && u2SwLen <= CFG_RX_MAX_PKT_SIZE) {
+        return HAL_RX_TYPE7_ACCEPTED;
+    }
+
+    /* At this point: both sw len and hw len are invalid or missing -> drop */
+    if (printk_ratelimit()) {
+        /* Log header info */
+        DBGLOG_LIMITED(RX, WARN,
+            "HAL_RX: Dropping Type7 pkt: sw_len=%u hw_len=%u wlan_idx=%u sec=%u pkt=%p buf=%p\n",
+            u2SwLen, u2HwLen, u4WlanIdx, u4SecMode, prSwRfb->pvPacket, pucBuf);
+
+        /* Dump first bytes of packet buffer (if present) */
+        if (pucBuf) {
+            char hexbuf[HAL_RX_DUMP_BYTES * 3 + 1];
+            int off = 0;
+            int to_dump = min((uint32_t)HAL_RX_DUMP_BYTES, prSwRfb->u2RxByteCount ?: HAL_RX_DUMP_BYTES);
+
+            for (i = 0; i < (uint32_t)to_dump; i++) {
+                off += scnprintf(&hexbuf[off], sizeof(hexbuf) - off, "%02x ", pucBuf[i]);
+                if (off >= (int)sizeof(hexbuf) - 4)
+                    break;
+            }
+            hexbuf[off ? off - 1 : 0] = '\0'; /* trim trailing space */
+            DBGLOG_LIMITED(RX, WARN, "HAL_RX: payload[0..%u]: %s\n", to_dump, hexbuf);
+        } else {
+            DBGLOG_LIMITED(RX, WARN, "HAL_RX: no pucRecvBuff available to sample\n");
+        }
+
+        /* Dump descriptor dwords (if accessible) */
+        if (prRxStatus) {
+            char dwords[HAL_RX_DESC_DWORDS * 11 + 1];
+            int off = 0;
+            for (i = 0; i < HAL_RX_DESC_DWORDS; i++) {
+                off += scnprintf(&dwords[off], sizeof(dwords) - off, "%08x ", pu4Desc[i]);
+                if (off >= (int)sizeof(dwords) - 10)
+                    break;
+            }
+            dwords[off ? off - 1 : 0] = '\0';
+            DBGLOG_LIMITED(RX, WARN, "HAL_RX: desc dwords: %s\n", dwords);
+        }
+    }
+
+    return HAL_RX_TYPE7_DROPPED;
+}
+#endif
+
+
+
+
+void halRxReceiveRFBs(IN struct ADAPTER *prAdapter, uint32_t u4Port,
+                      uint8_t fgRxData)
+{
+    struct RX_CTRL *prRxCtrl;
+    struct RX_DESC_OPS_T *prRxDescOps = NULL;
+    struct RTMP_RX_RING *prRxRing = NULL;
+    struct QUE rFreeRxQue;
+    struct QUE *prRxQue = &rFreeRxQue;
+    struct GLUE_INFO *prGlueInfo = NULL;
+    uint32_t u4RxCnt = 0;
+
+    /* NOTE: removed KAL_SPIN_LOCK_DECLARATION() here to avoid unused __ulFlags
+       — lock macros are used inside helpers which declare their own __ulFlags */
+
+    /* --- Sanity checks & port lock / ref-count --- */
+    if (u4Port >= RX_RING_MAX) {
+        DBGLOG(RX, ERROR, "Invalid P[%u]\n", u4Port);
+        return;
+    }
+
+    if (GLUE_INC_REF_CNT(ai4PortLock[u4Port]) > 1) {
+        /* Single user allowed per port read */
+        DBGLOG(RX, WARN, "Single user only P[%u] [%d]\n", u4Port,
+               GLUE_GET_REF_CNT(ai4PortLock[u4Port]));
+        goto out; /* ensure DEC_REF at exit */
+    }
+
+    DEBUGFUNC("nicRxPCIeReceiveRFBs");
+
+    if (!prAdapter) {
+        DBGLOG(RX, ERROR, "NULL prAdapter\n");
+        goto out;
+    }
+
+    prRxCtrl = &prAdapter->rRxCtrl;
+    if (!prRxCtrl) {
+        DBGLOG(RX, ERROR, "NULL prRxCtrl\n");
+        goto out;
+    }
+
+    prRxDescOps = prAdapter->chip_info ? prAdapter->chip_info->prRxDescOps : NULL;
+    if (!prRxDescOps ||
+        !prRxDescOps->nic_rxd_get_rx_byte_count ||
+        !prRxDescOps->nic_rxd_get_pkt_type ||
+        !prRxDescOps->nic_rxd_get_wlan_idx) {
+        DBGLOG(RX, ERROR, "Missing RX_DESC_OPS\n");
+        goto out;
+    }
+
+#if DBG
+    if (!prRxDescOps->nic_rxd_get_sec_mode) {
+        DBGLOG(RX, WARN, "Missing nic_rxd_get_sec_mode (DBG build expects it)\n");
+    }
+#endif
+
+    prGlueInfo = prAdapter->prGlueInfo;
+    if (!prGlueInfo) {
+        DBGLOG(RX, ERROR, "NULL prGlueInfo\n");
+        goto out;
+    }
+
+    /* --- Quick check for free RFBs available --- */
+    if (!prRxCtrl->rFreeSwRfbList.u4NumElem) {
+        DBGLOG(RX, WARN, "No More RFB for P[%u] 1\n", u4Port);
+        prAdapter->u4NoMoreRfb |= BIT(u4Port);
+        goto out;
+    }
+
+    /* unset no more rfb port bit */
+    prAdapter->u4NoMoreRfb &= ~BIT(u4Port);
+
+    /* --- Ask PDMA how many completed descriptors exist --- */
+    u4RxCnt = halWpdmaGetRxDmaDoneCnt(prAdapter->prGlueInfo, u4Port);
+    if (!u4RxCnt) {
+        /* No data in DMA, nothing to do */
+        goto out;
+    }
+
+    DBGLOG(RX, LOUD, "halRxReceiveRFBs: u4RxCnt:%u\n", u4RxCnt);
+
+    prRxRing = &prAdapter->prGlueInfo->rHifInfo.RxRing[u4Port];
+    kalDevRegRead(prAdapter->prGlueInfo, prRxRing->hw_cidx_addr, &prRxRing->RxCpuIdx);
+
+    /* Pull free RFBs into a local queue */
+    u4RxCnt = hal_rx_pull_free_rfbs(prAdapter, u4Port, prRxCtrl, prGlueInfo, u4RxCnt, prRxQue);
+
+    /* Process pulled RFBs outside the free-list lock */
+    hal_rx_process_rfbs(prAdapter, u4Port, fgRxData, prRxDescOps, prRxRing, prRxQue);
+
+    /* Writeback & return any leftover RFBs */
+    hal_rx_writeback_and_cleanup(prAdapter, prRxRing, prRxQue);
+
+out:
+    /* always decrement the per-port refcount guard */
+    GLUE_DEC_REF_CNT(ai4PortLock[u4Port]);
+}
+
+
 
 
 static void halDefaultProcessRxInterrupt(IN struct ADAPTER *prAdapter)
@@ -2185,11 +2451,11 @@ void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo)
 	/* Init RX Ring0 Base/Size/Index pointer CSR */
 	halWpdmaInitRxRing(prGlueInfo);
 
-	if (prBusInfo->wfdmaManualPrefetch)
-		prBusInfo->wfdmaManualPrefetch(prGlueInfo);
-
 	if (prBusInfo->pdmaSetup)
 		prBusInfo->pdmaSetup(prGlueInfo, TRUE);
+
+	if (prBusInfo->wfdmaManualPrefetch)
+		prBusInfo->wfdmaManualPrefetch(prGlueInfo);
 
 	/* Write sleep mode magic num to dummy reg */
 	if (prBusInfo->setDummyReg)

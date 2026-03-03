@@ -543,6 +543,12 @@ struct STA_RECORD *bssCreateStaRecFromBssDesc(IN struct ADAPTER *prAdapter,
 	mqmProcessScanResult(prAdapter, prBssDesc, prStaRec);
 	nicTxUpdateStaRecDefaultRate(prAdapter, prStaRec);
 
+	/* Populate RSN policy selection FIRST */
+	if (IS_AP_STA(prStaRec)) {
+		rsnPerformPolicySelection(prAdapter, prBssDesc, ucBssIndex);
+		bssUpdateStaRecFromCfgAssoc(prAdapter, prBssDesc, prStaRec);
+	}
+
 	return prStaRec;
 }
 
@@ -558,31 +564,45 @@ struct STA_RECORD *bssCreateStaRecFromBssDesc(IN struct ADAPTER *prAdapter,
  */
  /*---------------------------------------------------------------------------*/
 struct STA_RECORD *bssUpdateStaRecFromCfgAssoc(IN struct ADAPTER *prAdapter,
-			IN struct BSS_DESC *prBssDesc,
-			IN struct STA_RECORD *prStaRec)
+					IN struct BSS_DESC *prBssDesc,
+					IN struct STA_RECORD *prStaRec)
 {
+	uint8_t ucBssIndex;
+
 	if ((prStaRec == NULL) || (prAdapter == NULL) || prBssDesc == NULL) {
-		/* Expect the prStaRec has been created in the auth process */
+		/*Expect the prStaRec has been created in the auth process*/
 		DBGLOG(BSS, ERROR, "Incorrect input val (%p:%p:%p)\n",
 		prStaRec, prBssDesc, prAdapter);
 		return NULL;
 	}
 
-	/* Only handle security setting now.
-	 * The Seccurity is carried in the mtk_cfg80211_assoc or
-	 * mtk_cfg80211_connect. So that, need to re-check the seting for
-	 * WEP/TKIP with 11n/ac/ax case.
-	 */
-	/* Check the security setting to decide the phy rate */
+	ucBssIndex = prStaRec->ucBssIndex;
+
+	/*Only handle security setting now.
+	*The Seccurity is carried in the mtk_cfg80211_assoc or
+	*mtk_cfg80211_connect. So that, need to re-check the seting for
+	*WEP/TKIP with 11n/ac/ax case.
+	*/
+	/*Check the security setting to decide the phy rate*/
 	bssDetermineStaRecPhyTypeSet(prAdapter, prBssDesc, prStaRec);
 
-	/* Determine WMM related parameters for STA_REC */
+	/*Determine WMM related parameters for STA_REC*/
 	mqmProcessScanResult(prAdapter, prBssDesc, prStaRec);
 
-	/* Update default Tx rate */
+	/*Update default Tx rate*/
 	nicTxUpdateStaRecDefaultRate(prAdapter, prStaRec);
+
+	/* Copy RSN/AKM/cipher info from BSS descriptor to StaRec for firmware */
+	prAdapter->prAisBssInfo[ucBssIndex]->u4RsnSelectedGroupCipher =
+		prBssDesc->u4RsnSelectedGroupCipher;
+	prAdapter->prAisBssInfo[ucBssIndex]->u4RsnSelectedPairwiseCipher =
+		prBssDesc->u4RsnSelectedPairwiseCipher;
+	prAdapter->prAisBssInfo[ucBssIndex]->u4RsnSelectedAKMSuite =
+		prBssDesc->u4RsnSelectedAKMSuite;
+
 	return prStaRec;
-}				/* end of bssCreateStaRecFromBssDesc() */
+}
+
 #endif /* CFG_SUPPORT_SUPPLICANT_SME */
 
 

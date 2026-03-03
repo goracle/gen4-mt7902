@@ -330,84 +330,165 @@ u_int8_t nic_rxd_v2_sanity_check(
 	struct ADAPTER *prAdapter,
 	struct SW_RFB *prSwRfb)
 {
-	struct mt66xx_chip_info *prChipInfo;
 	struct HW_MAC_CONNAC2X_RX_DESC *prRxStatus;
 	u_int8_t fgDrop = FALSE;
 
-	prChipInfo = prAdapter->chip_info;
 	prRxStatus = (struct HW_MAC_CONNAC2X_RX_DESC *)prSwRfb->prRxStatus;
 
-	/* 1. Basic Hardware Error Checks (FCS / MIC) */
-	if (!HAL_MAC_CONNAC2X_RX_STATUS_IS_FCS_ERROR(prRxStatus)
+	if (!prRxStatus) {
+		DBGLOG(RX, ERROR, "RX sanity: prRxStatus NULL\n");
+		return TRUE;
+	}
+
+	/* ============================================================
+	 * 1. Basic HW error checks (FCS / MIC)
+	 * ============================================================
+	 */
+	if (HAL_MAC_CONNAC2X_RX_STATUS_IS_FCS_ERROR(prRxStatus)
 #if CFG_SUPPORT_TKIP_MICERROR_DETECTION
-		&& !HAL_MAC_CONNAC2X_RX_STATUS_IS_TKIP_MIC_ERROR(prRxStatus)
+		|| HAL_MAC_CONNAC2X_RX_STATUS_IS_TKIP_MIC_ERROR(prRxStatus)
 #endif
 	) {
-		if (!HAL_MAC_CONNAC2X_RX_STATUS_IS_NAMP(prRxStatus)
-			&& !HAL_MAC_CONNAC2X_RX_STATUS_IS_DAF(prRxStatus))
-			prSwRfb->fgReorderBuffer = TRUE;
-		else if (HAL_MAC_CONNAC2X_RX_STATUS_IS_NDATA(prRxStatus))
-			prSwRfb->fgDataFrame = FALSE;
-		else if (HAL_MAC_CONNAC2X_RX_STATUS_IS_FRAG(prRxStatus))
-			prSwRfb->fgFragFrame = TRUE;
-	} else {
-		uint8_t ucBssIndex = secGetBssIdxByWlanIdx(prAdapter,
-			HAL_MAC_CONNAC2X_RX_STATUS_GET_WLAN_IDX(prRxStatus));
+		uint8_t ucBssIndex =
+			secGetBssIdxByWlanIdx(prAdapter,
+				HAL_MAC_CONNAC2X_RX_STATUS_GET_WLAN_IDX(prRxStatus));
 
 		fgDrop = TRUE;
 
-		/* Handle TKIP MIC Failures */
-		if (!HAL_MAC_CONNAC2X_RX_STATUS_IS_ICV_ERROR(prRxStatus)
-		    && HAL_MAC_CONNAC2X_RX_STATUS_IS_TKIP_MIC_ERROR(prRxStatus)) {
-			struct STA_RECORD *prStaRec = NULL;
-			struct PARAM_BSSID_EX *prCurrBssid = aisGetCurrBssId(prAdapter, ucBssIndex);
+#if CFG_SUPPORT_TKIP_MICERROR_DETECTION
+		/* TKIP MIC failure handling */
+		if (!HAL_MAC_CONNAC2X_RX_STATUS_IS_ICV_ERROR(prRxStatus) &&
+			HAL_MAC_CONNAC2X_RX_STATUS_IS_TKIP_MIC_ERROR(prRxStatus)) {
 
-			if (prCurrBssid)
-				prStaRec = cnmGetStaRecByAddress(prAdapter, ucBssIndex, prCurrBssid->arMacAddress);
-			
+			struct STA_RECORD *prStaRec = NULL;
+			struct PARAM_BSSID_EX *prCurrBssid =
+				aisGetCurrBssId(prAdapter, ucBssIndex);
+
+			if (prCurrBssid) {
+				prStaRec = cnmGetStaRecByAddress(
+					prAdapter,
+					ucBssIndex,
+					prCurrBssid->arMacAddress);
+			}
+
 			if (prStaRec) {
 				DBGLOG_LIMITED(RSN, EVENT, "MIC_ERR_PKT\n");
 				rsnTkipHandleMICFailure(prAdapter, prStaRec, 0);
 			}
 		}
+#endif
+
+		DBGLOG(RSN, WARN,
+			"RX drop: FCS/MIC error (wlanIdx=%u)\n",
+			HAL_MAC_CONNAC2X_RX_STATUS_GET_WLAN_IDX(prRxStatus));
+
+		return TRUE;
 	}
 
-	/* 2. Handle Cipher Mismatch (The loop culprit) */
-	if (HAL_MAC_CONNAC2X_RX_STATUS_IS_CIPHER_MISMATCH(prRxStatus)
-		&& (prSwRfb->fgDataFrame == TRUE)) {
-		uint16_t *pu2EtherType;
+	/* ============================================================
+	 * 2. Frame classification hints
+	 * ============================================================
+	 */
+	if (!HAL_MAC_CONNAC2X_RX_STATUS_IS_NAMP(prRxStatus) &&
+	    !HAL_MAC_CONNAC2X_RX_STATUS_IS_DAF(prRxStatus)) {
+		prSwRfb->fgReorderBuffer = TRUE;
+	} else if (HAL_MAC_CONNAC2X_RX_STATUS_IS_NDATA(prRxStatus)) {
+		prSwRfb->fgDataFrame = FALSE;
+	} else if (HAL_MAC_CONNAC2X_RX_STATUS_IS_FRAG(prRxStatus)) {
+		prSwRfb->fgFragFrame = TRUE;
+	}
 
-		nicRxFillRFB(prAdapter, prSwRfb);
-		pu2EtherType = (uint16_t *)((uint8_t *)prSwRfb->pvHeader + 2 * MAC_ADDR_LEN);
+	/* ============================================================
+	 * 3. Cipher mismatch (CRITICAL PATH)
+	 * ============================================================
+	 */
+	if (HAL_MAC_CONNAC2X_RX_STATUS_IS_CIPHER_MISMATCH(prRxStatus) &&
+	    prSwRfb->fgDataFrame == TRUE) {
 
-		/* * Permit EAPOL/WPI packets always.
-		 * For other data, we silence the log and let it through during the 
-		 * connection phase to prevent the Deauth loop. 
-		 */
-		if (prSwRfb->u2HeaderLen >= ETH_HLEN && 
-		   (*pu2EtherType == NTOHS(ETH_P_1X) || *pu2EtherType == NTOHS(ETH_WPI_1X))) {
-			fgDrop = FALSE;
+		uint16_t u2EtherType = 0;
+		u_int8_t fgHdrTran =
+			HAL_MAC_CONNAC2X_RX_STATUS_IS_HEADER_TRAN(prRxStatus);
+
+		DBGLOG(RSN, ERROR,
+			"CIPHER_MISMATCH: hdrTran=%u hdrLen=%u pktLen=%u wlanIdx=%u secMode=%u\n",
+			fgHdrTran,
+			prSwRfb->u2HeaderLen,
+			prSwRfb->u2PacketLen,
+			HAL_MAC_CONNAC2X_RX_STATUS_GET_WLAN_IDX(prRxStatus),
+			HAL_MAC_CONNAC2X_RX_STATUS_GET_SEC_MODE(prRxStatus));
+
+		/* Dump RXD */
+		DBGLOG_MEM8(RSN, ERROR,
+			prRxStatus,
+			sizeof(struct HW_MAC_CONNAC2X_RX_DESC));
+
+		/* Dump payload (first 64 bytes) */
+		if (prSwRfb->pvHeader) {
+			DBGLOG_MEM8(RSN, ERROR,
+				prSwRfb->pvHeader,
+				prSwRfb->u2PacketLen > 64 ?
+				64 : prSwRfb->u2PacketLen);
 		} else {
-			/* On desktop Linux, being too aggressive here kills the connection.
-			 * We only drop if we are certain the link is fully established.
-			 */
-			fgDrop = FALSE; 
-			DBGLOG_LIMITED(RSN, LOUD, "Cipher mismatch ignored during handshake\n");
+			DBGLOG(RSN, ERROR, "pvHeader NULL\n");
+			return TRUE;
+		}
+
+		/* Only parse EtherType if header translation is enabled */
+		if (fgHdrTran) {
+			if (prSwRfb->u2PacketLen >= ETH_HLEN) {
+				uint8_t *pucEth =
+					(uint8_t *)prSwRfb->pvHeader;
+
+				u2EtherType =
+					(pucEth[12] << 8) | pucEth[13];
+
+				DBGLOG(RSN, ERROR,
+					"EtherType=0x%04x\n",
+					u2EtherType);
+			}
+		} else {
+			DBGLOG(RSN, WARN,
+				"No header translation (802.11 frame)\n");
+		}
+
+		/* Default: drop unless explicitly allowed */
+		fgDrop = TRUE;
+
+		/* Allow EAPOL during handshake */
+		if (u2EtherType == ETH_P_1X ||
+		    u2EtherType == ETH_WPI_1X) {
+			DBGLOG(RSN, INFO,
+				"Allow EAPOL despite cipher mismatch\n");
+			fgDrop = FALSE;
 		}
 	}
 
-	/* 3. Fragment/A-MSDU Sanity */
+	/* ============================================================
+	 * 4. Fragment / attack sanity
+	 * ============================================================
+	 */
 #if CFG_SUPPORT_FRAG_ATTACK_DETECTION
-	if ((prSwRfb->fgIsBC | prSwRfb->fgIsMC) && (prSwRfb->fgFragFrame == TRUE)) {
-		fgDrop = TRUE;
+	if ((prSwRfb->fgIsBC || prSwRfb->fgIsMC) &&
+	    prSwRfb->fgFragFrame == TRUE) {
+		DBGLOG(RX, WARN,
+			"Drop BC/MC fragmented frame\n");
+		return TRUE;
 	}
 #endif
 
-	if (HAL_MAC_CONNAC2X_RX_STATUS_IS_DAF(prRxStatus))
-		fgDrop = TRUE;
+	/* ============================================================
+	 * 5. Hard drops
+	 * ============================================================
+	 */
+	if (HAL_MAC_CONNAC2X_RX_STATUS_IS_DAF(prRxStatus)) {
+		DBGLOG(RX, WARN, "Drop: DAF\n");
+		return TRUE;
+	}
 
-	if (HAL_MAC_CONNAC2X_RX_STATUS_IS_ICV_ERROR(prRxStatus))
-		fgDrop = TRUE;
+	if (HAL_MAC_CONNAC2X_RX_STATUS_IS_ICV_ERROR(prRxStatus)) {
+		DBGLOG(RX, WARN, "Drop: ICV error\n");
+		return TRUE;
+	}
 
 	return fgDrop;
 }

@@ -3336,8 +3336,15 @@ nicTxProcessUniTxDoneEvent(struct ADAPTER *ad, struct UNI_EVENT_TX_DONE *e)
 	DBGLOG(TX, INFO,
 		"UNI_TXDONE status=%u widx=%u pid=%u sn=%u\n",
 		e->ucStatus, e->ucWlanIndex, e->ucPacketSeq, e->u2SequenceNumber);
+	DBGLOG(TX, INFO, "[TX-DIAG] Looking up WIDX=%u PID=%u\n",
+		e->ucWlanIndex, e->ucPacketSeq);
 
 	prMsduInfo = nicGetPendingTxMsduInfo(ad, e->ucWlanIndex, e->ucPacketSeq);
+		if (e->ucStatus == 5) {
+			struct STA_RECORD *pStaRec = prMsduInfo ? cnmGetStaRecByIndex(ad, prMsduInfo->ucStaRecIndex) : NULL;
+			DBGLOG(SAA, ERROR, "[AUTH-FLUSH] Reason=%u StaState=%s WIDX=%u\n",
+				e->ucFlushReason, pStaRec ? ("?") : ("null"), e->ucWlanIndex);
+		}
 	if (!prMsduInfo) {
 		DBGLOG(TX, WARN,
 			"UNI_TXDONE: no pending MSDU for WIDX:%u PID:%u\n",

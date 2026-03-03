@@ -813,66 +813,108 @@ void scnFsmRemovePendingMsg(IN struct ADAPTER *prAdapter, IN uint8_t ucSeqNum,
  */
 
 
-void scnEventScanDone(IN struct ADAPTER *prAdapter,                                                 
-    IN struct EVENT_SCAN_DONE *prScanDone,
-    u_int8_t fgIsNewVersion)
+/* Helper: safely report scan results to cfg80211 */
+void scnEventScanDone(IN struct ADAPTER *prAdapter,
+                      IN struct EVENT_SCAN_DONE *prScanDone,
+                      u_int8_t fgIsNewVersion)
 {
     struct SCAN_INFO *prScanInfo = &(prAdapter->rWifiVar.rScanInfo);
-    //struct SCAN_PARAM *prScanParam = &prScanInfo->rScanParam;
     struct BSS_DESC *prBssDesc;
     unsigned long flags;
     uint32_t u4TotalInList = 0;
     uint32_t u4IndicateNum = 0;
-
-    /* Removed MAX_INDICATE_BSS 128 limit logic to prevent dropping valid APs */
-    /* If memory permits, we report everything the radio saw */
+    struct BSS_DESC **apPrBssToReport = NULL;
+    uint32_t u4ReportCount = 0;
+    uint32_t idx = 0;
 
     if (fgIsNewVersion) {
         DBGLOG(SCN, INFO, "scnEventScanDone V%u! Seq[%u] - LOBOTOMIZED\n",
-            prScanDone->ucScanDoneVersion, prScanDone->ucSeqNum);
+               prScanDone->ucScanDoneVersion, prScanDone->ucSeqNum);
     }
 
+    /*
+     * Lock the scan list while we:
+     *  - remove expired entries (so they won't be reported)
+     *  - count and snapshot pointers to the remaining entries we will later report
+     *
+     * We allocate the pointer array with GFP_ATOMIC since we are under a spinlock.
+     */
     spin_lock_irqsave(&prAdapter->rScanListLock, flags);
 
-    /* LOBOTOMY: We no longer care about u4ScanUpdateIdx. 
-       If it's in the list, it's valid for iwd to see. */
+    /* prune expired entries so we won't report them */
+    scanRemoveBssDescsByPolicy(prAdapter, SCN_RM_POLICY_TIMEOUT);
 
+    /* first pass: count valid entries we intend to report */
     LINK_FOR_EACH_ENTRY(prBssDesc, &prScanInfo->rBSSDescList, rLinkEntry, struct BSS_DESC) {
         u4TotalInList++;
 
-        if (prBssDesc->ucChannelNum == 0) continue;
+        /* ignore invalid descriptors */
+        if (prBssDesc->ucChannelNum == 0)
+            continue;
 
-        /* REPORT ALL: We bypass the 'if (idx != current)' check entirely.
-           This ensures iwd sees "H" even if the driver's internal clock is lagging. */
-        
-        scanReportBss2Cfg80211(prAdapter, prBssDesc->eBSSType, prBssDesc);
-        u4IndicateNum++;
+        u4ReportCount++;
     }
 
-    /* Force cleanup of actually expired entries, but don't be aggressive */
-    scanRemoveBssDescsByPolicy(prAdapter, SCN_RM_POLICY_TIMEOUT);
+    if (u4ReportCount > 0) {
+        /* allocate pointer array while under the lock to guarantee consistent snapshot */
+        apPrBssToReport = kzalloc(sizeof(*apPrBssToReport) * u4ReportCount, GFP_ATOMIC);
+        if (apPrBssToReport) {
+            /* second pass: fill the array with pointers to descriptors to report */
+            idx = 0;
+            LINK_FOR_EACH_ENTRY(prBssDesc, &prScanInfo->rBSSDescList, rLinkEntry, struct BSS_DESC) {
+                if (prBssDesc->ucChannelNum == 0)
+                    continue;
 
-    /* LOBOTOMY: Reset cooldown. We want the hardware ready for AUTH immediately. */
-    prScanInfo->rLastScanCompletedTime = 0; 
+                apPrBssToReport[idx++] = prBssDesc;
+            }
+
+            /* idx holds actual number captured (should equal u4ReportCount) */
+            u4ReportCount = idx;
+        } else {
+            DBGLOG(SCN, WARN, "scnEventScanDone: failed to allocate report array (%u entries)\n",
+                   u4ReportCount);
+            /* fail-safe: do not report anything */
+            u4ReportCount = 0;
+        }
+    }
+
+    /* record scan completion time (do NOT zero it) */
+    prScanInfo->rLastScanCompletedTime = jiffies;
 
     spin_unlock_irqrestore(&prAdapter->rScanListLock, flags);
+
+    /* report the collected BSS entries to cfg80211 OUTSIDE the spinlock */
+    if (apPrBssToReport) {
+        for (idx = 0; idx < u4ReportCount; idx++) {
+            struct BSS_DESC *p = apPrBssToReport[idx];
+
+            /* sanity check: skip if pointer invalidated or channel cleared */
+            if (!p || p->ucChannelNum == 0)
+                continue;
+
+            scanReportBss2Cfg80211(prAdapter, p->eBSSType, p);
+            u4IndicateNum++;
+        }
+
+        /* only free the pointer array, not the BSS_DESC structures */
+        kfree(apPrBssToReport);
+        apPrBssToReport = NULL;
+    }
 
     /* Signal completion to the kernel immediately */
     complete(&prAdapter->rScanDoneCompletion);
 
-    /* Bypass FSM message generation if possible, force state to IDLE 
-       so the next AUTH command isn't rejected with 0x103 Busy. */
-    scnFsmSteps(prAdapter, SCAN_STATE_IDLE);
-
-    DBGLOG(SCN, INFO, "[LOBOTOMY SUCCESS] Reported %u entries to iwd/cfg80211\n", u4IndicateNum);
-
-    /* Notify AIS via mailbox — aisFsmRunEventScanDone will call kalScanDone */
+    /* Keep existing scan-done notification path: generate the FSM message.
+       Do NOT forcibly change FSM state here (scnFsmSteps(SCAN_STATE_IDLE) removed). */
     {
         uint8_t ucBssIndex = prScanInfo->rScanParam.ucBssIndex;
         scnFsmGenerateScanDoneMsg(prAdapter,
-            prScanDone->ucSeqNum, ucBssIndex, SCAN_STATUS_DONE);
+                                  prScanDone->ucSeqNum, ucBssIndex, SCAN_STATUS_DONE);
     }
+
+    DBGLOG(SCN, INFO, "[LOBOTOMY SUCCESS] Reported %u entries to iwd/cfg80211\n", u4IndicateNum);
 }
+
 
 /*----------------------------------------------------------------------------*/
 

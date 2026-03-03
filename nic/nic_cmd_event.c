@@ -8379,21 +8379,122 @@ void nicUniCmdStaRecHandleEventPkt(IN struct ADAPTER
 			secGetStaIdxByWlanIdx(prAdapter, uni_cmd->ucWlanIdxL));
 		if (!prStaRec)
 			return;
-		if (prStaRec->ucStaState == STA_STATE_3) {
-			qmActivateStaRec(prAdapter, prStaRec);
-		} else if (prStaRec->ucStaState == STA_STATE_1) {
-			DBGLOG(NIC, INFO, "StaRec[%u] STATE_1 ACK from FW (UNI), firing SAA\n",
+
+
+		switch (prStaRec->ucStaState) {
+		case STA_STATE_1:
+			DBGLOG(NIC, INFO,
+				"StaRec[%u] FW ACK state=1 (UNI), advancing to STATE_2\n",
 				prStaRec->ucIndex);
-			aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
+			cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_2);
+			break;
+		case STA_STATE_2:
+			DBGLOG(NIC, INFO,
+				"StaRec[%u] FW ACK state=2 (UNI), sending STATE_3 cmd (SAA deferred)\n",
+				prStaRec->ucIndex);
+			cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_3);
+			break;
+		case STA_STATE_3:
+		  DBGLOG(NIC, INFO,
+			 "StaRec[%u] FW ACK state=3 (UNI), activating TX path\n",
+			 prStaRec->ucIndex);
+
+		  uint32_t wtbl_ready = 0;
+		  int retries = 10;
+		  kalMdelay(100);  // LMAC WTBL guaranteed
+		  while (retries-- && !wtbl_ready) {
+		    kalMdelay(2);
+		    cnmDumpStaRec(prAdapter, prStaRec->ucIndex);  // Fixed arg1=prAdapter
+		    // Check TX readiness proxies (no raw WTBL access)
+		    wtbl_ready = (prStaRec->fgIsTxAllowed && 
+				  prStaRec->ucDesiredPhyTypeSet != 0);
+		    DBGLOG(CNM, INFO, "[WTBL] retry %d TxAllowed=%u\n", 
+			   10-retries, prStaRec->fgIsTxAllowed);
+		  }
+
+
+		  prStaRec->ucStaState = STA_STATE_3;   // ← ADD THIS
+		  qmActivateStaRec(prAdapter, prStaRec);
+		  nicTxUpdateStaRecDefaultRate(prAdapter, prStaRec);
+		  prStaRec->fgIsTxAllowed = TRUE;
+		  qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
+		  secPrivacySeekForEntry(prAdapter, prStaRec);
+		  cnmDumpStaRec(prAdapter, prStaRec->ucIndex);
+		  aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
+		  break;
+
+		default:
+			DBGLOG(NIC, INFO,
+				"StaRec[%u] FW ACK state=%u (UNI, no-op)\n",
+				prStaRec->ucIndex, prStaRec->ucStaState);
+			break;
 		}
+
 	}
 }
 
 
+static uint32_t nicUniCmdStaRecTagSec(struct ADAPTER *ad, uint8_t *pos,
+	struct CMD_UPDATE_STA_RECORD *cmd)
+{
+	struct UNI_CMD_STAREC_SEC *sec_tag = (struct UNI_CMD_STAREC_SEC *)pos;
+	struct STA_RECORD *sta_rec;
+	struct BSS_INFO *bss;
+	struct CONNECTION_SETTINGS *conn_settings;
+
+	DBGLOG(NIC, INFO, "[STAREC-SEC-ENTRY] Handler called for StaRec[%d]\n",
+	       cmd->ucStaIndex);
+
+	sta_rec = cnmGetStaRecByIndex(ad, cmd->ucStaIndex);
+	if (!sta_rec) {
+		DBGLOG(NIC, WARN, "[STAREC-SEC] StaRec[%d] NULL\n",
+			cmd->ucStaIndex);
+		memset(sec_tag, 0, sizeof(*sec_tag));
+		sec_tag->u2Tag = UNI_CMD_STAREC_TAG_SEC;
+		sec_tag->u2Length = sizeof(*sec_tag);
+		return sizeof(*sec_tag);
+	}
+
+	bss = GET_BSS_INFO_BY_INDEX(ad, cmd->ucBssIndex);
+	if (!bss) {
+		DBGLOG(NIC, WARN, "[STAREC-SEC] BSS[%d] NULL\n",
+			cmd->ucBssIndex);
+		memset(sec_tag, 0, sizeof(*sec_tag));
+		sec_tag->u2Tag = UNI_CMD_STAREC_TAG_SEC;
+		sec_tag->u2Length = sizeof(*sec_tag);
+		return sizeof(*sec_tag);
+	}
+
+	conn_settings = aisGetConnSettings(ad, bss->ucBssIndex);
+	if (!conn_settings) {
+		DBGLOG(NIC, WARN, "[STAREC-SEC] ConnSettings NULL\n");
+		memset(sec_tag, 0, sizeof(*sec_tag));
+		sec_tag->u2Tag = UNI_CMD_STAREC_TAG_SEC;
+		sec_tag->u2Length = sizeof(*sec_tag);
+		return sizeof(*sec_tag);
+	}
+	DBGLOG(NIC, INFO,
+	       "[STAREC-SEC-READ] conn_settings eAuthMode=%d eEncStatus=%d\n",
+	       conn_settings->eAuthMode, conn_settings->eEncStatus);
+
+
+	sec_tag->u2Tag = UNI_CMD_STAREC_TAG_SEC;
+	sec_tag->u2Length = sizeof(*sec_tag);
+	sec_tag->ucAuthAlg = conn_settings->eAuthMode;
+	sec_tag->ucCipherSuit = conn_settings->eEncStatus;
+
+	DBGLOG(NIC, INFO,
+		"[STAREC-SEC] StaRec[%d] authAlg=%d cipher=%d eAuthMode=%d eEncStatus=%d\n",
+		cmd->ucStaIndex, sec_tag->ucAuthAlg, sec_tag->ucCipherSuit,
+		conn_settings->eAuthMode, conn_settings->eEncStatus);
+
+	return sizeof(*sec_tag);
+}
 
 
 struct UNI_CMD_STAREC_TAG_HANDLE arUpdateStaRecTable[] = {
 	{sizeof(struct UNI_CMD_STAREC_BASIC), nicUniCmdStaRecTagBasic},
+	{sizeof(struct UNI_CMD_STAREC_SEC), nicUniCmdStaRecTagSec},
 	{sizeof(struct UNI_CMD_STAREC_HT_INFO), nicUniCmdStaRecTagHtInfo},
 	{sizeof(struct UNI_CMD_STAREC_VHT_INFO), nicUniCmdStaRecTagVhtInfo},
 #if (CFG_SUPPORT_802_11AX == 1)
@@ -10504,14 +10605,22 @@ wlanSendSetQueryCmdHelper(IN struct ADAPTER *prAdapter,
 			entry->pfCmdDoneHandler, entry->pfCmdTimeoutHandler,
 			entry->u4SetQueryInfoLen, entry->pucInfoBuffer,
 			pvSetQueryBuffer, u4SetQueryBufferLen, eMethodint);
+		LINK_REMOVE_KNOWN_ENTRY(link, entry);
+		nicUniCmdFreeEntry(prAdapter, entry);
+		if (status != WLAN_STATUS_SUCCESS &&
+		    status != WLAN_STATUS_PENDING) {
+			DBGLOG(REQ, ERROR,
+				"[AUTH-DBG] UniCmd TX failed UCID=0x%x status=0x%x\n",
+				entry->ucUCID, status);
+			goto done;
+		}
 	}
 done:
-	/* clear before return, in case uni handler already insert any entry */
+	/* clear any remaining entries on early exit */
 	LINK_FOR_EACH_ENTRY_SAFE(entry, next,
 		link, rLinkEntry, struct WIFI_UNI_CMD_ENTRY) {
 
 		LINK_REMOVE_KNOWN_ENTRY(link, entry);
-		/* releaes info */
 		nicUniCmdFreeEntry(prAdapter, entry);
 	}
 

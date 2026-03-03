@@ -321,143 +321,347 @@ static const struct ACTION_FRAME_SIZE_MAP arActionFrameReservedLen[] = {
 
 
 
+/* refactored relay mgmt -> cfg80211 with hardened checks & small helpers */
+
+/* Max bytes to dump on failure for diagnosis */
+#define RELAY_DUMP_BYTES 64
+
+/* Candidate RX descriptor/prefix sizes to try (in bytes) */
+static const size_t relay_candidate_prefixes[] = { 24, 32, 36 };
+
+/* Compute buffer start/end from SW_RFB (safe arithmetic).
+ * Returns 0 on success, -EINVAL if inputs look bogus.
+ */
+static int relay_compute_buf_bounds(struct SW_RFB *prSwRfb,
+                                    uint8_t **pbuf_start,
+                                    uint8_t **pbuf_end,
+                                    size_t *pbuf_len)
+{
+    uint8_t *pvHeader;
+    size_t hdr, pkt;
+
+    if (!prSwRfb || !prSwRfb->pvHeader)
+        return -EINVAL;
+
+    pvHeader = (uint8_t *)prSwRfb->pvHeader;
+    hdr = prSwRfb->u2HeaderLen;
+    pkt = prSwRfb->u2PacketLen;
+
+    /* sanity */
+    if (hdr > 65535 || pkt > 65535)
+        return -EINVAL;
+
+    /* buf_start points to beginning of DMA buffer (header area first) */
+    *pbuf_start = pvHeader - hdr;
+
+    /* buf_end points one-past-last byte of the buffer we own */
+    *pbuf_end = *pbuf_start + hdr + pkt;
+    *pbuf_len = hdr + pkt;
+
+    /* basic sanity checks */
+    if (*pbuf_end <= *pbuf_start || *pbuf_len < 1)
+        return -EINVAL;
+
+    return 0;
+}
+
+/* Try candidate offsets for a valid 802.11 frame header.
+ * Returns pointer to frame_start on success (and sets *pframe_len and *pfc),
+ * or NULL on failure.
+ *
+ * NOTE: We only accept explicit candidates in relay_candidate_prefixes[].
+ */
+static uint8_t *relay_find_frame_start(uint8_t *buf_start, uint8_t *buf_end,
+                                       size_t *pframe_len, uint8_t *pfc)
+{
+    size_t i;
+    for (i = 0; i < ARRAY_SIZE(relay_candidate_prefixes); i++) {
+        size_t off = relay_candidate_prefixes[i];
+        uint8_t *candidate = buf_start + off;
+
+        if (candidate + 36 > buf_end) /* must contain at least fixed beacon header bytes */
+            continue;
+
+        /* frame control byte at candidate[0] */
+        uint8_t fc = candidate[0];
+
+        if (fc == 0x80 || fc == 0x50 || fc == 0xd0 || fc == 0x40) {
+            *pframe_len = buf_end - candidate;
+            *pfc = fc;
+            return candidate;
+        }
+    }
+
+    /* none matched */
+    return NULL;
+}
+
+/* Extract SSID from IE blob (if present), nul-terminate into ssid_out (33 bytes).
+ * Returns true if SSID found (and non-empty), false otherwise.
+ */
+static bool relay_extract_ssid(uint8_t *ies, size_t ie_len, char ssid_out[33])
+{
+    size_t rem = ie_len;
+    uint8_t *p = ies;
+
+    if (!ies || ie_len < 2) {
+        ssid_out[0] = '\0';
+        return false;
+    }
+
+    while (rem >= 2) {
+        uint8_t id = p[0];
+        uint8_t len = p[1];
+
+        if (id == 0) { /* SSID IE */
+            size_t copy = (len > 32) ? 32 : len;
+            if (2 + copy <= rem) {
+                if (copy)
+                    kalMemCopy(ssid_out, p + 2, copy);
+                ssid_out[copy] = '\0';
+                return true;
+            } else {
+                break; /* malformed IE, bail */
+            }
+        }
+
+        if (len > rem - 2)
+            break;
+
+        p += 2 + len;
+        rem -= 2 + len;
+    }
+
+    ssid_out[0] = '\0';
+    return false;
+}
+
+/* Compute channel frequency (kHz) from channel number.
+ * Returns frequency in MHz (int) — same formula as original.
+ */
+static int relay_channel_to_freq(int ucChnl)
+{
+    if (ucChnl <= 14)
+        return 2407 + ucChnl * 5;
+    else if (ucChnl >= 36 && ucChnl <= 177)
+        return 5000 + ucChnl * 5;
+    else if (ucChnl >= 1 && ucChnl <= 233) /* 6GHz channels */
+        return 5955 + ucChnl * 5;
+    else
+        return 5000 + ucChnl * 5;
+}
+
+/* Inform cfg80211 about a BSS. Returns 0 on success, negative on error.
+ * This wrapper validates IEs pointer/length before calling cfg80211_inform_bss.
+ */
+static int relay_inform_cfg80211(struct GLUE_INFO *prGlueInfo, struct wiphy *wiphy,
+                                 uint16_t fc, uint8_t *bssid, uint8_t *ies, size_t ies_len,
+                                 uint16_t u2Cap, uint16_t u2BeaconInt, struct ieee80211_channel *chan)
+{
+    struct cfg80211_bss *bss = NULL;
+    enum cfg80211_bss_frame_type ftype;
+    u8 subtype;
+
+    if (!wiphy || !chan || !bssid || !ies) {
+        DBGLOG(RX, ERROR, "[RELAY] invalid args wiphy=%p chan=%p bssid=%p ies=%p\n",
+               wiphy, chan, bssid, ies);
+        return -EINVAL;
+    }
+
+    if (ies_len == 0) {
+        DBGLOG(RX, WARN, "[RELAY] empty IEs for BSSID=%pM\n", bssid);
+        return -EINVAL;
+    }
+
+    /* Extract 802.11 subtype from frame control (fc is host-endian u16) */
+    subtype = (fc >> 4) & 0xF;
+
+    /* Map subtype to cfg80211 frame type expected by this kernel */
+    switch (subtype) {
+    case 8:  /* Beacon */
+        ftype = CFG80211_BSS_FTYPE_BEACON;
+        break;
+    case 5:  /* Probe Response */
+        ftype = CFG80211_BSS_FTYPE_PRESP;
+        break;
+    default:
+        DBGLOG(RX, LOUD, "[RELAY] ignoring mgmt subtype=%u (not beacon/probe resp)\n", subtype);
+        return -EINVAL;
+    }
+
+    DBGLOG(RX, INFO,
+           "[RELAY] informing cfg80211: subtype=%u ftype=%d BSSID=%pM ies_len=%zu BI=%u CAP=0x%04x CH=%d\n",
+           subtype, (int)ftype, bssid, ies_len, u2BeaconInt, u2Cap,
+           chan ? chan->hw_value : -1);
+
+    /* Call cfg80211_inform_bss with the kernel's expected ordering:
+     * (wiphy, chan, ftype, bssid, tsf, capab, beacon_interval, ie, ie_len, signal, gfp)
+     *
+     * Use TSF=0 (unknown), conservative RSSI, GFP_ATOMIC because we're in IRQ/NAPI context.
+     */
+    rcu_read_lock();
+    bss = cfg80211_inform_bss(wiphy, chan,
+                              ftype,
+                              bssid,
+                              0ULL,               /* TSF unknown */
+                              u2Cap,              /* capability info */
+                              u2BeaconInt,        /* beacon interval */
+                              ies,                /* IEs pointer */
+                              ies_len,            /* IEs length */
+                              DBM_TO_MBM(-50),    /* signal in mBm */
+                              GFP_ATOMIC);
+    rcu_read_unlock();
+
+    if (!bss) {
+        DBGLOG(RX, WARN, "[RELAY] cfg80211_inform_bss returned NULL for BSSID=%pM\n", bssid);
+        return -EIO;
+    }
+
+    /* balance refcount (safe across kernel versions) */
+    cfg80211_put_bss(wiphy, bss);
+
+    return 0;
+}
+
+
+/* Safely hand frame to scan engine after temporarily adjusting prSwRfb fields.
+ * Returns 0 on success, negative otherwise.
+ */
+static int relay_pass_to_scan(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb,
+                              uint8_t *frame_start, size_t frame_len)
+{
+    void *pvSavedHeader;
+    uint16_t u2SavedHeaderLen, u2SavedPacketLen;
+    uint16_t new_pkt_len;
+
+    if (!prAdapter || !prSwRfb || !frame_start || frame_len < 36)
+        return -EINVAL;
+
+    /* clamp to U16 max */
+    new_pkt_len = (uint16_t)min_t(size_t, frame_len, U16_MAX);
+
+    /* Save and replace */
+    pvSavedHeader = prSwRfb->pvHeader;
+    u2SavedHeaderLen = prSwRfb->u2HeaderLen;
+    u2SavedPacketLen = prSwRfb->u2PacketLen;
+
+    prSwRfb->pvHeader = frame_start;
+    prSwRfb->u2HeaderLen = 0;
+    prSwRfb->u2PacketLen = new_pkt_len;
+
+    /* Call into scan engine (assumes scanProcessBeaconAndProbeResp exists) */
+    scanProcessBeaconAndProbeResp(prAdapter, prSwRfb);
+
+    /* Restore */
+    prSwRfb->pvHeader = pvSavedHeader;
+    prSwRfb->u2HeaderLen = u2SavedHeaderLen;
+    prSwRfb->u2PacketLen = u2SavedPacketLen;
+
+    return 0;
+}
+
+/* Main refactored relay function */
 static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb)
 {
-	struct GLUE_INFO *prGlueInfo;
-	struct wiphy *wiphy;
-	struct ieee80211_channel *chan;
-	uint8_t *frame_start = NULL;
-	uint8_t *buf_start, *buf_end;
-	size_t frame_len = 0;
-	uint8_t ucChnl, ucFC;
-	uint16_t u2BeaconInt = 0, u2Cap = 0;
-	int i4Freq;
-	char ssid_str[33] = {0};
-	struct cfg80211_bss * ret;
+    struct GLUE_INFO *prGlueInfo;
+    struct wiphy *wiphy;
+    struct ieee80211_channel *chan = NULL;
+    uint8_t *frame_start = NULL;
+    uint8_t *buf_start = NULL, *buf_end = NULL;
+    size_t buf_len = 0, frame_len = 0;
+    uint8_t ucChnl, ucFC = 0;
+    uint16_t u2BeaconInt = 0, u2Cap = 0;
+    int i4Freq;
+    char ssid_str[33] = {0};
+    uint8_t *ies = NULL;
+    size_t ies_len = 0;
+    int rc;
 
-	if (!prAdapter || !prSwRfb || !prSwRfb->pvHeader || prSwRfb->u2PacketLen == 0)
-		return -EINVAL;
+    /* Basic validation */
+    if (!prAdapter || !prSwRfb || !prSwRfb->pvHeader || prSwRfb->u2PacketLen == 0)
+        return -EINVAL;
 
-	prGlueInfo = prAdapter->prGlueInfo;
-	if (!prGlueInfo || !prGlueInfo->prDevHandler || !prGlueInfo->prDevHandler->ieee80211_ptr)
-		return -ENODEV;
+    prGlueInfo = prAdapter->prGlueInfo;
+    if (!prGlueInfo || !prGlueInfo->prDevHandler || !prGlueInfo->prDevHandler->ieee80211_ptr)
+        return -ENODEV;
 
-	wiphy = prGlueInfo->prDevHandler->ieee80211_ptr->wiphy;
+    wiphy = prGlueInfo->prDevHandler->ieee80211_ptr->wiphy;
 
-	/* Type 7 PDMA RX buffer layout: [RX prefix 24 bytes][IEEE80211 frame][pad] */
-	buf_start = (uint8_t *)prSwRfb->pvHeader - prSwRfb->u2HeaderLen;
-	buf_end = (uint8_t *)prSwRfb->pvHeader + prSwRfb->u2PacketLen;
+    /* Compute buffer bounds safely */
+    rc = relay_compute_buf_bounds(prSwRfb, &buf_start, &buf_end, &buf_len);
+    if (rc) {
+        DBGLOG(RX, WARN, "[RELAY] invalid buf bounds\n");
+        return rc;
+    }
 
-	/* Primary candidate: skip 24-byte Type7 RX descriptor prefix */
-	frame_start = buf_start + 24;
-	
-	/* Validate frame */
-	if (frame_start + 36 > buf_end) {
-		DBGLOG(RX, WARN, "[RELAY] frame too short after Type7 prefix\n");
-		return -EINVAL;
-	}
+    /* Try candidate offsets for frame start */
+    frame_start = relay_find_frame_start(buf_start, buf_end, &frame_len, &ucFC);
+    if (!frame_start) {
+        if (printk_ratelimit()) {
+            DBGLOG(RX, ERROR, "[RELAY] cannot locate 802.11 header in RFB (buf_len=%zu hdr=%u pkt=%u)\n",
+                   buf_len, prSwRfb->u2HeaderLen, prSwRfb->u2PacketLen);
+            DBGLOG_MEM8(RX, ERROR, buf_start, min_t(size_t, RELAY_DUMP_BYTES, buf_len));
+        }
+        return -EINVAL;
+    }
 
-	ucFC = frame_start[0];
-	/* Accept beacon (0x80/0xd0), probe resp (0x50), probe req (0x40) */
-	if (!(ucFC == 0x80 || ucFC == 0x50 || ucFC == 0xd0 || ucFC == 0x40)) {
-		/* Fallback: scan for valid frame start */
-		uint8_t *p = buf_start;
-		while (p + 36 <= buf_end) {
-			ucFC = p[0];
-			if (ucFC == 0x80 || ucFC == 0x50 || ucFC == 0xd0 || ucFC == 0x40) {
-				frame_start = p;
-				break;
-			}
-			p++;
-		}
-		if (!frame_start)
-			return -EINVAL;
-	}
+    if (frame_len < 36) {
+        DBGLOG(RX, WARN, "[RELAY] frame too short after locate: %zu\n", frame_len);
+        return -EINVAL;
+    }
 
-	frame_len = buf_end - frame_start;
-	if (frame_len < 36) {
-		DBGLOG(RX, WARN, "[RELAY] validated frame too short: %zu\n", frame_len);
-		return -EINVAL;
-	}
+    /* Logging summary */
+    ucChnl = prSwRfb->ucChnlNum;
+    DBGLOG(RX, INFO, "[RELAY] FC=0x%02x Ch=%u len=%zu BSSID=%pM (offset=%td)\n",
+           ucFC, ucChnl, frame_len, frame_start + 16, (ptrdiff_t)(frame_start - buf_start));
 
-	/* Log frame details (reduced spam) */
-	ucChnl = prSwRfb->ucChnlNum;
-	DBGLOG(RX, INFO, "[RELAY] FC=0x%02x Ch=%u len=%zu BSSID=%pM\n",
-	       ucFC, ucChnl, frame_len, frame_start + 16);
+    /* Extract SSID for logs (safe) */
+    ies = frame_start + 36;
+    if (frame_len > 36) {
+        ies_len = frame_len - 36;
+        if (relay_extract_ssid(ies, ies_len, ssid_str))
+            DBGLOG(RX, INFO, "[RELAY] SSID='%s'\n", ssid_str);
+    }
 
-	/* Extract SSID for logging */
-	{
-		uint8_t *ies = frame_start + 36;
-		size_t ie_rem = frame_len - 36;
-		while (ie_rem >= 2) {
-			uint8_t id = ies[0], len = ies[1];
-			if (id == 0 && len <= 32) {  /* SSID IE */
-				kalMemCopy(ssid_str, ies + 2, len);
-				DBGLOG(RX, INFO, "[RELAY] SSID='%s'\n", ssid_str);
-				break;
-			}
-			if (len > ie_rem - 2)
-				break;
-			ies += 2 + len;
-			ie_rem -= 2 + len;
-		}
-	}
+    /* Compute frequency & get channel */
+    i4Freq = relay_channel_to_freq((int)ucChnl);
+    chan = ieee80211_get_channel(wiphy, i4Freq);
+    if (!chan) {
+        DBGLOG(RX, WARN, "[RELAY] invalid channel freq=%d (ch=%u)\n", i4Freq, ucChnl);
+        return -EINVAL;
+    }
 
-	/* Compute channel frequency */
-	if (ucChnl <= 14)
-		i4Freq = 2407 + ucChnl * 5;
-	else if (ucChnl >= 36 && ucChnl <= 177)
-		i4Freq = 5000 + ucChnl * 5;
-	else if (ucChnl >= 1 && ucChnl <= 233)  /* 6GHz */
-		i4Freq = 5955 + ucChnl * 5;
-	else
-		i4Freq = 5000 + ucChnl * 5;
+    /* Read fixed fields safely (bounds-check) */
+    if (frame_len < 36) {
+        DBGLOG(RX, WARN, "[RELAY] not enough bytes for fixed fields\n");
+        return -EINVAL;
+    }
+    /* ensure we can read 4 bytes at offsets 32..35 */
+    u2BeaconInt = le16_to_cpu(*(const uint16_t *)(frame_start + 32));
+    u2Cap = le16_to_cpu(*(const uint16_t *)(frame_start + 34));
 
-	chan = ieee80211_get_channel(wiphy, i4Freq);
-	if (!chan) {
-		DBGLOG(RX, WARN, "[RELAY] invalid channel freq=%d\n", i4Freq);
-		return -EINVAL;
-	}
+    /* Inform cfg80211 (validate IEs length) */
+    if (ies_len == 0) {
+        DBGLOG(RX, WARN, "[RELAY] no IEs present, skipping cfg80211_inform_bss\n");
+    } else {
+        rc = relay_inform_cfg80211(prGlueInfo, wiphy, ucFC, frame_start + 16,
+                                   ies, ies_len, u2Cap, u2BeaconInt, chan);
+        if (rc) {
+            DBGLOG(RX, WARN, "[RELAY] cfg80211_inform_bss failed (%d)\n", rc);
+            /* continue — still pass to scan engine if possible */
+        } else {
+            DBGLOG(RX, INFO, "[RELAY] BSS notified BSSID=%pM\n", frame_start + 16);
+        }
+    }
 
-	/* Read fixed fields */
-	u2BeaconInt = le16_to_cpu(*(uint16_t *)(frame_start + 32));
-	u2Cap = le16_to_cpu(*(uint16_t *)(frame_start + 34));
+    /* Finally pass to scan engine: this is best-effort */
+    rc = relay_pass_to_scan(prAdapter, prSwRfb, frame_start, frame_len);
+    if (rc) {
+        DBGLOG(RX, WARN, "[RELAY] scanProcessBeaconAndProbeResp failed (%d)\n", rc);
+        return rc;
+    }
 
-	/* Notify cfg80211 */
-	rcu_read_lock();
-	ret = cfg80211_inform_bss(wiphy, chan,
-		(ucFC == 0x80 || ucFC == 0xd0) ? CFG80211_BSS_FTYPE_BEACON : CFG80211_BSS_FTYPE_PRESP,
-		frame_start + 16,  /* BSSID */
-		0,                 /* TSF */
-		u2Cap,
-		u2BeaconInt,
-		frame_start + 36,  /* IEs */
-		frame_len - 36,
-		DBM_TO_MBM(-50),
-		GFP_ATOMIC);
-	rcu_read_unlock();
-
-	DBGLOG(RX, INFO, "[RELAY] BSS notified BSSID=%pM\n", frame_start + 16);
-
-	/* Pass cleaned frame to scan engine */
-	{
-		void *pvSavedHeader = prSwRfb->pvHeader;
-		uint16_t u2SavedHeaderLen = prSwRfb->u2HeaderLen;
-		uint16_t u2SavedPacketLen = prSwRfb->u2PacketLen;
-
-		prSwRfb->pvHeader = frame_start;
-		prSwRfb->u2HeaderLen = 0;
-		prSwRfb->u2PacketLen = (uint16_t)min_t(size_t, frame_len, U16_MAX);
-
-		scanProcessBeaconAndProbeResp(prAdapter, prSwRfb);
-
-		/* Restore original */
-		prSwRfb->pvHeader = pvSavedHeader;
-		prSwRfb->u2HeaderLen = u2SavedHeaderLen;
-		prSwRfb->u2PacketLen = u2SavedPacketLen;
-	}
-
-	return 0;
+    return 0;
 }
 
 
@@ -1923,6 +2127,13 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
     prEvent = (struct WIFI_EVENT *)
         (prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
 
+    /* MT7902: ring 0 is shared for MCU events and Tx Free Done.
+     * Zero-EID zero-length descriptors are phantom completions; discard. */
+    if (prEvent->ucEID == 0 && prEvent->u2PacketLength == 0) {
+        nicRxReturnRFB(prAdapter, prSwRfb);
+        return;
+    }
+
     DBGLOG(RX, LOUD,
         "[RX EVT] EID=0x%02x SEQ=%u LEN=%u\n",
         prEvent->ucEID,
@@ -2569,6 +2780,12 @@ void nicRxProcessPacketType(
 			DBGLOG(RX, LOUD, "[SW-PKT] -> nicRxProcessUniEventPacket\n");
 			nicRxProcessUniEventPacket(prAdapter, prSwRfb);
 		} else {
+			{
+				uint8_t *p = prSwRfb->pucRecvBuff + prChipInfo->rxd_size;
+				DBGLOG(RX, WARN, "[EVT-RAW] opt=0x%02x eid=0x%02x seq=%u len=%u b0=%02x b1=%02x b2=%02x b3=%02x\n",
+					p[2], p[4], p[5], p[0] | (p[1]<<8),
+					p[0], p[1], p[2], p[3]);
+			}
 			DBGLOG(RX, LOUD, "[SW-PKT] -> nicRxProcessEventPacket\n");
 			nicRxProcessEventPacket(prAdapter, prSwRfb);
 		}

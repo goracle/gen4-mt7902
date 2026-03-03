@@ -1925,6 +1925,14 @@ uint32_t nicUpdateBss(IN struct ADAPTER *prAdapter,
 	if (IS_BSS_AIS(prBssInfo)) {
 		struct CONNECTION_SETTINGS *prConnSettings =
 			aisGetConnSettings(prAdapter, ucBssIndex);
+
+
+		DBGLOG(BSS, ERROR, "[BSS-DIAG] eAuthMode=%d eEncStatus=%d fgWapiMode=%d\n",
+		       prConnSettings->eAuthMode,
+		       prConnSettings->eEncStatus,
+		       prConnSettings->fgWapiMode);
+
+
 #if CFG_SUPPORT_PASSPOINT
 		/* mapping OSEN to WPA2,
 		 * due to firmware no need to know current is OSEN
