@@ -83,13 +83,13 @@
  *                             D A T A   T Y P E S
  *******************************************************************************
  */
-#ifdef CFG_SUPPORT_UNIFIED_COMMAND
+#if 0
 enum EUNM_CMD_SEND_METHOD {
 	CMD_SEND_METHOD_ENQUEUE = 0,
 	CMD_SEND_METHOD_REQ_RESOURCE,
 	CMD_SEND_METHOD_TX
 };
-#endif
+#endif // cursed.
 
 enum COMMAND_TYPE {
 	COMMAND_TYPE_GENERAL_IOCTL,
@@ -132,8 +132,6 @@ struct CMD_INFO {
 	uint8_t ucCmdSeqNum;
 	uint32_t u4SetInfoLen;	/* Indicate how many byte we read for Set OID */
 	uint8_t *pucSetInfoBuffer; /* ptr to cmd content without cmd header */
-#ifdef CFG_SUPPORT_UNIFIED_COMMAND
-#endif
 
 	/* information indicating by OID/ioctl */
 	void *pvInformationBuffer;
@@ -214,7 +212,6 @@ wlanSendSetQueryCmd(IN struct ADAPTER *prAdapter,
 		    uint8_t *pucInfoBuffer, OUT void *pvSetQueryBuffer,
 		    IN uint32_t u4SetQueryBufferLen);
 
-#ifdef CFG_SUPPORT_UNIFIED_COMMAND
 uint32_t
 wlanSendSetQueryCmdAdv(IN struct ADAPTER *prAdapter,
 		    uint8_t ucCID,
@@ -227,8 +224,7 @@ wlanSendSetQueryCmdAdv(IN struct ADAPTER *prAdapter,
 		    uint32_t u4SetQueryInfoLen,
 		    uint8_t *pucInfoBuffer, OUT void *pvSetQueryBuffer,
 		    IN uint32_t u4SetQueryBufferLen,
-		    enum EUNM_CMD_SEND_METHOD eMethod);
-#endif
+		    uint32_t eMethodint);
 
 uint32_t
 wlanSendSetQueryExtCmd(IN struct ADAPTER *prAdapter,

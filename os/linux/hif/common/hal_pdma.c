@@ -1612,26 +1612,69 @@ static uint32_t hal_rx_pull_free_rfbs(IN struct ADAPTER *prAdapter,
 
 
 static void hal_rx_process_event_rfbs(struct ADAPTER *prAdapter,
-                                      struct QUE *prRxQue)
+				      struct QUE *prRxQue)
 {
-    struct SW_RFB *prSwRfb;
+	struct SW_RFB *prSwRfb;
+	struct RX_CTRL *prRxCtrl = &prAdapter->rRxCtrl;
+	struct RX_DESC_OPS_T *prRxDescOps = prAdapter->chip_info->prRxDescOps;
+	u_int8_t fgStatus;
+	KAL_SPIN_LOCK_DECLARATION();
 
-    while (QUEUE_IS_NOT_EMPTY(prRxQue)) {
-        QUEUE_REMOVE_HEAD(prRxQue, prSwRfb, struct SW_RFB *);
+	while (QUEUE_IS_NOT_EMPTY(prRxQue)) {
+		QUEUE_REMOVE_HEAD(prRxQue, prSwRfb, struct SW_RFB *);
 
-        if (!prSwRfb)
-            break;
+		if (!prSwRfb)
+			break;
 
-        /* read already done */
+		fgStatus = kalDevPortRead(prAdapter->prGlueInfo,
+					  1,
+					  CFG_RX_MAX_PKT_SIZE,
+					  prSwRfb->pucRecvBuff,
+					  CFG_RX_MAX_PKT_SIZE);
+		if (!fgStatus) {
+			KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
+			QUEUE_INSERT_TAIL(&prRxCtrl->rFreeSwRfbList,
+					  &prSwRfb->rQueEntry);
+			KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
+			continue;
+		}
 
-        /* DO NOT use data RX descriptor parsing */
+		if (!prSwRfb->pucRecvBuff) {
+			DBGLOG(RX, ERROR, "[EVT] pucRecvBuff is NULL\n");
+			KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
+			QUEUE_INSERT_TAIL(&prRxCtrl->rFreeSwRfbList, &prSwRfb->rQueEntry);
+			KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
+			continue;
+		}
 
-        /* pass directly to MCU event handler */
-        nicRxProcessEventPacket(prAdapter, prSwRfb);
+		prSwRfb->prRxStatus = (void *)prSwRfb->pucRecvBuff;
 
-        nicRxReturnRFB(prAdapter, prSwRfb);
-    }
+		/* Peek the actual pkt_type before routing */
+		uint8_t ucRawPktType = 0xff;
+		if (prRxDescOps && prRxDescOps->nic_rxd_get_pkt_type)
+			ucRawPktType = prRxDescOps->nic_rxd_get_pkt_type(prSwRfb->prRxStatus);
+
+		DBGLOG(RX, WARN, "[EVT-RING] raw_pkt_type=%u buf[0..3]=%02x %02x %02x %02x\n",
+		       ucRawPktType,
+		       prSwRfb->pucRecvBuff[0], prSwRfb->pucRecvBuff[1],
+		       prSwRfb->pucRecvBuff[2], prSwRfb->pucRecvBuff[3]);
+
+		if (ucRawPktType == RX_PKT_TYPE_SW_DEFINED) {
+			/* UNI event: process normally */
+			prSwRfb->ucPacketType = RX_PKT_TYPE_SW_DEFINED;
+			nicRxProcessUniEventPacket(prAdapter, prSwRfb);
+		} else {
+			/* Data/mgmt frame muxed on ring 0: route to data path */
+			DBGLOG(RX, WARN, "[EVT-RING] non-event pkt_type=%u, routing to data path\n", ucRawPktType);
+			prSwRfb->ucPacketType = ucRawPktType;
+			KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_QUE);
+			QUEUE_INSERT_TAIL(&prRxCtrl->rReceivedRfbList, &prSwRfb->rQueEntry);
+			RX_INC_CNT(prRxCtrl, RX_MPDU_TOTAL_COUNT);
+			KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_QUE);
+		}
+	}
 }
+
 
 /* Helper: process each SW_RFB from prRxQue
  * - reads data (fgRxData decides which read primitive)
@@ -1650,13 +1693,14 @@ static void hal_rx_process_rfbs(IN struct ADAPTER *prAdapter,
                                 IN struct QUE *prRxQue)
 {
 
+if (u4Port == 1) {
+		hal_rx_process_event_rfbs(prAdapter, prRxQue);
+		return;
+	}
+	DBGLOG(RX, WARN, "[hal_rx_process_rfbs] port=%u qlen=%u\n", u4Port, prRxQue->u4NumElem);
+ KAL_SPIN_LOCK_DECLARATION();
 
-    if (u4Port == 1) {
-	/* THIS IS MCU EVENT RING */
-	hal_rx_process_event_rfbs(prAdapter, prRxQue);
-	return;
-    }
-    KAL_SPIN_LOCK_DECLARATION();
+
     struct RX_CTRL *prRxCtrl = &prAdapter->rRxCtrl;
     struct SW_RFB *prSwRfb = NULL;
     uint8_t *pucBuf = NULL;
@@ -1996,6 +2040,7 @@ void halRxReceiveRFBs(IN struct ADAPTER *prAdapter, uint32_t u4Port,
 
     /* --- Ask PDMA how many completed descriptors exist --- */
     u4RxCnt = halWpdmaGetRxDmaDoneCnt(prAdapter->prGlueInfo, u4Port);
+    DBGLOG(RX, WARN, "[RX-CNT] P[%u] fgRxData=%u dma_done=%u\n", u4Port, fgRxData, u4RxCnt);
     if (!u4RxCnt) {
         /* No data in DMA, nothing to do */
         goto out;

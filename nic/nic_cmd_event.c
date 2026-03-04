@@ -8680,6 +8680,7 @@ uint32_t nicUniCmdScanTagScanChnlInfo(struct ADAPTER *ad,
 		pos += sizeof(struct CHANNEL_INFO);
 	}
 
+	DBGLOG(INIT, WARN, "[UNI-SCAN-CHNL] type=%u num=%u len=%u\n", tag->ucChannelType, tag->ucChannelListNum, needed_len);
 	return needed_len;
 }
 
@@ -8731,6 +8732,7 @@ uint32_t nicUniCmdScanTagScanReq(struct ADAPTER *ad,
 	tag->u2ChannelDwellTime = cmd->u2ChannelDwellTime;
 	tag->u2TimeoutValue = cmd->u2TimeoutValue;
 	tag->u2ProbeDelayTime = cmd->u2ProbeDelayTime;
+	DBGLOG(INIT, WARN, "[UNI-SCAN-REQ] type=%u probes=%u dwell=%u\n", tag->ucScanType, tag->ucNumProbeReq, tag->u2ChannelDwellTime);
 	return tag->u2Length;
 }
 
@@ -8753,6 +8755,8 @@ struct UNI_CMD_SCAN_TAG_HANDLE arSetScanReqTable[] = {
 uint32_t nicUniCmdScanReqV2(struct ADAPTER *ad,
 	struct WIFI_UNI_SETQUERY_INFO *info)
 {
+
+	DBGLOG(RX, WARN, "[SCAN-UNI] nicUniCmdScanReqV2 ENTER\n");
 	struct CMD_SCAN_REQ_V2 *cmd;
 	struct UNI_CMD_SCAN *uni_cmd;
 	struct WIFI_UNI_CMD_ENTRY *entry;

@@ -1701,6 +1701,44 @@ void nicRxProcessForwardPkt(IN struct ADAPTER *prAdapter,
 	}
 }
 
+
+
+
+static void nicUniEventCmdResult(struct ADAPTER *prAdapter,
+				 struct WIFI_UNI_EVENT *prEvent)
+{
+	struct UNI_EVENT_CMD_RESULT *prResult =
+		(struct UNI_EVENT_CMD_RESULT *)prEvent->aucBuffer;
+	struct CMD_INFO *prCmdInfo;
+
+	prCmdInfo = nicGetPendingCmdInfo(prAdapter, prEvent->ucSeqNum);
+	if (!prCmdInfo) {
+		DBGLOG(RX, WARN, "[CMD-RESULT] no pending cmd SEQ=%u CID=0x%04x status=%u\n",
+			prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
+		return;
+	}
+
+	DBGLOG(RX, WARN, "[CMD-RESULT] matched SEQ=%u CID=0x%04x status=%u\n",
+			prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
+	if (prResult->u4Status != 0)
+		DBGLOG(RX, WARN, "[CMD-RESULT] CID=0x%04x SEQ=%u status=%u\n",
+			prResult->u2CID, prEvent->ucSeqNum, prResult->u4Status);
+
+	if (prCmdInfo->pfCmdDoneHandler)
+		prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+					    prEvent->aucBuffer);
+	else if (prCmdInfo->fgIsOid)
+		kalOidComplete(prAdapter->prGlueInfo, prCmdInfo->fgSetQuery,
+			       0, WLAN_STATUS_SUCCESS);
+
+	cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+	prAdapter->ucOidTimeoutCount = 0;
+	prAdapter->fgIsChipNoAck = FALSE;
+}
+
+
+
+
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief Process broadcast data packet for both host and forwarding
@@ -2084,6 +2122,7 @@ void nicRxProcessDataPacket(IN struct ADAPTER *prAdapter,
 
 static PROCESS_RX_UNI_EVENT_FUNCTION arUniEventTable[UNI_EVENT_ID_NUM] = {
 	[0 ... UNI_EVENT_ID_NUM - 1] = NULL,
+	[UNI_EVENT_ID_CMD_RESULT] = nicUniEventCmdResult,
 	[UNI_EVENT_ID_SCAN_DONE] = nicUniEventScanDone,
 	[UNI_EVENT_ID_CNM] = nicUniEventChMngrHandleChEvent,
 	[UNI_EVENT_ID_MBMC] = nicUniEventMbmcHandleEvent,
@@ -2094,7 +2133,6 @@ static PROCESS_RX_UNI_EVENT_FUNCTION arUniEventTable[UNI_EVENT_ID_NUM] = {
 	[UNI_EVENT_ID_UPDATE_COEX_PHYRATE] = nicUniEventUpdateCoex,
 	[UNI_EVENT_ID_IDC] = nicUniEventIdc,
 	[UNI_EVENT_ID_BSS_IS_ABSENCE] = nicUniEventBssIsAbsence,
-	[UNI_EVENT_ID_PS_SYNC] = nicUniEventPsSync,
 	[UNI_EVENT_ID_SAP] = nicUniEventSap,
 };
 
@@ -2508,7 +2546,10 @@ void nicUniEventScanDone(struct ADAPTER *ad, struct WIFI_UNI_EVENT *evt)
 	int32_t tags_len;
 	uint8_t *tag;
 	uint16_t offset = 0;
-	uint32_t fixed_len = sizeof(struct UNI_EVENT_SCAN_DONE);
+	/* MT7902 firmware sends a 14-byte fixed header before TLVs:
+	 * ucSeqNum(1) + aucPadding(3) + 10 bytes of fw-version fields.
+	 * sizeof(UNI_EVENT_SCAN_DONE)=4 is wrong for this chip. */
+	uint32_t fixed_len = 14;
 	uint32_t data_len = GET_UNI_EVENT_DATA_LEN(evt);
 	uint8_t *data = GET_UNI_EVENT_DATA(evt);
 	uint32_t fail_cnt = 0;
@@ -2521,21 +2562,28 @@ void nicUniEventScanDone(struct ADAPTER *ad, struct WIFI_UNI_EVENT *evt)
 
 	tags_len = data_len - fixed_len;
 	tag = data + fixed_len;
+	if (data_len < fixed_len || tags_len <= 0) {
+		DBGLOG(SCN, WARN, "SCAN_DONE: bad data_len=%u fixed=%u, dropping\n",
+		       data_len, fixed_len);
+		return;
+	}
 	TAG_FOR_EACH(tag, tags_len, offset) {
 		DBGLOG(SCN, INFO, "Tag(%d, %d)\n", TAG_ID(tag), TAG_LEN(tag));
 
 		switch (TAG_ID(tag)) {
 		case UNI_EVENT_SCAN_DONE_TAG_BASIC: {
-			struct UNI_EVENT_SCAN_DONE_BASIC *basic =
-				(struct UNI_EVENT_SCAN_DONE_BASIC *) tag;
-
-			legacy.ucCompleteChanCount = basic->ucCompleteChanCount;
-			legacy.ucCurrentState = basic->ucCurrentState;
-			legacy.ucScanDoneVersion = basic->ucScanDoneVersion;
-			legacy.fgIsPNOenabled = basic->fgIsPNOenabled;
-			legacy.u4ScanDurBcnCnt = basic->u4ScanDurBcnCnt;
+		  uint8_t *raw = (uint8_t *)tag;
+		  DBGLOG(SCN, INFO, "BASIC raw: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+			 raw[0], raw[1], raw[2], raw[3], raw[4], raw[5],
+			 raw[6], raw[7], raw[8], raw[9], raw[10], raw[11]);
+		  uint8_t *p = (uint8_t *)tag + TAG_HDR_LEN + 4;
+		  legacy.ucCompleteChanCount = p[0];
+		  legacy.ucCurrentState      = p[1];
+		  legacy.ucScanDoneVersion   = p[2];
+		  legacy.fgIsPNOenabled      = p[3];
+		  legacy.u4ScanDurBcnCnt     = *(uint32_t *)(p + 4);
 		}
-			break;
+		  break;
 		case UNI_EVENT_SCAN_DONE_TAG_SPARSECHNL: {
 			struct UNI_EVENT_SCAN_DONE_SPARSECHNL *sparse =
 				(struct UNI_EVENT_SCAN_DONE_SPARSECHNL *) tag;
@@ -2609,58 +2657,60 @@ void nicRxProcessUniEventPacket(IN struct ADAPTER *prAdapter,
 	ASSERT(prSwRfb);
 
 	prChipInfo = prAdapter->chip_info;
-	prEvent = (struct WIFI_UNI_EVENT *)(prSwRfb->pucRecvBuff +
-		   prChipInfo->rxd_size);
+	if (!prSwRfb->pucRecvBuff) {
+		DBGLOG(RX, ERROR, "[UNI-EVT] pucRecvBuff is NULL\n");
+		nicRxReturnRFB(prAdapter, prSwRfb);
+		return;
+	}
+	/* MT7902: RXD header is always present regardless of packet type */
+	prEvent = (struct WIFI_UNI_EVENT *)(prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
 
 	rawEid = prEvent->ucEID;
+	DBGLOG_MEM8(RX, LOUD, (uint8_t *)prEvent, 16);
 	eid = GET_UNI_EVENT_ID(prEvent);
+
+	if (eid >= UNI_EVENT_ID_NUM) {
+		nicRxReturnRFB(prAdapter, prSwRfb);
+		return;
+	}
 
 	/* Try to match a pending solicited command by sequence number */
 	prCmdInfo = nicGetPendingCmdInfo(prAdapter, prEvent->ucSeqNum);
 
-	if (!prCmdInfo && IS_UNI_UNSOLICIT_EVENT(prEvent)) {
-		if (!(arUniEventTable[eid])) {
-			DBGLOG(RX, INFO,
-			       "UNHANDLED RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
-			       eid, prEvent->ucSeqNum,
-			       prEvent->u2PacketLength);
-			if (prEvent->u2PacketLength >= 16) {
-				uint32_t *p = (uint32_t *)prEvent->aucBuffer;
-
-				DBGLOG(RX, INFO,
-				       "[CMD-DUMP] HDR: %08x %08x %08x %08x\n",
-				       p[0], p[1], p[2], p[3]);
-			}
-		}
-		if (arUniEventTable[eid])
+	if (!prCmdInfo) {
+		/* Dispatch all unhandled UNI events through the table,
+		 * regardless of solicited/unsolicited bit - firmware may
+		 * send scan done etc. without the unsolicited bit set. */
+		if (arUniEventTable[eid]) {
 			arUniEventTable[eid](prAdapter, prEvent);
+		} else {
+		  DBGLOG(RX, INFO,
+			 "UNHANDLED RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
+			 eid, prEvent->ucSeqNum,
+			 prEvent->u2PacketLength);
+		  DBGLOG_MEM8(RX, INFO, (uint8_t *)prEvent, min_t(u32, prEvent->u2PacketLength, 64));
 
-
+		}
 	} else {
 		if (!prCmdInfo)
 			prCmdInfo = nicGetPendingCmdInfo(prAdapter,
 							 prEvent->ucSeqNum);
 		if (prCmdInfo != NULL) {
-			// ... existing cmd handling ...
+			if (prCmdInfo->pfCmdDoneHandler)
+				prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+					(uint8_t *)prEvent->aucBuffer);
+			else if (prCmdInfo->fgIsOid)
+				kalOidComplete(prAdapter->prGlueInfo,
+					prCmdInfo->fgSetQuery, 0,
+					WLAN_STATUS_SUCCESS);
+			cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
 		} else {
-			/* DRAIN FLOOD: Drop ID 0x01 events immediately */
-			if (eid == 0x01) {
-				DBGLOG(RX, LOUD, "DROP ID=0x01 SEQ=%u\n", prEvent->ucSeqNum);
-				nicRxReturnRFB(prAdapter, prSwRfb);
-				return;  /* CRITICAL: exit early, don't log spam */
-			}
 
 			/* Legacy unhandled logging for other IDs */
-			DBGLOG(RX, INFO,
+			DBGLOG(RX, LOUD,
 			       "UNHANDLED RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
 			       eid, prEvent->ucSeqNum,
 			       prEvent->u2PacketLength);
-			if (prEvent->u2PacketLength >= 16) {
-				uint32_t *p = (uint32_t *)prEvent->aucBuffer;
-				DBGLOG(RX, INFO,
-				       "[CMD-DUMP] HDR: %08x %08x %08x %08x\n",
-				       p[0], p[1], p[2], p[3]);
-			}
 		}
 	}
 
@@ -2753,7 +2803,7 @@ void nicRxProcessPacketType(
 
 	prRxCtrl = &prAdapter->rRxCtrl;
 	prChipInfo = prAdapter->chip_info;
-	DBGLOG(RX, LOUD, "[PKT-TYPE] ucPacketType=0x%02x\n", prSwRfb->ucPacketType);
+	DBGLOG(RX, WARN, "[PKT-TYPE] ucPacketType=0x%02x\n", prSwRfb->ucPacketType);
 	switch (prSwRfb->ucPacketType) {
 	case RX_PKT_TYPE_RX_DATA:
 		DBGLOG(RX, LOUD, "[RX-DATA] arrived\n");
@@ -4527,4 +4577,3 @@ void nicUniEventBssIsAbsence(struct ADAPTER *ad, struct WIFI_UNI_EVENT *evt)
 		}
 	}
 }
-

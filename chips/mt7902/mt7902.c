@@ -151,13 +151,15 @@ struct PCIE_CHIP_CR_MAPPING mt7902_bus2chip_cr_mapping[] = {
 };
 static void mt7902CapInit(struct ADAPTER *prAdapter)
 {
-	struct mt66xx_chip_info *prChipInfo;
+    struct mt66xx_chip_info *prChipInfo;
 
-	asicConnac2xCapInit(prAdapter);
+    asicConnac2xCapInit(prAdapter);
 
-	prChipInfo = prAdapter->chip_info;
+    prChipInfo = prAdapter->chip_info;
+    prChipInfo->u2RxSwPktBitMap = CONNAC3X_RX_STATUS_PKT_TYPE_SW_BITMAP;
+    prChipInfo->u2RxSwPktEvent  = CONNAC3X_RX_STATUS_PKT_TYPE_SW_EVENT;
+    prChipInfo->u2RxSwPktFrame  = CONNAC3X_RX_STATUS_PKT_TYPE_SW_FRAME;
 }
-
 
 void mt7902EnableInterrupt(
 	struct ADAPTER *prAdapter)
@@ -414,25 +416,36 @@ void mt7902Connac2xProcessRxInterrupt(
 	union WPDMA_INT_STA_STRUCT rIntrStatus;
 
 	rIntrStatus = (union WPDMA_INT_STA_STRUCT)prHifInfo->u4IntStatus;
-	DBGLOG(HAL, LOUD, "[INT-PROC] raw=0x%08x\n", prHifInfo->u4IntStatus);
+
+	DBGLOG(HAL, WARN, "[INT-PROC] raw=0x%08x rx0=%d rx1=%d rx2=%d rx3=%d rx4=%d rx5=%d\n",
+	       prHifInfo->u4IntStatus,
+	       rIntrStatus.field_conn2x_single.wfdma0_rx_done_0,
+	       rIntrStatus.field_conn2x_single.wfdma0_rx_done_1,
+	       rIntrStatus.field_conn2x_single.wfdma0_rx_done_2,
+	       rIntrStatus.field_conn2x_single.wfdma0_rx_done_3,
+	       rIntrStatus.field_conn2x_single.wfdma0_rx_done_4,
+	       rIntrStatus.field_conn2x_single.wfdma0_rx_done_5);
+
+	/* MT7902: rx_done_0 carries events; rx_done_0 ALSO triggers data on some fw builds.
+	 * Always drain data ring when rx_done_0 fires to handle both cases.
+	 */
+	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_0) {
+		halRxReceiveRFBs(prAdapter, RX_RING_EVT_IDX_1, FALSE);
+		halRxReceiveRFBs(prAdapter, RX_RING_DATA_IDX_0, TRUE);
+	}
 
 	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_2)
 		halRxReceiveRFBs(prAdapter, RX_RING_DATA_IDX_0, TRUE);
 
+	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_1)
+		halRxReceiveRFBs(prAdapter, WFDMA0_RX_RING_IDX_3, TRUE);
+
 	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_3)
 		halRxReceiveRFBs(prAdapter, WFDMA0_RX_RING_IDX_2, TRUE);
 
-	/* CFG_SUPPORT_HOST_RX_WM_EVENT_FROM_PSE case in the mt7961.
-	 * MT7902's Event & Band0 Tx Free Done Event use the rx ring 0.
-	 * So that, wfdma0_rx_done_2 is for RX_RING_EVT_IDX_1
-	 */
-	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_0)
-		halRxReceiveRFBs(prAdapter, RX_RING_EVT_IDX_1, FALSE);
-
-	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_1)
-		halRxReceiveRFBs(prAdapter, WFDMA0_RX_RING_IDX_3, TRUE);
 	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_4)
 		halRxReceiveRFBs(prAdapter, RX_RING_DATA1_IDX_2, TRUE);
+
 	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_5)
 		halRxReceiveRFBs(prAdapter, RX_RING_DATA2_IDX_5, TRUE);
 }

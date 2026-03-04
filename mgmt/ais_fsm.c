@@ -1290,7 +1290,11 @@ aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 				       "[AIS%d] Scan report timeout — force release\n",
 				       ucBssIndex);
 				prAisFsmInfo->fgIsScanReporting = FALSE;
-			} else {
+			} else if (prConnSettings->fgIsConnReqIssued) {
+				/* Only re-activate for connected/reconnect path.
+				 * For pure scans (no ConnReq), skip: sending activate
+				 * with null BSSID breaks firmware scan context.
+				 */
 				SET_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
 				nicActivateNetwork(prAdapter, prAisBssInfo->ucBssIndex);
 				SET_NET_PWR_STATE_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
@@ -2723,11 +2727,8 @@ void aisFsmRunEventScanDone(IN struct ADAPTER *prAdapter,
 	DBGLOG(AIS, INFO, "[SCAN-RPT] ucSeqNum=%u u2SeqNumOfScanReport=%u\n", ucSeqNum, prAisFsmInfo->u2SeqNumOfScanReport);
 
 	if (ucSeqNum != prAisFsmInfo->ucSeqNumOfScanReq) {
-		DBGLOG(AIS, WARN, "Discarding stale ScanDone (Seq %u != Expected %u)\n",
-		       ucSeqNum, prAisFsmInfo->ucSeqNumOfScanReq);
-		prAisFsmInfo->fgIsScanReporting = FALSE;
-		cnmMemFree(prAdapter, prMsgHdr);
-		return;
+	  DBGLOG(AIS, WARN, "SeqNum mismatch (got %u expected %u) — accepting anyway (MT7902 fw off-by-one)\n",
+		 ucSeqNum, prAisFsmInfo->ucSeqNumOfScanReq);
 	}
 
 	/* --- 2. CLEANUP --- */

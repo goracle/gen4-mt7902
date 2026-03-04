@@ -2866,7 +2866,8 @@ struct UNI_EVENT_UPDATE_COEX_PHYRATE {
 #define TAG_FOR_EACH(_pucTlvBuf, _i32TlvBufLen, _u2Offset) \
 for ((_u2Offset) = 0;	\
 	((((_u2Offset) + 2) <= (_i32TlvBufLen)) && \
-	(((_u2Offset) + TAG_LEN(_pucTlvBuf)) <= (_i32TlvBufLen))); \
+	(((_u2Offset) + TAG_LEN(_pucTlvBuf)) <= (_i32TlvBufLen)) && \
+	(TAG_LEN(_pucTlvBuf) > 0)); \
 	(_u2Offset) += TAG_LEN(_pucTlvBuf), (_pucTlvBuf) += TAG_LEN(_pucTlvBuf))
 
 

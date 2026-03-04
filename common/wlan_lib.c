@@ -2336,12 +2336,10 @@ void wlanTxCmdDoneCb(IN struct ADAPTER *prAdapter,
 	KAL_SPIN_LOCK_DECLARATION();
 
 	if ((!prCmdInfo->fgSetQuery) || (prCmdInfo->fgNeedResp)) {
-#if 0
 		KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_CMD_PENDING);
 		QUEUE_INSERT_TAIL(&prAdapter->rPendingCmdQueue,
 				  (struct QUE_ENTRY *) prCmdInfo);
 		KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_CMD_PENDING);
-#endif
 	} else {
 		KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_TX_CMD_DONE_QUE);
 		QUEUE_INSERT_TAIL(&prAdapter->rTxCmdDoneQueue,

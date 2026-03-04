@@ -904,12 +904,13 @@ void scnEventScanDone(IN struct ADAPTER *prAdapter,
     /* Signal completion to the kernel immediately */
     complete(&prAdapter->rScanDoneCompletion);
 
-    /* Keep existing scan-done notification path: generate the FSM message.
-       Do NOT forcibly change FSM state here (scnFsmSteps(SCAN_STATE_IDLE) removed). */
+    /* Generate FSM message and reset scan FSM to IDLE so pending scan
+     * requests are processed (scnFsmMsgStart queues if not IDLE). */
     {
         uint8_t ucBssIndex = prScanInfo->rScanParam.ucBssIndex;
         scnFsmGenerateScanDoneMsg(prAdapter,
                                   prScanDone->ucSeqNum, ucBssIndex, SCAN_STATUS_DONE);
+        scnFsmSteps(prAdapter, SCAN_STATE_IDLE);
     }
 
     DBGLOG(SCN, INFO, "[LOBOTOMY SUCCESS] Reported %u entries to iwd/cfg80211\n", u4IndicateNum);
