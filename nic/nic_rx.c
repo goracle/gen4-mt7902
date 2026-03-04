@@ -327,7 +327,7 @@ static const struct ACTION_FRAME_SIZE_MAP arActionFrameReservedLen[] = {
 #define RELAY_DUMP_BYTES 64
 
 /* Candidate RX descriptor/prefix sizes to try (in bytes) */
-static const size_t relay_candidate_prefixes[] = { 24, 32, 36 };
+static const size_t relay_candidate_prefixes[] = { 8, 24, 28, 32, 36 };
 
 /* Compute buffer start/end from SW_RFB (safe arithmetic).
  * Returns 0 on success, -EINVAL if inputs look bogus.

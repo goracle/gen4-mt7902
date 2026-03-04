@@ -1290,11 +1290,7 @@ aisHandleState_IDLE(IN struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 				       "[AIS%d] Scan report timeout — force release\n",
 				       ucBssIndex);
 				prAisFsmInfo->fgIsScanReporting = FALSE;
-			} else if (prConnSettings->fgIsConnReqIssued) {
-				/* Only re-activate for connected/reconnect path.
-				 * For pure scans (no ConnReq), skip: sending activate
-				 * with null BSSID breaks firmware scan context.
-				 */
+			} else {
 				SET_NET_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);
 				nicActivateNetwork(prAdapter, prAisBssInfo->ucBssIndex);
 				SET_NET_PWR_STATE_ACTIVE(prAdapter, prAisBssInfo->ucBssIndex);

@@ -1648,6 +1648,7 @@ static void hal_rx_process_event_rfbs(struct ADAPTER *prAdapter,
 		}
 
 		prSwRfb->prRxStatus = (void *)prSwRfb->pucRecvBuff;
+		nicRxFillRFB(prAdapter, prSwRfb);
 
 		/* Peek the actual pkt_type before routing */
 		uint8_t ucRawPktType = 0xff;
@@ -1658,20 +1659,23 @@ static void hal_rx_process_event_rfbs(struct ADAPTER *prAdapter,
 		       ucRawPktType,
 		       prSwRfb->pucRecvBuff[0], prSwRfb->pucRecvBuff[1],
 		       prSwRfb->pucRecvBuff[2], prSwRfb->pucRecvBuff[3]);
+		DBGLOG_MEM8(RX, WARN, prSwRfb->pucRecvBuff, 64);
 
 		if (ucRawPktType == RX_PKT_TYPE_SW_DEFINED) {
-			/* UNI event: process normally */
-			prSwRfb->ucPacketType = RX_PKT_TYPE_SW_DEFINED;
-			nicRxProcessUniEventPacket(prAdapter, prSwRfb);
+		  prSwRfb->ucPacketType = RX_PKT_TYPE_SW_DEFINED;
+		  nicRxProcessPacketType(prAdapter, prSwRfb);
 		} else {
-			/* Data/mgmt frame muxed on ring 0: route to data path */
-			DBGLOG(RX, WARN, "[EVT-RING] non-event pkt_type=%u, routing to data path\n", ucRawPktType);
-			prSwRfb->ucPacketType = ucRawPktType;
-			KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_QUE);
-			QUEUE_INSERT_TAIL(&prRxCtrl->rReceivedRfbList, &prSwRfb->rQueEntry);
-			RX_INC_CNT(prRxCtrl, RX_MPDU_TOTAL_COUNT);
-			KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_QUE);
+		  /* Data/mgmt frame muxed on ring 0: route to data path */
+		  DBGLOG(RX, WARN, "[EVT-RING] non-event pkt_type=%u, routing to data path\n", ucRawPktType);
+		  prSwRfb->ucPacketType = ucRawPktType;
+		  KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_QUE);
+		  QUEUE_INSERT_TAIL(&prRxCtrl->rReceivedRfbList, &prSwRfb->rQueEntry);
+		  RX_INC_CNT(prRxCtrl, RX_MPDU_TOTAL_COUNT);
+		  KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_QUE);
 		}
+
+
+
 	}
 }
 

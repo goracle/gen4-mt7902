@@ -2069,7 +2069,7 @@ uint32_t nicTxGenerateDescTemplate(IN struct ADAPTER
 			/* Include TxD append */
 			prTxDesc = kalMemAlloc(
 				u4TxDescSize + u4TxDescAppendSize,
-				VIR_MEM_TYPE);
+				PHY_MEM_TYPE);
 			DBGLOG(QM, TRACE, "STA[%u] TID[%u] TxDTemp[0x%p]\n",
 			       prStaRec->ucIndex, ucTid, prTxDesc);
 			if (!prTxDesc) {
@@ -2109,7 +2109,7 @@ uint32_t nicTxGenerateDescTemplate(IN struct ADAPTER
 
 			prTxDesc = kalMemAlloc(
 				u4TxDescSize + u4TxDescAppendSize,
-				VIR_MEM_TYPE);
+				PHY_MEM_TYPE);
 			if (!prTxDesc) {
 				rStatus = WLAN_STATUS_RESOURCES;
 				break;
@@ -2210,7 +2210,7 @@ void nicTxFreeDescTemplate(IN struct ADAPTER *prAdapter,
 		KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_TX_DESC);
 #endif
 
-		kalMemFree(prTxDesc, VIR_MEM_TYPE, ucTxDescSize);
+		kalMemFree(prTxDesc, PHY_MEM_TYPE, ucTxDescSize + prAdapter->chip_info->txd_append_size);
 	}
 }
 

@@ -384,7 +384,7 @@ void scnSendScanReqV2(IN struct ADAPTER *prAdapter)
 	scanLogCacheFlushAll(&(prScanInfo->rScanLogCache), LOG_SCAN_REQ_D2F, SCAN_LOG_MSG_MAX_LEN);
 	scanReqLog(prCmdScanReq);
 
-	wlanSendSetQueryCmd(prAdapter, CMD_ID_SCAN_REQ_V2, TRUE, FALSE, FALSE, NULL, NULL,
+	wlanSendSetQueryCmd(prAdapter, CMD_ID_SCAN_REQ_V2, TRUE, TRUE, FALSE, NULL, NULL,
 			    sizeof(struct CMD_SCAN_REQ_V2), (uint8_t *)prCmdScanReq, NULL, 0);
 
 	kalMemFree(prCmdScanReq, VIR_MEM_TYPE, sizeof(struct CMD_SCAN_REQ_V2));

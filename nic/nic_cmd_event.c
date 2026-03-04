@@ -4063,7 +4063,7 @@ void nicExtEventReCalData(IN struct ADAPTER *prAdapter, IN uint8_t *pucEventBuf)
 	prReCalInfo = &prAdapter->rReCalInfo;
 	if (prReCalInfo->prCalArray == NULL) {
 		prCalArray = (struct RECAL_DATA_T *)kalMemAlloc(
-			  2048 * sizeof(struct RECAL_DATA_T), VIR_MEM_TYPE);
+			  2048 * sizeof(struct RECAL_DATA_T), PHY_MEM_TYPE);
 
 		if (prCalArray == NULL) {
 			DBGLOG(RFTEST, ERROR,
@@ -5528,7 +5528,7 @@ void nicEventDebugMsg(IN struct ADAPTER *prAdapter,
 					  sizeof(struct EXT_EVENT_RECAL_DATA_T);
 
 			prTmpEvent = (struct WIFI_EVENT *)
-				kalMemAlloc(u4Size, VIR_MEM_TYPE);
+				kalMemAlloc(u4Size, PHY_MEM_TYPE);
 
 			if (prTmpEvent == NULL) {
 				DBGLOG(RFTEST, ERROR,
@@ -5544,7 +5544,7 @@ void nicEventDebugMsg(IN struct ADAPTER *prAdapter,
 			/* format: [XXXXXXXX][YYYYYYYY]ZZZZZZZZ */
 			kalMemCopy(prCalData->u.ucData, pucMsg + 7, 28);
 			nicRfTestEventHandler(prAdapter, prTmpEvent);
-			kalMemFree(prTmpEvent, VIR_MEM_TYPE, u4Size);
+			kalMemFree(prTmpEvent, PHY_MEM_TYPE, u4Size);
 		}
 	}
 #endif
@@ -5943,7 +5943,7 @@ void nicUniEventChMngrHandleChEvent(struct ADAPTER *ad,
 			    sizeof(struct WIFI_EVENT) +
 			    sizeof(struct EVENT_CH_PRIVILEGE);
 
-			prEvent = kalMemAlloc(size, VIR_MEM_TYPE);
+			prEvent = kalMemAlloc(size, PHY_MEM_TYPE);
 			if (!prEvent) {
 			    DBGLOG(NIC, ERROR, "Allocate prEvent failed!\n");
 			    return;
@@ -5971,7 +5971,7 @@ void nicUniEventChMngrHandleChEvent(struct ADAPTER *ad,
 
 			cnmChMngrHandleChEvent(ad, prEvent);
 
-			kalMemFree(prEvent, VIR_MEM_TYPE, size);
+			kalMemFree(prEvent, PHY_MEM_TYPE, size);
 		    }
 		    break;
 
@@ -6006,7 +6006,7 @@ void nicUniEventChMngrHandleChEvent(struct ADAPTER *ad,
 
 			cnmOpmodeEventHandler(ad, prEvent);
 
-			kalMemFree(prEvent, VIR_MEM_TYPE,
+			kalMemFree(prEvent, PHY_MEM_TYPE,
 				sizeof(struct WIFI_EVENT) +
 				sizeof(struct EVENT_OPMODE_CHANGE));
 		}
