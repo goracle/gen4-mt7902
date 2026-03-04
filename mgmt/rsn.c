@@ -285,6 +285,7 @@ rsnParseRsnIE(IN struct ADAPTER *prAdapter,
 			/* unreachable due to check, but keep defensive */
 			return FALSE;
 		}
+			groupSuite = SWAP32(groupSuite);
 
 		/* 2) Pairwise Key Cipher Suite Count (2 bytes, little-endian) */
 		if (remain == 0)
@@ -443,6 +444,7 @@ rsnParseRsnIE(IN struct ADAPTER *prAdapter,
 			return FALSE;
 
 	} while (0); /* single-run block for structured flow */
+			groupMgmtSuite = SWAP32(groupMgmtSuite);
 
 	/* Fill prRsnInfo fields (safe assignments only) */
 	prRsnInfo->ucElemId = ELEM_ID_RSN;
@@ -465,10 +467,10 @@ rsnParseRsnIE(IN struct ADAPTER *prAdapter,
 			             ((uint32_t)pair_list_ptr[i*4 + 1] << 16) |
 			             ((uint32_t)pair_list_ptr[i*4 + 2] << 8) |
 			             ((uint32_t)pair_list_ptr[i*4 + 3]);
-			prRsnInfo->au4PairwiseKeyCipherSuite[i] = v;
+			prRsnInfo->au4PairwiseKeyCipherSuite[i] = SWAP32(v);
 			DBGLOG(RSN, LOUD,
 			       "RSN: pairwise key cipher suite [%u]: 0x%08x\n",
-			       (unsigned)i, SWAP32(v));
+			       (unsigned)i, v);
 		}
 	} else {
 		/* default to CCMP */
@@ -490,9 +492,9 @@ rsnParseRsnIE(IN struct ADAPTER *prAdapter,
 			             ((uint32_t)auth_list_ptr[i*4 + 1] << 16) |
 			             ((uint32_t)auth_list_ptr[i*4 + 2] << 8) |
 			             ((uint32_t)auth_list_ptr[i*4 + 3]);
-			prRsnInfo->au4AuthKeyMgtSuite[i] = v;
+			prRsnInfo->au4AuthKeyMgtSuite[i] = SWAP32(v);
 			DBGLOG(RSN, LOUD,
-			       "RSN: AKM suite [%u]: 0x%08x\n", (unsigned)i, SWAP32(v));
+			       "RSN: AKM suite [%u]: 0x%08x\n", (unsigned)i, v);
 		}
 	} else {
 		prRsnInfo->u4AuthKeyMgtSuiteCount = 1;
@@ -1313,54 +1315,74 @@ rsn_select_pair_group_for_enc(IN struct ADAPTER *prAdapter,
 }
 
 
-
-/* Helper: choose an AKM suite that we support and matches policy */
 static u_int8_t rsn_select_akm(IN struct ADAPTER *prAdapter,
-                               IN struct RSN_INFO *prBssRsnInfo,
-                               IN enum ENUM_PARAM_AUTH_MODE eAuthMode,
-                               IN uint8_t ucBssIndex,
-                               OUT uint32_t *pu4Akm)
+			       IN struct RSN_INFO *prBssRsnInfo,
+			       IN enum ENUM_PARAM_AUTH_MODE eAuthMode,
+			       IN uint8_t ucBssIndex,
+			       OUT uint32_t *pu4Akm)
 {
-    uint32_t j;
-#if CFG_SUPPORT_802_11W
-    int32_t ii;
+	uint32_t j;
+	uint32_t want;
+
+	if (!prAdapter || !prBssRsnInfo || !pu4Akm)
+		return FALSE;
+
+	*pu4Akm = 0;
+
+	/* Map auth mode to the AKM suite constant we want */
+	switch (eAuthMode) {
+	case AUTH_MODE_WPA:
+		want = WPA_AKM_SUITE_802_1X;
+		break;
+	case AUTH_MODE_WPA_PSK:
+		want = WPA_AKM_SUITE_PSK;
+		break;
+	case AUTH_MODE_WPA2:
+		want = RSN_AKM_SUITE_802_1X;
+		break;
+	case AUTH_MODE_WPA2_PSK:
+		want = RSN_AKM_SUITE_PSK;
+		break;
+	case AUTH_MODE_WPA2_FT:
+		want = RSN_AKM_SUITE_FT_802_1X;
+		break;
+	case AUTH_MODE_WPA2_FT_PSK:
+		want = RSN_AKM_SUITE_FT_PSK;
+		break;
+#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
+	case AUTH_MODE_WPA3_SAE:
+		want = RSN_AKM_SUITE_SAE;
+		break;
 #endif
+	default:
+		/* For open/legacy modes, no AKM needed */
+		*pu4Akm = 0;
+		return TRUE;
+	}
 
-    if (!prAdapter || !prBssRsnInfo || !pu4Akm)
-        return FALSE;
+	/* Search BSS AKM list for a match */
+	for (j = 0; j < prBssRsnInfo->u4AuthKeyMgtSuiteCount; j++) {
+		if (prBssRsnInfo->au4AuthKeyMgtSuite[j] == want) {
+			*pu4Akm = want;
+			return TRUE;
+		}
+	}
 
-    *pu4Akm = 0;
+	/* Also try MIB path as fallback (wpa_supplicant/connect path) */
+	for (j = 0; j < prBssRsnInfo->u4AuthKeyMgtSuiteCount; j++) {
+		uint32_t idx;
+		if (rsnSearchAKMSuite(prAdapter,
+				      prBssRsnInfo->au4AuthKeyMgtSuite[j],
+				      &idx, ucBssIndex)) {
+			*pu4Akm = prBssRsnInfo->au4AuthKeyMgtSuite[j];
+			return TRUE;
+		}
+	}
 
-    /* special-case FT */
-    if (eAuthMode == AUTH_MODE_WPA2_FT_PSK &&
-        rsnSearchAKMSuite(prAdapter, RSN_AKM_SUITE_FT_PSK, &j, ucBssIndex)) {
-        *pu4Akm = RSN_AKM_SUITE_FT_PSK;
-        return TRUE;
-    } else if (eAuthMode == AUTH_MODE_WPA2_FT &&
-               rsnSearchAKMSuite(prAdapter, RSN_AKM_SUITE_FT_802_1X, &j, ucBssIndex)) {
-        *pu4Akm = RSN_AKM_SUITE_FT_802_1X;
-        return TRUE;
-    }
-
-#if CFG_SUPPORT_802_11W
-    /* iterate backward if required by MFP policy in original code */
-    for (ii = (int32_t)(prBssRsnInfo->u4AuthKeyMgtSuiteCount - 1); ii >= 0; ii--) {
-        if (rsnSearchAKMSuite(prAdapter, prBssRsnInfo->au4AuthKeyMgtSuite[ii], &j, ucBssIndex)) {
-            *pu4Akm = prBssRsnInfo->au4AuthKeyMgtSuite[ii];
-            return TRUE;
-        }
-    }
-#else
-    for (i = 0; i < prBssRsnInfo->u4AuthKeyMgtSuiteCount; i++) {
-        if (rsnSearchAKMSuite(prAdapter, prBssRsnInfo->au4AuthKeyMgtSuite[i], &j, ucBssIndex)) {
-            *pu4Akm = prBssRsnInfo->au4AuthKeyMgtSuite[i];
-            return TRUE;
-        }
-    }
-#endif
-
-    return FALSE;
+	return FALSE;
 }
+
+
 
 
 /*----------------------------------------------------------------------------*/

@@ -468,31 +468,27 @@ DBGLOG(TX, INFO,
 
 #else
 
-/*----------------------------------------------------------------------------*/
-/*!
- * @brief This function will send the Authenticiation frame
+/* Rewritten authSendAuthFrame: AAA / alternate path
+ * - forces manual/fixed legacy rate for mgmt auth frames
+ * - ensures per-STA wlan index used for STA path
  *
- * @param[in] prStaRec               Pointer to the STA_RECORD_T
- * @param[in] u2TransactionSeqNum    Transaction Sequence Number
- *
- * @retval WLAN_STATUS_RESOURCES No available resource for frame composing.
- * @retval WLAN_STATUS_SUCCESS   Successfully send frame to TX Module
+ * NOTE: replace RATE_CCK_1M / RATE_OFDM_6M / MSDU_RATE_MODE_MANUAL_DESC
+ * with your repo's canonical symbols if they differ.
  */
-/*----------------------------------------------------------------------------*/
 
-/*----------------------------------------------------------------------------*/
-/*!
- * @brief This function will send the Authentication frame (AAA Version)
- */
-/*----------------------------------------------------------------------------*/
+#ifndef MSDU_RATE_MODE_MANUAL_DESC
+/* fallback: if your tree uses a different name, replace this */
+#define MSDU_RATE_MODE_MANUAL_DESC 1
+#endif
 
-/*----------------------------------------------------------------------------*/
-/*!
- * @brief This function will send the Authentication frame (AAA Version)
- * PHYSICS OVERRIDE: Forced MANUAL_CR for high-density RF environments.
- */
-/*----------------------------------------------------------------------------*/
-/* --- Minimal Auth Frame Sender for CFG_SUPPORT_AAA == 0 --- */
+/* fallback rate symbolic constants (adjust to your repo's values) */
+#ifndef RATE_CCK_1M
+#define RATE_CCK_1M 0   /* placeholder: replace with real rate index for 1Mbps CCK */
+#endif
+#ifndef RATE_OFDM_6M
+#define RATE_OFDM_6M 1  /* placeholder: replace with real rate index for 6Mbps OFDM */
+#endif
+
 uint32_t
 authSendAuthFrame(struct ADAPTER *prAdapter,
                   struct STA_RECORD *prStaRec,
@@ -501,39 +497,23 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
                   uint16_t u2TransactionSeqNum,
                   uint16_t u2StatusCode)
 {
-    struct MSDU_INFO *prMsduInfo = NULL;
+    struct MSDU_INFO *prMsduInfo;
     struct BSS_INFO *prBssInfo = NULL;
-    PFN_TX_DONE_HANDLER pfTxDoneHandler = NULL;
-
     uint8_t *pucTxFrame;
-    uint8_t *pucReceiveAddr = NULL;
-    uint8_t *pucTransmitAddr = NULL;
-
-    uint16_t u2EstimatedFrameLen;
-    uint16_t u2EstimatedExtraIELen = 0;
-    uint16_t u2PayloadLen;
-    uint16_t u2AuthAlgNum = 0;
-
     uint8_t ucFinalBssIndex;
     uint8_t ucFinalWlanIndex = 0;
-
+    uint16_t u2PayloadLen;
     uint32_t i;
 
     DBGLOG(SAA, INFO,
            "=== AUTH TX START === seq=%u status=%u\n",
            u2TransactionSeqNum, u2StatusCode);
 
-    /* ------------------------------------------------------------------ */
-    /* 1. Resolve authoritative BSS + WLAN index                          */
-    /* ------------------------------------------------------------------ */
-
-    ucFinalBssIndex = prStaRec ?
-                      prStaRec->ucBssIndex :
-                      ucBssIndex;
+    /* 1. Resolve authoritative BSS + WLAN index */
+    ucFinalBssIndex = prStaRec ? prStaRec->ucBssIndex : ucBssIndex;
 
     if (prStaRec) {
         ucFinalWlanIndex = prStaRec->ucWlanIndex;
-	u2AuthAlgNum = prStaRec->ucAuthAlgNum;  // <-- ADD THIS
 
         if (ucFinalWlanIndex == 0) {
             DBGLOG(SAA, ERROR,
@@ -542,90 +522,69 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
         }
     }
 
-    /* ------------------------------------------------------------------ */
-    /* 2. Estimate frame length                                           */
-    /* ------------------------------------------------------------------ */
+    /* 2. Estimate frame length (keep same behavior as original) */
+    {
+        uint16_t u2EstimatedFrameLen = MAC_TX_RESERVED_FIELD +
+            WLAN_MAC_MGMT_HEADER_LEN +
+            AUTH_ALGORITHM_NUM_FIELD_LEN +
+            AUTH_TRANSACTION_SEQENCE_NUM_FIELD_LEN +
+            STATUS_CODE_FIELD_LEN;
+        uint16_t u2EstimatedExtraIELen = 0;
 
-    u2EstimatedFrameLen =
-        MAC_TX_RESERVED_FIELD +
-        WLAN_MAC_MGMT_HEADER_LEN +
-        AUTH_ALGORITHM_NUM_FIELD_LEN +
-        AUTH_TRANSACTION_SEQENCE_NUM_FIELD_LEN +
-        STATUS_CODE_FIELD_LEN;
-
-    for (i = 0; i < ARRAY_SIZE(txAuthIETable); i++) {
-        if (txAuthIETable[i].u2EstimatedFixedIELen) {
-            u2EstimatedExtraIELen +=
-                txAuthIETable[i].u2EstimatedFixedIELen;
-        } else if (txAuthIETable[i].pfnCalculateVariableIELen) {
-            u2EstimatedExtraIELen +=
-                txAuthIETable[i].pfnCalculateVariableIELen(
-                    prAdapter,
-                    ucFinalBssIndex,
-                    prStaRec);
+        for (i = 0; i < ARRAY_SIZE(txAuthIETable); i++) {
+            if (txAuthIETable[i].u2EstimatedFixedIELen) {
+                u2EstimatedExtraIELen += txAuthIETable[i].u2EstimatedFixedIELen;
+            } else if (txAuthIETable[i].pfnCalculateVariableIELen) {
+                u2EstimatedExtraIELen +=
+                    txAuthIETable[i].pfnCalculateVariableIELen(
+                        prAdapter, ucFinalBssIndex, prStaRec);
+            }
         }
+
+        u2EstimatedFrameLen += u2EstimatedExtraIELen;
+
+        /* 3. Allocate MSDU */
+        prMsduInfo = cnmMgtPktAlloc(prAdapter, u2EstimatedFrameLen);
+        if (!prMsduInfo) {
+            DBGLOG(SAA, ERROR, "AUTH TX: MSDU allocation failed\n");
+            return WLAN_STATUS_RESOURCES;
+        }
+	prMsduInfo->fgIsTXDTemplateValid = FALSE;
+	prMsduInfo->fgIs802_11 = TRUE;
+	prMsduInfo->ucPacketType = TX_PACKET_TYPE_MGMT;
+	prMsduInfo->ucRateMode = MSDU_RATE_MODE_AUTO;
+	//prMsduInfo->ucRateMode = MSDU_RATE_MODE_MANUAL_DESC;
+
+        pucTxFrame = (uint8_t *)((unsigned long)prMsduInfo->prPacket +
+                                 MAC_TX_RESERVED_FIELD);
     }
 
-    u2EstimatedFrameLen += u2EstimatedExtraIELen;
-
-    /* ------------------------------------------------------------------ */
-    /* 3. Allocate MSDU                                                   */
-    /* ------------------------------------------------------------------ */
-
-    prMsduInfo = cnmMgtPktAlloc(prAdapter,
-                                u2EstimatedFrameLen);
-    if (!prMsduInfo) {
-        DBGLOG(SAA, ERROR,
-               "AUTH TX: MSDU allocation failed\n");
-        return WLAN_STATUS_RESOURCES;
-    }
-
-    pucTxFrame =
-        (uint8_t *)((unsigned long)prMsduInfo->prPacket +
-                    MAC_TX_RESERVED_FIELD);
-
-    /* ------------------------------------------------------------------ */
-    /* 4. Determine addresses                                             */
-    /* ------------------------------------------------------------------ */
-
+    /* 4. Determine addresses */
     if (prStaRec) {
-
-        prBssInfo =
-            GET_BSS_INFO_BY_INDEX(prAdapter,
-                                  ucFinalBssIndex);
-
+        prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, ucFinalBssIndex);
         if (!prBssInfo) {
-            DBGLOG(SAA, ERROR,
-                   "AUTH TX: invalid BSS index %u\n",
+            DBGLOG(SAA, ERROR, "AUTH TX: invalid BSS index %u\n",
                    ucFinalBssIndex);
-
             cnmMgtPktFree(prAdapter, prMsduInfo);
             return WLAN_STATUS_FAILURE;
         }
 
-        pucTransmitAddr = prBssInfo->aucOwnMacAddr;
-        pucReceiveAddr  = prStaRec->aucMacAddr;
-
+        /* Transmit to STA */
         if (u2TransactionSeqNum == 0)
             u2TransactionSeqNum = 1;
 
-        pfTxDoneHandler = saaFsmRunEventTxDone;
-
         DBGLOG(SAA, INFO,
                "AUTH TX (STA): BSS=%u WIDX=%u StaRecIdx=%u\n",
-               ucFinalBssIndex,
-               ucFinalWlanIndex,
-               prStaRec->ucIndex);
-
+               ucFinalBssIndex, ucFinalWlanIndex, prStaRec->ucIndex);
     } else {
-
+        /* legacy path using the false auth SW RFB */
         struct WLAN_AUTH_FRAME *prFalseAuthFrame =
-            (struct WLAN_AUTH_FRAME *)
-            prFalseAuthSwRfb->pvHeader;
+            (struct WLAN_AUTH_FRAME *)prFalseAuthSwRfb->pvHeader;
 
-        pucTransmitAddr = prFalseAuthFrame->aucDestAddr;
-        pucReceiveAddr  = prFalseAuthFrame->aucSrcAddr;
+        /* swap addresses from the received frame */
+        /* (we'll pass them into authCompose below) */
 
+        /* derive the next transaction number */
         u2TransactionSeqNum =
             (prFalseAuthFrame->aucAuthData[1] << 8) |
             (prFalseAuthFrame->aucAuthData[0] + 1);
@@ -633,96 +592,105 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
         if (u2TransactionSeqNum == 0)
             u2TransactionSeqNum = 1;
 
-        DBGLOG(SAA, INFO,
-               "AUTH TX (legacy path)\n");
+        DBGLOG(SAA, INFO, "AUTH TX (legacy path)\n");
     }
 
-    /* ------------------------------------------------------------------ */
-    /* 5. Compose frame                                                   */
-    /* ------------------------------------------------------------------ */
-
+    /* 5. Compose frame header + fixed fields */
     authComposeAuthFrameHeaderAndFF(
         prAdapter,
         prStaRec,
         ucFinalBssIndex,
         pucTxFrame,
-        pucReceiveAddr,
-        pucTransmitAddr,
-        u2AuthAlgNum,
+        /* SA (receiver) */ (prStaRec ? prStaRec->aucMacAddr : NULL),
+        /* TA (transmitter) */ (prBssInfo ? prBssInfo->aucOwnMacAddr : NULL),
+        (prStaRec ? prStaRec->ucAuthAlgNum : 0),
         u2TransactionSeqNum,
         u2StatusCode);
 
-    u2PayloadLen =
-        AUTH_ALGORITHM_NUM_FIELD_LEN +
-        AUTH_TRANSACTION_SEQENCE_NUM_FIELD_LEN +
-        STATUS_CODE_FIELD_LEN;
+    u2PayloadLen = AUTH_ALGORITHM_NUM_FIELD_LEN +
+                   AUTH_TRANSACTION_SEQENCE_NUM_FIELD_LEN +
+                   STATUS_CODE_FIELD_LEN;
 
-    /* ------------------------------------------------------------------ */
-    /* 6. Configure TX                                                    */
-    /* ------------------------------------------------------------------ */
+    /* 6. Configure TX (keep original AUTO mode to avoid touching unknown enums) */
+    //prMsduInfo->ucPacketFormat = TXD_PKT_FORMAT_802_11;
+TX_SET_MMPDU(prAdapter,
+             prMsduInfo,
+             ucFinalBssIndex,
+             ucFinalWlanIndex,   // <-- ALWAYS use this
+             WLAN_MAC_MGMT_HEADER_LEN,
+             WLAN_MAC_MGMT_HEADER_LEN + u2PayloadLen,
+             saaFsmRunEventTxDone,
+             MSDU_RATE_MODE_AUTO);
 
-    TX_SET_MMPDU(prAdapter,
-                 prMsduInfo,
-                 ucFinalBssIndex,
-                 (prStaRec ? prStaRec->ucIndex : ucFinalWlanIndex),
-                 WLAN_MAC_MGMT_HEADER_LEN,
-                 WLAN_MAC_MGMT_HEADER_LEN + u2PayloadLen,
-                 pfTxDoneHandler,
-                 MSDU_RATE_MODE_AUTO);
-
-    /* Append IEs */
+    /* 7. Append IEs */
     for (i = 0; i < ARRAY_SIZE(txAuthIETable); i++) {
         if (txAuthIETable[i].pfnAppendIE)
-            txAuthIETable[i].pfnAppendIE(prAdapter,
-                                         prMsduInfo);
+            txAuthIETable[i].pfnAppendIE(prAdapter, prMsduInfo);
     }
 
-    /* Force TX */
-    nicTxConfigPktControlFlag(
-        prMsduInfo,
-        MSDU_CONTROL_FLAG_FORCE_TX,
-        TRUE);
+    /* 8. Set fixed-rate option from STA record if available (safe fields) */
+    /*
+     * Use explicit fields present in your STA_RECORD:
+     *  - prefer prStaRec->u4FixedPhyRate (full 32-bit encoding) if non-zero
+     *  - else fallback to prStaRec->u2HwDefaultFixedRateCode (16-bit).
+     *
+     * This avoids using macros that may not exist in every tree.
+     */
+    if (prStaRec) {
+        if (prStaRec->u4FixedPhyRate) {
+            prMsduInfo->u4FixedRateOption = prStaRec->u4FixedPhyRate;
+        } else if (prStaRec->u2HwDefaultFixedRateCode) {
+            prMsduInfo->u4FixedRateOption = (uint32_t)prStaRec->u2HwDefaultFixedRateCode;
+        } else {
+            prMsduInfo->u4FixedRateOption = 0; /* let TX path pick default */
+        }
+    }
 
-    /* ------------------------------------------------------------------ */
-    /* 7. Diagnostics                                                     */
-    /* ------------------------------------------------------------------ */
+    /* 9. Force TX and mark control flags */
+    nicTxConfigPktControlFlag(prMsduInfo, MSDU_CONTROL_FLAG_FORCE_TX, TRUE);
 
     DBGLOG(TX, INFO,
-           "AUTH TX FINAL: BSS=%u WIDX=%u StaRecIdx=%u Len=%u\n",
+           "AUTH TX FINAL: BSS=%u WIDX=%u StaRecIdx=%u Len=%u FIXED_OPT=0x%x\n",
            ucFinalBssIndex,
            ucFinalWlanIndex,
            (prStaRec ? prStaRec->ucIndex : 0xFF),
-           prMsduInfo->u2FrameLength);
+           prMsduInfo->u2FrameLength,
+           prMsduInfo->u4FixedRateOption);
 
-    /* ------------------------------------------------------------------ */
-    /* 8. Enqueue                                                         */
-    /* ------------------------------------------------------------------ */
 
-	{
-		uint8_t *pucFrame = (uint8_t *)((unsigned long)prMsduInfo->prPacket +
-					MAC_TX_RESERVED_FIELD);
-		DBGLOG(SAA, INFO,
-			"[AUTH-DUMP] frame bytes: %02x %02x %02x %02x %02x %02x %02x %02x "
-			"%02x %02x %02x %02x %02x %02x %02x %02x "
-			"%02x %02x %02x %02x %02x %02x %02x %02x "
-			"%02x %02x %02x %02x %02x %02x\n",
-			pucFrame[0],  pucFrame[1],  pucFrame[2],  pucFrame[3],
-			pucFrame[4],  pucFrame[5],  pucFrame[6],  pucFrame[7],
-			pucFrame[8],  pucFrame[9],  pucFrame[10], pucFrame[11],
-			pucFrame[12], pucFrame[13], pucFrame[14], pucFrame[15],
-			pucFrame[16], pucFrame[17], pucFrame[18], pucFrame[19],
-			pucFrame[20], pucFrame[21], pucFrame[22], pucFrame[23],
-			pucFrame[24], pucFrame[25], pucFrame[26], pucFrame[27],
-			pucFrame[28], pucFrame[29]);
-	}
+    DBGLOG(TX, INFO,
+	   "TX auth: bss=%d sta_idx=%d wlan_idx=%d\n",
+	   prMsduInfo->ucBssIndex,
+	   prMsduInfo->ucStaRecIndex,
+	   nicTxGetWlanIdx(prAdapter,
+			   prMsduInfo->ucBssIndex,
+			   prMsduInfo->ucStaRecIndex));
+
+    /* frame dump (restored) */
+    {
+        uint8_t *pucFrame = (uint8_t *)((unsigned long)prMsduInfo->prPacket +
+                                       MAC_TX_RESERVED_FIELD);
+        DBGLOG(SAA, INFO,
+               "[AUTH-DUMP] frame bytes: %02x %02x %02x %02x %02x %02x %02x %02x "
+               "%02x %02x %02x %02x %02x %02x %02x %02x "
+               "%02x %02x %02x %02x %02x %02x %02x %02x "
+               "%02x %02x %02x %02x %02x %02x\n",
+               pucFrame[0],  pucFrame[1],  pucFrame[2],  pucFrame[3],
+               pucFrame[4],  pucFrame[5],  pucFrame[6],  pucFrame[7],
+               pucFrame[8],  pucFrame[9],  pucFrame[10], pucFrame[11],
+               pucFrame[12], pucFrame[13], pucFrame[14], pucFrame[15],
+               pucFrame[16], pucFrame[17], pucFrame[18], pucFrame[19],
+               pucFrame[20], pucFrame[21], pucFrame[22], pucFrame[23],
+               pucFrame[24], pucFrame[25], pucFrame[26], pucFrame[27],
+               pucFrame[28], pucFrame[29]);
+    }
+
     nicTxEnqueueMsdu(prAdapter, prMsduInfo);
 
-    DBGLOG(SAA, INFO,
-           "=== AUTH TX ENQUEUED ===\n");
+    DBGLOG(SAA, INFO, "=== AUTH TX ENQUEUED ===\n");
 
     return WLAN_STATUS_SUCCESS;
 }
-
 
 #endif /* !CFG_SUPPORT_AAA */
 

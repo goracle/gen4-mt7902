@@ -1018,13 +1018,15 @@ static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
 	    break;
 	  }
 
-	  /* Activate QM */
+	  if (prStaRec->fgIsTxAllowed) {
+	    DBGLOG(CNM, INFO,
+		   "StaRec[%u] STATE_3 already active, skipping\n",
+		   prStaRec->ucIndex);
+	    break;
+	  }
+
 	  qmActivateStaRec(prAdapter, prStaRec);
-
-	  /* Set default rate */
 	  nicTxUpdateStaRecDefaultRate(prAdapter, prStaRec);
-
-	  /* Allow TX */
 	  prStaRec->fgIsTxAllowed = TRUE;
 	  qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
 
@@ -1033,12 +1035,7 @@ static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
 		 prStaRec->ucIndex,
 		 prStaRec->fgIsTxAllowed);
 
-	  /* Install security entry */
-	  //secPrivacySeekForEntry(prAdapter, prStaRec);
-
-	  /* NOW fire pending SAA */
 	  aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
-
 	  break;
 
 	default:

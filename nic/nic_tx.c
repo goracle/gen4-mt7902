@@ -1992,155 +1992,142 @@ nicTxCopyDesc(IN struct ADAPTER *prAdapter,
  * @retval VOID
  */
 /*----------------------------------------------------------------------------*/
-uint32_t nicTxGenerateDescTemplate(IN struct ADAPTER
-				   *prAdapter, IN struct STA_RECORD *prStaRec)
+uint32_t nicTxGenerateDescTemplate(IN struct ADAPTER *prAdapter, IN struct STA_RECORD *prStaRec)
 {
-	uint8_t ucTid;
-	uint8_t ucTc;
-	uint32_t u4TxDescSize, u4TxDescAppendSize;
-	void *prTxDesc;
-	struct MSDU_INFO *prMsduInfo;
-	uint32_t rStatus = WLAN_STATUS_SUCCESS;
-	struct mt66xx_chip_info *prChipInfo;
+    uint8_t ucTid;
+    uint8_t ucTc;
+    uint32_t u4TxDescSize, u4TxDescAppendSize;
+    void *prTxDesc;
+    struct MSDU_INFO *prMsduInfo;
+    uint32_t rStatus = WLAN_STATUS_SUCCESS;
+    struct mt66xx_chip_info *prChipInfo;
 
-	ASSERT(prAdapter);
+    ASSERT(prAdapter);
 
-	/* Free previous template, first */
-	/* nicTxFreeDescTemplate(prAdapter, prStaRec); */
-	for (ucTid = 0; ucTid < TX_DESC_TID_NUM; ucTid++)
-		prStaRec->aprTxDescTemplate[ucTid] = NULL;
+    /* Free previous template, first */
+    /* nicTxFreeDescTemplate(prAdapter, prStaRec); */
+    for (ucTid = 0; ucTid < TX_DESC_TID_NUM; ucTid++)
+        prStaRec->aprTxDescTemplate[ucTid] = NULL;
 
-	prMsduInfo = cnmPktAlloc(prAdapter, 0);
+    prMsduInfo = cnmPktAlloc(prAdapter, 0);
 
-	if (!prMsduInfo)
-		return WLAN_STATUS_RESOURCES;
+    if (!prMsduInfo)
+        return WLAN_STATUS_RESOURCES;
 
-	prChipInfo = prAdapter->chip_info;
+    prChipInfo = prAdapter->chip_info;
 
-	/* Fill up MsduInfo template */
-	prMsduInfo->eSrc = TX_PACKET_OS;
-	prMsduInfo->fgIs802_11 = FALSE;
-	prMsduInfo->fgIs802_1x = FALSE;
-	prMsduInfo->fgIs802_1x_NonProtected = FALSE;
+    /* Fill up MsduInfo template */
+    prMsduInfo->eSrc = TX_PACKET_OS;
+    prMsduInfo->fgIs802_11 = FALSE;
+    prMsduInfo->fgIs802_1x = FALSE;
+    prMsduInfo->fgIs802_1x_NonProtected = FALSE;
+
 #if (CFG_SUPPORT_CONNAC3X == 1)
-	prMsduInfo->fgIs802_3 = TRUE;
+    prMsduInfo->fgIs802_3 = TRUE;
 #else
-	prMsduInfo->fgIs802_3 = FALSE;
+    prMsduInfo->fgIs802_3 = FALSE;
 #endif
-	prMsduInfo->fgIsVlanExists = FALSE;
-	prMsduInfo->pfTxDoneHandler = NULL;
-	prMsduInfo->prPacket = NULL;
-	prMsduInfo->u2FrameLength = 0;
-	prMsduInfo->u4Option = 0;
-	prMsduInfo->u4FixedRateOption = 0;
-	prMsduInfo->ucRateMode = MSDU_RATE_MODE_AUTO;
-	prMsduInfo->ucBssIndex = prStaRec->ucBssIndex;
-	prMsduInfo->ucPacketType = TX_PACKET_TYPE_DATA;
-	prMsduInfo->ucPacketFormat = prChipInfo->ucPacketFormat;
-	prMsduInfo->ucStaRecIndex = prStaRec->ucIndex;
-	prMsduInfo->ucPID = NIC_TX_DESC_PID_RESERVED;
+    prMsduInfo->fgIsVlanExists = FALSE;
+    prMsduInfo->pfTxDoneHandler = NULL;
+    prMsduInfo->prPacket = NULL;
+    prMsduInfo->u2FrameLength = 0;
+    prMsduInfo->u4Option = 0;
+    prMsduInfo->u4FixedRateOption = 0;
+    prMsduInfo->ucRateMode = MSDU_RATE_MODE_AUTO;
+    prMsduInfo->ucBssIndex = prStaRec->ucBssIndex;
+    prMsduInfo->ucPacketType = TX_PACKET_TYPE_DATA;
+    prMsduInfo->ucPacketFormat = prChipInfo->ucPacketFormat;
+    prMsduInfo->ucStaRecIndex = prStaRec->ucIndex;
+    prMsduInfo->ucPID = NIC_TX_DESC_PID_RESERVED;
 
-	u4TxDescSize = NIC_TX_DESC_LONG_FORMAT_LENGTH;
-	u4TxDescAppendSize = prChipInfo->txd_append_size;
+    u4TxDescSize = NIC_TX_DESC_LONG_FORMAT_LENGTH;
+    u4TxDescAppendSize = prChipInfo->txd_append_size;
 
-	DBGLOG(QM, INFO,
-	       "Generate TXD template for STA[%u] QoS[%u]\n",
-	       prStaRec->ucIndex, prStaRec->fgIsQoS);
+    DBGLOG(QM, INFO, "Generate TXD template for STA[%u] QoS[%u]\n",
+           prStaRec->ucIndex, prStaRec->fgIsQoS);
 
-	/* Generate new template */
-	if (prStaRec->fgIsQoS) {
-		/* For QoS STA, generate 8 TXD template (TID0~TID7) */
-		for (ucTid = 0; ucTid < TX_DESC_TID_NUM; ucTid++) {
+    /* Generate new template */
+    if (prStaRec->fgIsQoS) {
+        /* For QoS STA, generate 8 TXD template (TID0~TID7) */
+        for (ucTid = 0; ucTid < TX_DESC_TID_NUM; ucTid++) {
 
-			if (prAdapter->rWifiVar.ucTcRestrict < TC_NUM)
-				ucTc = prAdapter->rWifiVar.ucTcRestrict;
-			else
-				ucTc = nicTxWmmTc2ResTc(prAdapter,
-					prStaRec->ucBssIndex,
-					aucTid2ACI[ucTid]);
-			if ((uint8_t)ucTc >= (uint8_t)NET_TC_NUM)
-				u4TxDescSize =
-				nicTxDescLengthByTc(ucTc);
-			else
-				u4TxDescSize =
-				arTcTrafficSettings[ucTc].u4TxDescLength;
-			DBGLOG(QM, INFO, "ucTc:%d Size:%d\n",
-				ucTc, u4TxDescSize);
-			/* Include TxD append */
-			prTxDesc = kalMemAlloc(
-				u4TxDescSize + u4TxDescAppendSize,
-				PHY_MEM_TYPE);
-			DBGLOG(QM, TRACE, "STA[%u] TID[%u] TxDTemp[0x%p]\n",
-			       prStaRec->ucIndex, ucTid, prTxDesc);
-			if (!prTxDesc) {
-				rStatus = WLAN_STATUS_RESOURCES;
-				break;
-			}
+            if (prAdapter->rWifiVar.ucTcRestrict < TC_NUM)
+                ucTc = prAdapter->rWifiVar.ucTcRestrict;
+            else
+                ucTc = nicTxWmmTc2ResTc(prAdapter,
+                                        prStaRec->ucBssIndex,
+                                        aucTid2ACI[ucTid]);
 
-			/* Update MsduInfo TID & TC */
-			prMsduInfo->ucUserPriority = ucTid;
-			prMsduInfo->ucTC = ucTc;
+            if ((uint8_t)ucTc >= (uint8_t)NET_TC_NUM)
+                u4TxDescSize = nicTxDescLengthByTc(ucTc);
+            else
+                u4TxDescSize = arTcTrafficSettings[ucTc].u4TxDescLength;
 
-			/* Compose Tx desc template */
-			nicTxComposeDesc(
-				prAdapter, prMsduInfo, u4TxDescSize, TRUE,
-				(uint8_t *) prTxDesc);
+            DBGLOG(QM, INFO, "ucTc:%d Size:%d\n", ucTc, u4TxDescSize);
 
-			/* Fill TxD append */
-			nicTxComposeDescAppend(prAdapter, prMsduInfo,
-				((uint8_t *)prTxDesc + u4TxDescSize));
+            /* Include TxD append */
+            prTxDesc = kalMemAlloc(u4TxDescSize + u4TxDescAppendSize, PHY_MEM_TYPE);
+            
+            DBGLOG(QM, TRACE, "STA[%u] TID[%u] TxDTemp[0x%p]\n",
+                   prStaRec->ucIndex, ucTid, prTxDesc);
 
-			prStaRec->aprTxDescTemplate[ucTid] = prTxDesc;
-		}
-	} else {
-		/* For non-QoS STA, generate 1 TXD template (TID0) */
-		do {
-			if (prAdapter->rWifiVar.ucTcRestrict < TC_NUM)
-				ucTc = prAdapter->rWifiVar.ucTcRestrict;
-			else
-				ucTc = nicTxWmmTc2ResTc(prAdapter,
-					prStaRec->ucBssIndex,
-					NET_TC_WMM_AC_BE_INDEX);
+            if (!prTxDesc) {
+                rStatus = WLAN_STATUS_RESOURCES;
+                break;
+            }
 
-			/* ucTxDescSize =
-			 * arTcTrafficSettings[ucTc].ucTxDescLength;
-			 */
-			u4TxDescSize = NIC_TX_DESC_LONG_FORMAT_LENGTH;
+            /* Update MsduInfo TID & TC */
+            prMsduInfo->ucUserPriority = ucTid;
+            prMsduInfo->ucTC = ucTc;
 
-			prTxDesc = kalMemAlloc(
-				u4TxDescSize + u4TxDescAppendSize,
-				PHY_MEM_TYPE);
-			if (!prTxDesc) {
-				rStatus = WLAN_STATUS_RESOURCES;
-				break;
-			}
-			/* Update MsduInfo TID & TC */
-			prMsduInfo->ucUserPriority = 0;
-			prMsduInfo->ucTC = ucTc;
+            /* Compose Tx desc template */
+            nicTxComposeDesc(prAdapter, prMsduInfo, u4TxDescSize, TRUE, (uint8_t *) prTxDesc);
 
-			/* Compose Tx desc template */
-			nicTxComposeDesc(
-				prAdapter, prMsduInfo, u4TxDescSize, TRUE,
-				(uint8_t *) prTxDesc);
+            /* Fill TxD append */
+            nicTxComposeDescAppend(prAdapter, prMsduInfo, ((uint8_t *)prTxDesc + u4TxDescSize));
 
-			/* Fill TxD append */
-			nicTxComposeDescAppend(prAdapter, prMsduInfo,
-				((uint8_t *)prTxDesc + u4TxDescSize));
+            prStaRec->aprTxDescTemplate[ucTid] = prTxDesc;
+        }
+    } else {
+        /* For non-QoS STA, generate 1 TXD template (TID0) */
+        do {
+            if (prAdapter->rWifiVar.ucTcRestrict < TC_NUM)
+                ucTc = prAdapter->rWifiVar.ucTcRestrict;
+            else
+                ucTc = nicTxWmmTc2ResTc(prAdapter,
+                                        prStaRec->ucBssIndex,
+                                        NET_TC_WMM_AC_BE_INDEX);
 
-			for (ucTid = 0; ucTid < TX_DESC_TID_NUM; ucTid++) {
-				prStaRec->aprTxDescTemplate[ucTid] = prTxDesc;
-				DBGLOG(QM, TRACE,
-					"TXD template: TID[%u] Ptr[0x%p]\n",
-				  ucTid, prTxDesc);
-			}
-		} while (FALSE);
-	}
+            u4TxDescSize = NIC_TX_DESC_LONG_FORMAT_LENGTH;
 
-	nicTxReturnMsduInfo(prAdapter, prMsduInfo);
+            prTxDesc = kalMemAlloc(u4TxDescSize + u4TxDescAppendSize, PHY_MEM_TYPE);
+            
+            if (!prTxDesc) {
+                rStatus = WLAN_STATUS_RESOURCES;
+                break;
+            }
+            
+            /* Update MsduInfo TID & TC */
+            prMsduInfo->ucUserPriority = 0;
+            prMsduInfo->ucTC = ucTc;
 
-	return rStatus;
+            /* Compose Tx desc template */
+            nicTxComposeDesc(prAdapter, prMsduInfo, u4TxDescSize, TRUE, (uint8_t *) prTxDesc);
+
+            /* Fill TxD append */
+            nicTxComposeDescAppend(prAdapter, prMsduInfo, ((uint8_t *)prTxDesc + u4TxDescSize));
+
+            for (ucTid = 0; ucTid < TX_DESC_TID_NUM; ucTid++) {
+                prStaRec->aprTxDescTemplate[ucTid] = prTxDesc;
+                DBGLOG(QM, TRACE, "TXD template: TID[%u] Ptr[0x%p]\n", ucTid, prTxDesc);
+            }
+        } while (FALSE);
+    }
+
+    nicTxReturnMsduInfo(prAdapter, prMsduInfo);
+
+    return rStatus;
 }
-
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief In this function, we'll free Tx descriptor template for each TID.

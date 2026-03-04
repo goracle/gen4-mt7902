@@ -8395,25 +8395,18 @@ void nicUniCmdStaRecHandleEventPkt(IN struct ADAPTER
 			cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_3);
 			break;
 		case STA_STATE_3:
-		  DBGLOG(NIC, INFO,
-			 "StaRec[%u] FW ACK state=3 (UNI), activating TX path\n",
+		  DBGLOG(CNM, INFO,
+			 "StaRec[%u] FW ACK state=3 — activating TX path\n",
 			 prStaRec->ucIndex);
 
-		  uint32_t wtbl_ready = 0;
-		  int retries = 10;
-		  kalMdelay(100);  // LMAC WTBL guaranteed
-		  while (retries-- && !wtbl_ready) {
-		    kalMdelay(2);
-		    cnmDumpStaRec(prAdapter, prStaRec->ucIndex);  // Fixed arg1=prAdapter
-		    // Check TX readiness proxies (no raw WTBL access)
-		    wtbl_ready = (prStaRec->fgIsTxAllowed && 
-				  prStaRec->ucDesiredPhyTypeSet != 0);
-		    DBGLOG(CNM, INFO, "[WTBL] retry %d TxAllowed=%u\n", 
-			   10-retries, prStaRec->fgIsTxAllowed);
+		  if (prStaRec->fgIsTxAllowed) {
+		    DBGLOG(CNM, INFO,
+			   "StaRec[%u] STATE_3 already active, skipping\n",
+			   prStaRec->ucIndex);
+		    break;
 		  }
 
-
-		  prStaRec->ucStaState = STA_STATE_3;   // ← ADD THIS
+		  prStaRec->ucStaState = STA_STATE_3;
 		  qmActivateStaRec(prAdapter, prStaRec);
 		  nicTxUpdateStaRecDefaultRate(prAdapter, prStaRec);
 		  prStaRec->fgIsTxAllowed = TRUE;
