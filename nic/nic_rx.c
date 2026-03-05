@@ -70,6 +70,7 @@
  *                    E X T E R N A L   R E F E R E N C E S
  *******************************************************************************
  */
+
 #include "precomp.h"
 #include "nic_uni_cmd_event.h"
 #include "nic_cmd_event.h"
@@ -89,6 +90,10 @@
  *                              C O N S T A N T S
  *******************************************************************************
  */
+#define WLAN_FC_GET_STYPE(fc) (((fc)&0x00f0) >> 4)
+#define WLAN_FC_STYPE_AUTH 11
+
+
 /*******************************************************************************
  *                             D A T A   T Y P E S
  *******************************************************************************
@@ -2841,6 +2846,22 @@ void nicRxProcessPacketType(
 		}
 		} else if ((NIC_RX_GET_U2_SW_PKT_TYPE(prSwRfb->prRxStatus) &
 			    prChipInfo->u2RxSwPktBitMap) == prChipInfo->u2RxSwPktFrame) {
+
+		  // ADD THIS BLOCK - AUTH RX DUMP
+		  if (prSwRfb->u2RxByteCount > 24) {
+		    struct ieee80211_hdr *hdr = (void *)(prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
+		    u16 fc = le16_to_cpu(hdr->frame_control);
+		    if (ieee80211_is_mgmt(fc) && WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_AUTH) {
+		      printk(KERN_INFO "[RX-AUTH-DETECTED] From %pM seq=%d len=%d\n",
+			     hdr->addr2,
+			     (le16_to_cpu(hdr->seq_ctrl) >> 4),
+			     prSwRfb->u2RxByteCount);
+		      print_hex_dump(KERN_INFO, " AUTH FRAME: ", DUMP_PREFIX_OFFSET,
+				     16, 1, prSwRfb->pucRecvBuff + prChipInfo->rxd_size,
+				     min(128, prSwRfb->u2RxByteCount), 1);
+		    }
+		  }
+
 			RX_STATUS_GET(prChipInfo->prRxDescOps, prSwRfb->ucOFLD,
 				get_ofld, prSwRfb->prRxStatus);
 			RX_STATUS_GET(prChipInfo->prRxDescOps, prSwRfb->fgHdrTran,

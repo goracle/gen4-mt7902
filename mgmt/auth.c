@@ -395,16 +395,18 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
                  WLAN_MAC_MGMT_HEADER_LEN + u2PayloadLen,
                  saaFsmRunEventTxDone,
                  MSDU_RATE_MODE_AUTO);
-	prMsduInfo->fgMgmtUseDataQ = TRUE;
-    {   /* ensure skb payload/len for management frames */
+    //prMsduInfo->fgMgmtUseDataQ = TRUE;
+    {   /* point skb at TXD+frame for halWpdmaWriteMsdu DMA copy.
+         * cnmMgtPktAlloc layout: [TXD+padding][802.11 frame]
+         * prPacket points to TXD start; MAC_TX_RESERVED_FIELD covers TXD+padding.
+         */
         struct sk_buff *prSkb = (struct sk_buff *)prMsduInfo->prPacket;
+        uint32_t u4TxdLen = MAC_TX_RESERVED_FIELD;
         if (prSkb) {
-            /* point skb->data at the frame (skip MAC_TX_RESERVED_FIELD) */
-            prSkb->data = (uint8_t *)prMsduInfo->prPacket + MAC_TX_RESERVED_FIELD;
-            /* set skb length so later code copies the frame */
-            prSkb->len = prMsduInfo->u2FrameLength;
-            DBGLOG(SAA, INFO, "[AUTH-FIX] skb=%p data=%p len=%u\\n",
-                   prSkb, prSkb->data, prSkb->len);
+            prSkb->data = (uint8_t *)prMsduInfo->prPacket;
+            prSkb->len = u4TxdLen + prMsduInfo->u2FrameLength;
+            DBGLOG(SAA, INFO, "[AUTH-FIX] skb=%p data=%p len=%u (txd=%u frame=%u)\\n",
+                   prSkb, prSkb->data, prSkb->len, u4TxdLen, prMsduInfo->u2FrameLength);
         }
     }
 

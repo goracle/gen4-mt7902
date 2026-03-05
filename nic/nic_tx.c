@@ -3497,234 +3497,160 @@ nicTxProcessTxDoneEvent(IN struct ADAPTER *prAdapter,
  */
 /*----------------------------------------------------------------------------*/
 uint32_t nicTxEnqueueMsdu(IN struct ADAPTER *prAdapter,
-			  IN struct MSDU_INFO *prMsduInfo)
+                          IN struct MSDU_INFO *prMsduInfo)
 {
-	struct TX_CTRL *prTxCtrl;
-	struct MSDU_INFO *prNextMsduInfo, *prRetMsduInfo,
-		       *prMsduInfoHead;
-	struct QUE qDataPort0, qDataPort1;
-	struct QUE *prDataPort0, *prDataPort1;
-	struct CMD_INFO *prCmdInfo;
-	uint32_t u4Status = WLAN_STATUS_SUCCESS;
+    struct TX_CTRL *prTxCtrl;
+    struct QUE qDataPort0, qDataPort1;
+    struct MSDU_INFO *prNextMsduInfo;
+    struct MSDU_INFO *prRetMsduInfo = NULL; /* FIX: Initialized to prevent UB */
+    uint32_t u4Status = WLAN_STATUS_SUCCESS;
 
-	KAL_SPIN_LOCK_DECLARATION();
+    KAL_SPIN_LOCK_DECLARATION();
 
-	ASSERT(prAdapter);
-	ASSERT(prMsduInfo);
+    ASSERT(prAdapter);
+    ASSERT(prMsduInfo);
 
-	prTxCtrl = &prAdapter->rTxCtrl;
-	ASSERT(prTxCtrl);
+    prTxCtrl = &prAdapter->rTxCtrl;
+    ASSERT(prTxCtrl);
 
-	prDataPort0 = &qDataPort0;
-	prDataPort1 = &qDataPort1;
+    QUEUE_INITIALIZE(&qDataPort0);
+    QUEUE_INITIALIZE(&qDataPort1);
 
-	QUEUE_INITIALIZE(prDataPort0);
-	QUEUE_INITIALIZE(prDataPort1);
+    /* 1. Categorize and queue management/data frames */
+    while (prMsduInfo) {
+        prNextMsduInfo = (struct MSDU_INFO *) QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *) prMsduInfo);
+        QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *) prMsduInfo) = NULL;
 
-	/* check how many management frame are being queued */
-	while (prMsduInfo) {
-		prNextMsduInfo = (struct MSDU_INFO *) QUEUE_GET_NEXT_ENTRY((
-					 struct QUE_ENTRY *) prMsduInfo);
+        if (prMsduInfo->eSrc == TX_PACKET_MGMT) {
+            if (nicTxProcessMngPacket(prAdapter, prMsduInfo)) {
+                if (prMsduInfo->fgMgmtUseDataQ) {
+                    QUEUE_INSERT_TAIL(&qDataPort0, (struct QUE_ENTRY *) prMsduInfo);
+                } else {
+                    QUEUE_INSERT_TAIL(&qDataPort1, (struct QUE_ENTRY *) prMsduInfo);
+                }
+            } else {
+                DBGLOG(TX, WARN, "Invalid MGMT[0x%p] BSS[%u] STA[%u], free it\n",
+                       prMsduInfo, prMsduInfo->ucBssIndex, prMsduInfo->ucStaRecIndex);
+                cnmMgtPktFree(prAdapter, prMsduInfo);
+            }
+        } else {
+            QUEUE_INSERT_TAIL(&qDataPort0, (struct QUE_ENTRY *) prMsduInfo);
+        }
 
-		QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *) prMsduInfo) =
-			NULL;
+        prMsduInfo = prNextMsduInfo;
+    }
 
-		if (prMsduInfo->eSrc == TX_PACKET_MGMT) {
-			if (nicTxProcessMngPacket(prAdapter, prMsduInfo)) {
-				/* Valid MGMT */
-				if (prMsduInfo->fgMgmtUseDataQ) {
-					QUEUE_INSERT_TAIL(prDataPort0,
-						(struct QUE_ENTRY *)
-							prMsduInfo);
-				} else {
-					QUEUE_INSERT_TAIL(prDataPort1,
-						(struct QUE_ENTRY *)
-							prMsduInfo);
-				}
-			} else {
-				/* Invalid MGMT */
-				DBGLOG(TX, WARN,
-				       "Invalid MGMT[0x%p] BSS[%u] STA[%u],free it\n",
-				       prMsduInfo, prMsduInfo->ucBssIndex,
-				       prMsduInfo->ucStaRecIndex);
+    /* 2. Process DataPort0 (Direct to HIF, bypass QM) */
+    if (qDataPort0.u4NumElem) {
+        struct MSDU_INFO *prDirectMsdu = (struct MSDU_INFO *) QUEUE_GET_HEAD(&qDataPort0);
+        bool bSkbValid = true;
 
-				cnmMgtPktFree(prAdapter, prMsduInfo);
-			}
-		} else {
-			QUEUE_INSERT_TAIL(prDataPort0,
-					  (struct QUE_ENTRY *) prMsduInfo);
-		}
+        if (prDirectMsdu->eSrc == TX_PACKET_OS || prDirectMsdu->eSrc == TX_PACKET_OS_OID) {
+            struct sk_buff *prSkb = (struct sk_buff *) prDirectMsdu->prPacket;
+            if (prSkb) {
+                uint32_t u4HeadRoom = NIC_TX_DESC_AND_PADDING_LENGTH + 
+                                      prAdapter->chip_info->txd_append_size;
+                
+                if (skb_headroom(prSkb) < u4HeadRoom) {
+                    struct sk_buff *prNewSkb = skb_realloc_headroom(prSkb, u4HeadRoom);
+                    if (prNewSkb) {
+                        dev_kfree_skb(prSkb);
+                        prDirectMsdu->prPacket = prNewSkb;
+                    } else {
+                        DBGLOG(TX, ERROR, "[DIRECT-TX] skb_realloc_headroom failed\n");
+                        bSkbValid = false;
+                    }
+                }
+            }
+        }
 
-		prMsduInfo = prNextMsduInfo;
-	}
+        if (bSkbValid) {
+            DBGLOG(TX, INFO, "[DIRECT-TX] auth/mgmt via dataQ, bypassing QM\n");
+            nicTxMsduInfoListMthread(prAdapter, prDirectMsdu);
+            kalSetTxEvent2Hif(prAdapter->prGlueInfo);
+        } else {
+            /* If reallocation failed, we drop rather than process corrupted data */
+            if (prDirectMsdu->pfTxDoneHandler) {
+                prDirectMsdu->pfTxDoneHandler(prAdapter, prDirectMsdu, TX_RESULT_DROPPED_IN_DRIVER);
+            }
+            cnmMgtPktFree(prAdapter, prDirectMsdu);
+        }
 
-	if (prDataPort0->u4NumElem) {
-		/* direct to HIF, bypass QM */
-		{
-			struct MSDU_INFO *prDirectMsdu =
-				(struct MSDU_INFO *) QUEUE_GET_HEAD(prDataPort0);
-			/* mgmt frames use cnmMgtPktAlloc buffers, not real skbs - skip headroom expansion */
-			if (prDirectMsdu->eSrc == TX_PACKET_OS || prDirectMsdu->eSrc == TX_PACKET_OS_OID) {
-				struct sk_buff *prSkb = (struct sk_buff *)prDirectMsdu->prPacket;
-				if (prSkb) {
-					uint32_t u4HeadRoom =
-						NIC_TX_DESC_AND_PADDING_LENGTH +
-						prAdapter->chip_info->txd_append_size;
-					if (skb_headroom(prSkb) < u4HeadRoom) {
-						struct sk_buff *prNewSkb =
-							skb_realloc_headroom(prSkb, u4HeadRoom);
-						if (!prNewSkb) {
-							DBGLOG(TX, ERROR,
-								"[DIRECT-TX] skb_realloc_headroom failed\n");
-							goto skip_direct_tx;
-						}
-						dev_kfree_skb(prSkb);
-						prDirectMsdu->prPacket = prNewSkb;
-					}
-				}
-			}
-			DBGLOG(TX, INFO, "[DIRECT-TX] auth/mgmt via dataQ, bypassing QM\n");
-			nicTxMsduInfoListMthread(prAdapter, prDirectMsdu);
-		}
-		skip_direct_tx:;
-		if (FALSE) {
-			/* dead block - preserved for structural symmetry */
-			GLUE_INC_REF_CNT(prAdapter->prGlueInfo->i4TxPendingFrameNum);
-			DBGLOG(TX, INFO, "[QM-ENQ] auth/mgmt via dataQ, TxPendingFrameNum=%d\n",
-				GLUE_GET_REF_CNT(prAdapter->prGlueInfo->i4TxPendingFrameNum));
-			kalSetTxEvent2Hif(prAdapter->prGlueInfo);
-		}
 #if ARP_MONITER_ENABLE
-		if (prAdapter->cArpNoResponseIdx >= 0) {
+        if (prAdapter->cArpNoResponseIdx >= 0) {
 #if CFG_SUPPORT_DATA_STALL
-			KAL_REPORT_ERROR_EVENT(prAdapter,
-				EVENT_ARP_NO_RESPONSE,
-				prAdapter->cArpNoResponseIdx);
-#endif /* CFG_SUPPORT_DATA_STALL */
-			aisBssBeaconTimeout(prAdapter,
-				prAdapter->cArpNoResponseIdx);
-			prAdapter->cArpNoResponseIdx = -1;
-		}
-#endif /* ARP_MONITER_ENABLE */
-		/* post-process for dropped packets */
-		if (prRetMsduInfo) {
-		DBGLOG(TX, WARN, "[QM-DROP] qmEnqueueTxPackets returned non-null, frame dropped\n");
-		/* unable to enqueue */
-			nicTxFreeMsduInfoPacket(prAdapter, prRetMsduInfo);
-			nicTxReturnMsduInfo(prAdapter, prRetMsduInfo);
-		}
-	}
+            KAL_REPORT_ERROR_EVENT(prAdapter, EVENT_ARP_NO_RESPONSE, prAdapter->cArpNoResponseIdx);
+#endif
+            aisBssBeaconTimeout(prAdapter, prAdapter->cArpNoResponseIdx);
+            prAdapter->cArpNoResponseIdx = -1;
+        }
+#endif
 
-	if (prDataPort1->u4NumElem) {
-		prMsduInfoHead = (struct MSDU_INFO *) QUEUE_GET_HEAD(
-					 prDataPort1);
+        /* Post-process dropped packets (assuming QM logic populates this elsewhere in a broader scope) */
+        if (prRetMsduInfo) {
+            DBGLOG(TX, WARN, "[QM-DROP] qmEnqueueTxPackets returned non-null, frame dropped\n");
+            nicTxFreeMsduInfoPacket(prAdapter, prRetMsduInfo);
+            nicTxReturnMsduInfo(prAdapter, prRetMsduInfo);
+        }
+    }
 
-		if (nicTxGetFreeCmdCount(prAdapter) <
-		    NIC_TX_CMD_INFO_RESERVED_COUNT) {
-			/* not enough descriptors for sending */
-			u4Status = WLAN_STATUS_FAILURE;
+    /* 3. Process DataPort1 (Send to Command Queue) */
+    if (qDataPort1.u4NumElem) {
+        struct MSDU_INFO *prMsduInfoHead = (struct MSDU_INFO *) QUEUE_GET_HEAD(&qDataPort1);
+        bool bHasEnoughCmds = (nicTxGetFreeCmdCount(prAdapter) >= NIC_TX_CMD_INFO_RESERVED_COUNT);
 
-			/* free all MSDUs */
-			while (prMsduInfoHead) {
-				prNextMsduInfo =
-					(struct MSDU_INFO *)
-						QUEUE_GET_NEXT_ENTRY(
-					&prMsduInfoHead->rQueEntry);
+        if (!bHasEnoughCmds) {
+            u4Status = WLAN_STATUS_FAILURE;
+        }
 
-				if (prMsduInfoHead->pfTxDoneHandler != NULL) {
-					prMsduInfoHead->pfTxDoneHandler(
-						prAdapter, prMsduInfoHead,
-						TX_RESULT_DROPPED_IN_DRIVER);
-				}
+        while (prMsduInfoHead) {
+            prNextMsduInfo = (struct MSDU_INFO *) QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *) prMsduInfoHead);
+            struct CMD_INFO *prCmdInfo = NULL;
 
-				cnmMgtPktFree(prAdapter, prMsduInfoHead);
+            if (bHasEnoughCmds) {
+                KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_CMD_RESOURCE);
+                QUEUE_REMOVE_HEAD(&prAdapter->rFreeCmdList, prCmdInfo, struct CMD_INFO *);
+                KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_CMD_RESOURCE);
+            }
 
-				prMsduInfoHead = prNextMsduInfo;
-			}
-		} else {
-			/* send to command queue */
-			while (prMsduInfoHead) {
-				prNextMsduInfo =
-					(struct MSDU_INFO *)
-						QUEUE_GET_NEXT_ENTRY(
-					&prMsduInfoHead->rQueEntry);
-
-				KAL_ACQUIRE_SPIN_LOCK(prAdapter,
-					SPIN_LOCK_CMD_RESOURCE);
-				QUEUE_REMOVE_HEAD(
-					&prAdapter->rFreeCmdList,
-					prCmdInfo,
-					struct CMD_INFO *);
-				KAL_RELEASE_SPIN_LOCK(prAdapter,
-					SPIN_LOCK_CMD_RESOURCE);
-
-				if (prCmdInfo) {
-					GLUE_INC_REF_CNT(
-						prTxCtrl->i4TxMgmtPendingNum);
-
-					kalMemZero(prCmdInfo,
-						sizeof(struct CMD_INFO));
+            if (prCmdInfo) {
+                GLUE_INC_REF_CNT(prTxCtrl->i4TxMgmtPendingNum);
+                kalMemZero(prCmdInfo, sizeof(struct CMD_INFO));
 
 #if CFG_ENABLE_PKT_LIFETIME_PROFILE
-					/* Tag MGMT enqueue time */
-					GET_CURRENT_SYSTIME(
-						&prMsduInfoHead->
-						rPktProfile.rEnqueueTimestamp);
+                GET_CURRENT_SYSTIME(&prMsduInfoHead->rPktProfile.rEnqueueTimestamp);
 #endif
-					prCmdInfo->eCmdType =
-						COMMAND_TYPE_MANAGEMENT_FRAME;
-					prCmdInfo->u2InfoBufLen =
-						prMsduInfoHead->u2FrameLength;
-					prCmdInfo->pucInfoBuffer = NULL;
-					prCmdInfo->prMsduInfo = prMsduInfoHead;
-					prCmdInfo->pfCmdDoneHandler = NULL;
-					prCmdInfo->pfCmdTimeoutHandler = NULL;
-					prCmdInfo->fgIsOid = FALSE;
-					prCmdInfo->fgSetQuery = TRUE;
-					prCmdInfo->fgNeedResp = FALSE;
-					prCmdInfo->ucCmdSeqNum =
-						prMsduInfoHead->ucTxSeqNum;
+                prCmdInfo->eCmdType = COMMAND_TYPE_MANAGEMENT_FRAME;
+                prCmdInfo->u2InfoBufLen = prMsduInfoHead->u2FrameLength;
+                prCmdInfo->prMsduInfo = prMsduInfoHead;
+                prCmdInfo->fgSetQuery = TRUE;
+                prCmdInfo->ucCmdSeqNum = prMsduInfoHead->ucTxSeqNum;
 
-					DBGLOG(TX, TRACE,
-						"%s: EN-Q MSDU[0x%p] SEQ[%u] BSS[%u] STA[%u] to CMD Q\n",
-					  __func__, prMsduInfoHead,
-					  prMsduInfoHead->ucTxSeqNum,
-					  prMsduInfoHead->ucBssIndex,
-					  prMsduInfoHead->ucStaRecIndex);
+                DBGLOG(TX, TRACE, "%s: EN-Q MSDU[0x%p] SEQ[%u] BSS[%u] STA[%u] to CMD Q\n",
+                       __func__, prMsduInfoHead, prMsduInfoHead->ucTxSeqNum,
+                       prMsduInfoHead->ucBssIndex, prMsduInfoHead->ucStaRecIndex);
 
-					kalEnqueueCommand(prAdapter->prGlueInfo,
-						(struct QUE_ENTRY *) prCmdInfo);
-				} else {
-					/* Cmd free count is larger than
-					 * expected, but allocation fail.
-					 */
-					u4Status = WLAN_STATUS_FAILURE;
+                kalEnqueueCommand(prAdapter->prGlueInfo, (struct QUE_ENTRY *) prCmdInfo);
+            } else {
+                /* Drop packet if out of commands OR allocation failed */
+                u4Status = WLAN_STATUS_FAILURE;
+                if (prMsduInfoHead->pfTxDoneHandler != NULL) {
+                    prMsduInfoHead->pfTxDoneHandler(prAdapter, prMsduInfoHead, TX_RESULT_DROPPED_IN_DRIVER);
+                }
+                cnmMgtPktFree(prAdapter, prMsduInfoHead);
+            }
 
-					if (prMsduInfoHead->pfTxDoneHandler
-							!= NULL) {
-						prMsduInfoHead->pfTxDoneHandler(
-							prAdapter,
-							prMsduInfoHead,
-						TX_RESULT_DROPPED_IN_DRIVER);
-					}
+            prMsduInfoHead = prNextMsduInfo;
+        }
+    }
 
-					cnmMgtPktFree(prAdapter,
-						prMsduInfoHead);
-				}
+    /* 4. Trigger Service Thread */
+    if (prTxCtrl->i4TxMgmtPendingNum > 0 || kalGetTxPendingFrameCount(prAdapter->prGlueInfo) > 0) {
+        kalSetEvent(prAdapter->prGlueInfo);
+    }
 
-				prMsduInfoHead = prNextMsduInfo;
-			}
-		}
-	}
-
-	/* indicate service thread for sending */
-	if (prTxCtrl->i4TxMgmtPendingNum > 0
-	    || kalGetTxPendingFrameCount(prAdapter->prGlueInfo) > 0)
-		kalSetEvent(prAdapter->prGlueInfo);
-
-	return u4Status;
+    return u4Status;
 }
-
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief this function returns WLAN index

@@ -482,12 +482,11 @@ void nic_txd_v2_compose(
 	if (prMsduInfo->fgIs802_11) {
 #if CFG_SUPPORT_TX_MGMT_USE_DATAQ
 		if (prMsduInfo->ucPktType == ENUM_PKT_802_11_MGMT) {
-			u4TxHeadRoomSize = NIC_TX_DESC_AND_PADDING_LENGTH +
-			   prAdapter->chip_info->txd_append_size;
-			prSkb = (struct sk_buff *)prMsduInfo->prPacket;
-			prWlanHeader =
-				(struct WLAN_MAC_HEADER *)((unsigned long)
-				(prSkb->data + u4TxHeadRoomSize));
+			/* fgMgmtUseDataQ: raw cnmMgtPktAlloc buffer, not a real skb.
+			 * Frame starts at MAC_TX_RESERVED_FIELD offset, same as normal mgmt path.
+			 */
+			prWlanHeader = (struct WLAN_MAC_HEADER *)
+				((unsigned long)(prMsduInfo->prPacket) + MAC_TX_RESERVED_FIELD);
 
 			if (prMsduInfo->u4Option & MSDU_OPT_PROTECTED_FRAME)
 				prWlanHeader->u2FrameCtrl |=

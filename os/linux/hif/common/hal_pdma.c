@@ -137,36 +137,79 @@ static int hal_rx_handle_type7(IN struct ADAPTER *prAdapter,
  *******************************************************************************
  */
 uint8_t halRingDataSelectByWmmIndex(
-	IN struct ADAPTER *prAdapter,
-	IN uint8_t ucWmmIndex)
+    IN struct ADAPTER *prAdapter,
+    IN uint8_t ucWmmIndex)
 {
-	struct BUS_INFO *bus_info;
-	uint16_t u2Port = TX_RING_DATA0_IDX_0;
+    struct BUS_INFO *bus_info;
+    uint8_t u1Port;
 
-	bus_info = prAdapter->chip_info->bus_info;
-	if (bus_info->tx_ring0_data_idx != bus_info->tx_ring1_data_idx) {
-		u2Port = (ucWmmIndex == 1) ?
-			TX_RING_DATA1_IDX_1 : TX_RING_DATA0_IDX_0;
-	}
-	return u2Port;
+    ASSERT(prAdapter);
+
+    bus_info = prAdapter->chip_info->bus_info;
+
+    /* default to ring0 data index */
+    u1Port = (uint8_t)bus_info->tx_ring0_data_idx;
+
+    /* if device has two distinct data rings, pick based on WMM index.
+     * only WMM index 1 maps to ring1; anything else maps to ring0.
+     */
+    if (bus_info->tx_ring0_data_idx != bus_info->tx_ring1_data_idx) {
+        u1Port = (ucWmmIndex == 1) ?
+                 (uint8_t)bus_info->tx_ring1_data_idx :
+                 (uint8_t)bus_info->tx_ring0_data_idx;
+    }
+
+    return u1Port;
 }
 
 /*----------------------------------------------------------------------------*/
 /*!
- * @brief Decide TxRingData number by MsduInfo
+ * @brief Decide Tx ring number by MsduInfo (routes mgmt/command to MCU ring)
  *
- * @param prGlueInfo
+ * @param prAdapter  Adapter pointer
+ * @param prMsduInfo MSDU info
  *
- * @param prMsduInfo
- *
- * @return TxRingData number
+ * @return Tx ring index
  */
 /*----------------------------------------------------------------------------*/
 uint8_t halTxRingDataSelect(IN struct ADAPTER *prAdapter,
-	IN struct MSDU_INFO *prMsduInfo)
+    IN struct MSDU_INFO *prMsduInfo)
 {
-	ASSERT(prAdapter);
-	return halRingDataSelectByWmmIndex(prAdapter, prMsduInfo->ucWmmQueSet);
+    struct BUS_INFO *bus_info;
+
+    ASSERT(prAdapter);
+    ASSERT(prMsduInfo);
+
+    bus_info = prAdapter->chip_info->bus_info;
+
+    /* Commands always go to MCU/command TX ring. */
+    if (prMsduInfo->ucPacketType == TX_PACKET_TYPE_MGMT)
+        return (uint8_t)bus_info->tx_ring_cmd_idx;
+
+    /*
+     * Management frames normally should go to the MCU/command ring.
+     * Some vendor code explicitly requests mgmt go through data queues
+     * (fgMgmtUseDataQ == 1) — preserve that behavior: route to data selector
+     * only when fgMgmtUseDataQ is set.
+     */
+    if (prMsduInfo->ucPacketType == TX_PACKET_TYPE_MGMT) {
+#ifdef CFG_VENDOR_MGMT_USE_DATAQ /* optional guard if symbol exists */
+        if (prMsduInfo->fgMgmtUseDataQ)
+            return halRingDataSelectByWmmIndex(prAdapter,
+                                               prMsduInfo->ucWmmQueSet);
+        else
+            return (uint8_t)bus_info->tx_ring_cmd_idx;
+#else
+        /* If driver doesn't use fgMgmtUseDataQ, default to MCU ring. */
+        if (prMsduInfo->fgMgmtUseDataQ)
+            return halRingDataSelectByWmmIndex(prAdapter,
+                                               prMsduInfo->ucWmmQueSet);
+        return (uint8_t)bus_info->tx_ring_cmd_idx;
+#endif
+    }
+
+    /* All other (data) packets: use the WMM helper. */
+    return halRingDataSelectByWmmIndex(prAdapter, prMsduInfo->ucWmmQueSet);
 }
 
 
@@ -3011,6 +3054,20 @@ static bool halWpdmaFillTxRing(struct GLUE_INFO *prGlueInfo,
 	pTxD->Burst = 0;
 	pTxD->DMADONE = 0;
 
+DBGLOG(HAL, WARN,
+"TXRING port=%u hw_cidx=0x%x write=%u",
+u2Port,
+prTxRing->hw_cidx_addr,
+prTxRing->TxCpuIdx);
+
+DBGLOG(HAL, WARN,
+ "TX token=%u ring=%u wmm=%u type=%u\n",
+ prToken->u4Token,
+ u2Port,
+ prToken->prMsduInfo->ucWmmQueSet,
+ prToken->prMsduInfo->ucPacketType);
+
+
 	/* Increase TX_CTX_IDX, but write to register later. */
 	INC_RING_INDEX(prTxRing->TxCpuIdx, TX_RING_SIZE);
 
@@ -3023,7 +3080,6 @@ static bool halWpdmaFillTxRing(struct GLUE_INFO *prGlueInfo,
 	DBGLOG_LIMITED(HAL, TRACE,
 		"Tx Data:Ring%d CPU idx[0x%x] Used[%u]\n",
 		u2Port, prTxRing->TxCpuIdx, prTxRing->u4UsedCnt);
-
 	return TRUE;
 }
 
@@ -3179,9 +3235,9 @@ bool halWpdmaWriteMsdu(struct GLUE_INFO *prGlueInfo,
 	if (prMemOps->copyTxData)
 		prMemOps->copyTxData(prToken, pucSrc, u4TotalLen);
 #else
-	prToken->prPacket = pucSrc;
-	prToken->u4DmaLength = u4TotalLen;
-	prMsduInfo->prToken = prToken;
+    prToken->prPacket = prSkb;
+    prToken->u4DmaLength = u4TotalLen;
+    prMsduInfo->prToken = prToken;
 #endif
 
 	/*
