@@ -396,6 +396,18 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
                  saaFsmRunEventTxDone,
                  MSDU_RATE_MODE_AUTO);
 	prMsduInfo->fgMgmtUseDataQ = TRUE;
+    {   /* ensure skb payload/len for management frames */
+        struct sk_buff *prSkb = (struct sk_buff *)prMsduInfo->prPacket;
+        if (prSkb) {
+            /* point skb->data at the frame (skip MAC_TX_RESERVED_FIELD) */
+            prSkb->data = (uint8_t *)prMsduInfo->prPacket + MAC_TX_RESERVED_FIELD;
+            /* set skb length so later code copies the frame */
+            prSkb->len = prMsduInfo->u2FrameLength;
+            DBGLOG(SAA, INFO, "[AUTH-FIX] skb=%p data=%p len=%u\\n",
+                   prSkb, prSkb->data, prSkb->len);
+        }
+    }
+
 
     for (i = 0; i < ARRAY_SIZE(txAuthIETable); i++) {
         if (txAuthIETable[i].pfnAppendIE)
@@ -403,6 +415,12 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
     }
 
     nicTxConfigPktControlFlag(prMsduInfo, MSDU_CONTROL_FLAG_FORCE_TX, TRUE);
+
+    prMsduInfo->ucWlanIndex = nicTxGetWlanIdx(prAdapter,
+        prMsduInfo->ucBssIndex,
+        prMsduInfo->ucStaRecIndex);
+    DBGLOG(SAA, INFO, "[AUTH-WIDX] set wlanIdx=%u on MSDU\n",
+        prMsduInfo->ucWlanIndex);
 
     DBGLOG(SAA, INFO,
            "AUTH TX FINAL: BSS=%u StaRecIdx=%u Len=%u\n",

@@ -1607,7 +1607,27 @@ static bool pcieCopyEvent(struct GL_HIF_INFO *prHifInfo,
 static bool pcieCopyTxData(struct MSDU_TOKEN_ENTRY *prToken,
 			   void *pucSrc, uint32_t u4Len)
 {
-	memcpy(prToken->prPacket, pucSrc, u4Len);
+	
+DBGLOG(HAL, WARN,
+    "[TXCOPY] token=%p token->pkt=%p src=%p len=%u\n",
+    prToken, prToken ? prToken->prPacket : NULL, pucSrc, u4Len);
+
+if (!prToken) {
+    DBGLOG(HAL, ERROR, "[TXCOPY] token NULL\n");
+    return false;
+}
+if (!pucSrc) {
+    DBGLOG(HAL, ERROR, "[TXCOPY] src NULL token=%p\n", prToken);
+    return false;
+}
+if (!prToken->prPacket) {
+    DBGLOG(HAL, ERROR, "[TXCOPY] token->prPacket NULL token=%p src=%p len=%u\n",
+        prToken, pucSrc, u4Len);
+    return false;
+}
+
+memcpy(prToken->prPacket, pucSrc, u4Len);
+
 	return true;
 }
 

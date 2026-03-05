@@ -3563,24 +3563,26 @@ uint32_t nicTxEnqueueMsdu(IN struct ADAPTER *prAdapter,
 		{
 			struct MSDU_INFO *prDirectMsdu =
 				(struct MSDU_INFO *) QUEUE_GET_HEAD(prDataPort0);
-			struct sk_buff *prSkb = (struct sk_buff *)prDirectMsdu->prPacket;
-			if (prSkb) {
-				uint32_t u4HeadRoom =
-					NIC_TX_DESC_AND_PADDING_LENGTH +
-					prAdapter->chip_info->txd_append_size;
-				if (skb_headroom(prSkb) < u4HeadRoom) {
-					struct sk_buff *prNewSkb =
-						skb_realloc_headroom(prSkb, u4HeadRoom);
-					if (!prNewSkb) {
-						DBGLOG(TX, ERROR,
-							"[DIRECT-TX] skb_realloc_headroom failed\n");
-						goto skip_direct_tx;
+			/* mgmt frames use cnmMgtPktAlloc buffers, not real skbs - skip headroom expansion */
+			if (prDirectMsdu->eSrc == TX_PACKET_OS || prDirectMsdu->eSrc == TX_PACKET_OS_OID) {
+				struct sk_buff *prSkb = (struct sk_buff *)prDirectMsdu->prPacket;
+				if (prSkb) {
+					uint32_t u4HeadRoom =
+						NIC_TX_DESC_AND_PADDING_LENGTH +
+						prAdapter->chip_info->txd_append_size;
+					if (skb_headroom(prSkb) < u4HeadRoom) {
+						struct sk_buff *prNewSkb =
+							skb_realloc_headroom(prSkb, u4HeadRoom);
+						if (!prNewSkb) {
+							DBGLOG(TX, ERROR,
+								"[DIRECT-TX] skb_realloc_headroom failed\n");
+							goto skip_direct_tx;
+						}
+						dev_kfree_skb(prSkb);
+						prDirectMsdu->prPacket = prNewSkb;
 					}
-					dev_kfree_skb(prSkb);
-					prDirectMsdu->prPacket = prNewSkb;
 				}
 			}
-			nicTxFillDataDesc(prAdapter, prDirectMsdu);
 			DBGLOG(TX, INFO, "[DIRECT-TX] auth/mgmt via dataQ, bypassing QM\n");
 			nicTxMsduInfoListMthread(prAdapter, prDirectMsdu);
 		}

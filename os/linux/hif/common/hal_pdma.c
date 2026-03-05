@@ -3157,6 +3157,13 @@ bool halWpdmaWriteMsdu(struct GLUE_INFO *prGlueInfo,
 
 	pucSrc = prSkb->data;
 	u4TotalLen = prSkb->len;
+    DBGLOG(HAL, WARN,
+        "[SKB] skb=%p data=%p len=%u aligned=%d\n",
+        prSkb,
+        prSkb->data,
+        prSkb->len,
+        IS_ALIGNED((unsigned long)prSkb->data, 4));
+
 
 	/* Acquire MSDU token */
 	prToken = halAcquireMsduToken(prGlueInfo->prAdapter);
