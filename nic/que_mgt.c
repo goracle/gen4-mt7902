@@ -1212,7 +1212,8 @@ struct MSDU_INFO *qmEnqueueTxPackets(IN struct ADAPTER *prAdapter,
 		if (!fgDropPacket) {
 			/* 4 <1> Lookup the STA_REC index */
 			/* The ucStaRecIndex will be set in this function */
-			qmDetermineStaRecIndex(prAdapter, prCurrentMsduInfo);
+			if (prCurrentMsduInfo->eSrc != TX_PACKET_MGMT)
+				qmDetermineStaRecIndex(prAdapter, prCurrentMsduInfo);
 
 			/*get per-AC Tx packets */
 			wlanUpdateTxStatistics(prAdapter, prCurrentMsduInfo,

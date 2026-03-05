@@ -1289,9 +1289,7 @@ uint32_t nicTxMsduInfoList(IN struct ADAPTER *prAdapter,
 			QUEUE_INSERT_TAIL(prDataPort1,
 					  (struct QUE_ENTRY *) prMsduInfo);
 
-			/* 🚀 Persistence Overrides for Arch/Union City environment */
-			prMsduInfo->ucRetryLimit = 64;
-			prMsduInfo->ucUserPriority = 7; 
+			/* Persistence overrides removed - UP=7 on mgmt confuses LMAC AC queue for wlanIdx=1 */
 
 			/* Fixed the member name from u4ControlFlag to ucControlFlag */
 			/* Also, ensuring we only OR it if the flag is defined for 8-bit */
@@ -1390,7 +1388,8 @@ uint32_t nicTxMsduInfoListMthread(IN struct ADAPTER
 			break;
 		}
 
-		nicTxFillDataDesc(prAdapter, prMsduInfo);
+		if (prMsduInfo->eSrc != TX_PACKET_MGMT)
+			nicTxFillDataDesc(prAdapter, prMsduInfo);
 
 		prMsduInfo = prNextMsduInfo;
 	}
@@ -1449,7 +1448,8 @@ uint32_t nicTxMsduInfoListMthread(IN struct ADAPTER
 			} else
 				ASSERT(0);
 		}
-		nicTxFillDataDesc(prAdapter, prMsduInfo);
+		if (prMsduInfo->eSrc != TX_PACKET_MGMT)
+			nicTxFillDataDesc(prAdapter, prMsduInfo);
 
 		prMsduInfo = prNextMsduInfo;
 	}
@@ -3316,35 +3316,66 @@ struct MSDU_INFO *
 nicTxProcessUniTxDoneEvent(struct ADAPTER *ad, struct UNI_EVENT_TX_DONE *e)
 {
 	struct MSDU_INFO *prMsduInfo = NULL;
-
 	if (!ad || !e)
 		return NULL;
-
 	DBGLOG(TX, INFO,
 		"UNI_TXDONE status=%u widx=%u pid=%u sn=%u\n",
 		e->ucStatus, e->ucWlanIndex, e->ucPacketSeq, e->u2SequenceNumber);
 	DBGLOG(TX, INFO, "[TX-DIAG] Looking up WIDX=%u PID=%u\n",
 		e->ucWlanIndex, e->ucPacketSeq);
-
 	prMsduInfo = nicGetPendingTxMsduInfo(ad, e->ucWlanIndex, e->ucPacketSeq);
-		if (e->ucStatus == 5) {
-			struct STA_RECORD *pStaRec = prMsduInfo ? cnmGetStaRecByIndex(ad, prMsduInfo->ucStaRecIndex) : NULL;
-			DBGLOG(SAA, ERROR, "[AUTH-FLUSH] Reason=%u StaState=%s WIDX=%u\n",
-				e->ucFlushReason, pStaRec ? ("?") : ("null"), e->ucWlanIndex);
+	if (e->ucStatus == 5) {
+		struct STA_RECORD *pStaRec = prMsduInfo ?
+			cnmGetStaRecByIndex(ad, prMsduInfo->ucStaRecIndex) : NULL;
+		const char *reason_str;
+		switch (e->ucFlushReason) {
+		case 0:  reason_str = "TX_OK_BUT_FLUSHED"; break;
+		case 1:  reason_str = "DISCONNECTED"; break;
+		case 2:  reason_str = "BSS_ABSENT"; break;
+		case 3:  reason_str = "STA_NOT_EXIST"; break;
+		case 4:  reason_str = "STA_TX_NOT_ALLOWED"; break;
+		case 5:  reason_str = "STA_SLEEPING"; break;
+		case 6:  reason_str = "RESOURCE"; break;
+		case 7:  reason_str = "AGG_TIMEOUT"; break;
+		case 8:  reason_str = "AIRTIME_BACKPRESSURE"; break;
+		case 9:  reason_str = "HIF_TX_FAILED"; break;
+		case 10: reason_str = "BAR_TIMEOUT"; break;
+		case 11: reason_str = "RTS_RETRY_FAIL"; break;
+		case 12: reason_str = "DATA_RETRY_FAIL"; break;
+		case 13: reason_str = "LIFE_TIMEOUT"; break;
+		case 14: reason_str = "MGMT_RETRY_FAIL"; break;
+		case 15: reason_str = "AGING"; break;
+		default: reason_str = "UNKNOWN"; break;
 		}
+		DBGLOG(SAA, ERROR,
+			"[AUTH-FLUSH] Reason=%u(%s) StaState=%s WIDX=%u StaRecIdx=%u\n",
+			e->ucFlushReason, reason_str,
+			pStaRec ? "active" : "null",
+			e->ucWlanIndex,
+			prMsduInfo ? prMsduInfo->ucStaRecIndex : 0xFF);
+		if (e->ucStatus == 5 && e->ucWlanIndex == 1) {
+			struct GL_HIF_INFO *prHifInfo = &ad->prGlueInfo->rHifInfo;
+			struct RTMP_TX_RING *r0 = &prHifInfo->TxRing[0];
+			struct RTMP_TX_RING *r1 = &prHifInfo->TxRing[1];
+			DBGLOG(SAA, ERROR, "[LIFE_TO] RING0 CpuIdx=%u DmaIdx=%u Used=%u\n",
+				r0->TxCpuIdx, r0->TxDmaIdx, r0->u4UsedCnt);
+			halDumpTxRing(ad->prGlueInfo, 0, r0->TxCpuIdx > 0 ? r0->TxCpuIdx - 1 : 0);
+			DBGLOG(SAA, ERROR, "[LIFE_TO] RING1 CpuIdx=%u DmaIdx=%u Used=%u\n",
+				r1->TxCpuIdx, r1->TxDmaIdx, r1->u4UsedCnt);
+			halDumpTxRing(ad->prGlueInfo, 1, r1->TxCpuIdx > 0 ? r1->TxCpuIdx - 1 : 0);
+		}
+	}
 	if (!prMsduInfo) {
 		DBGLOG(TX, WARN,
 			"UNI_TXDONE: no pending MSDU for WIDX:%u PID:%u\n",
 			e->ucWlanIndex, e->ucPacketSeq);
 		return NULL;
 	}
-
 	/* DO NOT call saaFsmRunEventTxDone here.
 	 * The caller (nicTxProcessTxDoneEvent) calls pfTxDoneHandler on the
 	 * returned MSDU_INFO -- calling SAA here AND there is a double-fire
 	 * that causes two retries per TX_DONE and premature join failure.
 	 */
-
 	return prMsduInfo;
 }
 
@@ -3501,9 +3532,15 @@ uint32_t nicTxEnqueueMsdu(IN struct ADAPTER *prAdapter,
 		if (prMsduInfo->eSrc == TX_PACKET_MGMT) {
 			if (nicTxProcessMngPacket(prAdapter, prMsduInfo)) {
 				/* Valid MGMT */
-				QUEUE_INSERT_TAIL(prDataPort1,
-					(struct QUE_ENTRY *)
-						prMsduInfo);
+				if (prMsduInfo->fgMgmtUseDataQ) {
+					QUEUE_INSERT_TAIL(prDataPort0,
+						(struct QUE_ENTRY *)
+							prMsduInfo);
+				} else {
+					QUEUE_INSERT_TAIL(prDataPort1,
+						(struct QUE_ENTRY *)
+							prMsduInfo);
+				}
 			} else {
 				/* Invalid MGMT */
 				DBGLOG(TX, WARN,
@@ -3522,12 +3559,39 @@ uint32_t nicTxEnqueueMsdu(IN struct ADAPTER *prAdapter,
 	}
 
 	if (prDataPort0->u4NumElem) {
-		/* send to QM */
-		KAL_SPIN_LOCK_DECLARATION();
-		KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_QM_TX_QUEUE);
-		prRetMsduInfo = qmEnqueueTxPackets(prAdapter,
-			(struct MSDU_INFO *) QUEUE_GET_HEAD(prDataPort0));
-		KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_QM_TX_QUEUE);
+		/* direct to HIF, bypass QM */
+		{
+			struct MSDU_INFO *prDirectMsdu =
+				(struct MSDU_INFO *) QUEUE_GET_HEAD(prDataPort0);
+			struct sk_buff *prSkb = (struct sk_buff *)prDirectMsdu->prPacket;
+			if (prSkb) {
+				uint32_t u4HeadRoom =
+					NIC_TX_DESC_AND_PADDING_LENGTH +
+					prAdapter->chip_info->txd_append_size;
+				if (skb_headroom(prSkb) < u4HeadRoom) {
+					struct sk_buff *prNewSkb =
+						skb_realloc_headroom(prSkb, u4HeadRoom);
+					if (!prNewSkb) {
+						DBGLOG(TX, ERROR,
+							"[DIRECT-TX] skb_realloc_headroom failed\n");
+						goto skip_direct_tx;
+					}
+					dev_kfree_skb(prSkb);
+					prDirectMsdu->prPacket = prNewSkb;
+				}
+			}
+			nicTxFillDataDesc(prAdapter, prDirectMsdu);
+			DBGLOG(TX, INFO, "[DIRECT-TX] auth/mgmt via dataQ, bypassing QM\n");
+			nicTxMsduInfoListMthread(prAdapter, prDirectMsdu);
+		}
+		skip_direct_tx:;
+		if (FALSE) {
+			/* dead block - preserved for structural symmetry */
+			GLUE_INC_REF_CNT(prAdapter->prGlueInfo->i4TxPendingFrameNum);
+			DBGLOG(TX, INFO, "[QM-ENQ] auth/mgmt via dataQ, TxPendingFrameNum=%d\n",
+				GLUE_GET_REF_CNT(prAdapter->prGlueInfo->i4TxPendingFrameNum));
+			kalSetTxEvent2Hif(prAdapter->prGlueInfo);
+		}
 #if ARP_MONITER_ENABLE
 		if (prAdapter->cArpNoResponseIdx >= 0) {
 #if CFG_SUPPORT_DATA_STALL
@@ -3541,7 +3605,9 @@ uint32_t nicTxEnqueueMsdu(IN struct ADAPTER *prAdapter,
 		}
 #endif /* ARP_MONITER_ENABLE */
 		/* post-process for dropped packets */
-		if (prRetMsduInfo) {	/* unable to enqueue */
+		if (prRetMsduInfo) {
+		DBGLOG(TX, WARN, "[QM-DROP] qmEnqueueTxPackets returned non-null, frame dropped\n");
+		/* unable to enqueue */
 			nicTxFreeMsduInfoPacket(prAdapter, prRetMsduInfo);
 			nicTxReturnMsduInfo(prAdapter, prRetMsduInfo);
 		}

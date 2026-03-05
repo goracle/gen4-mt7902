@@ -2947,12 +2947,12 @@ bool halWpdmaWriteCmd(IN struct GLUE_INFO *prGlueInfo,
 
 	spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
 
-	DBGLOG(HAL, TRACE,
+	DBGLOG(HAL, WARN,
 	       "%s: CmdInfo[0x%p], TxD[0x%p/%u] TxP[0x%p/%u] CPU idx[%u] Used[%u]\n",
 	       __func__, prCmdInfo, prCmdInfo->pucTxd, prCmdInfo->u4TxdLen,
 	       prCmdInfo->pucTxp, prCmdInfo->u4TxpLen,
 	       prTxRing->TxCpuIdx, prTxRing->u4UsedCnt);
-	DBGLOG_MEM32(HAL, TRACE, prCmdInfo->pucTxd, prCmdInfo->u4TxdLen);
+	DBGLOG_MEM32(HAL, WARN, prCmdInfo->pucTxd, prCmdInfo->u4TxdLen);
 
 	return TRUE;
 }
@@ -3144,6 +3144,9 @@ bool halWpdmaWriteMsdu(struct GLUE_INFO *prGlueInfo,
 	ASSERT(prGlueInfo);
 	ASSERT(prMsduInfo);
 
+	DBGLOG(HAL, WARN, "[WMSDU-ENTRY] src=%u fgMgmtUseDataQ=%d\n",
+		prMsduInfo->eSrc, prMsduInfo->fgMgmtUseDataQ);
+
 	prHifInfo = &prGlueInfo->rHifInfo;
 	prMemOps = &prHifInfo->rMemOps;
 	prSkb = (struct sk_buff *)prMsduInfo->prPacket;
@@ -3161,12 +3164,6 @@ bool halWpdmaWriteMsdu(struct GLUE_INFO *prGlueInfo,
 		DBGLOG(HAL, ERROR, "Write MSDU acquire token fail\n");
 		return false;
 	}
-
-#if CFG_SUPPORT_PCIE_ASPM_IMPROVE
-	prBusInfo = prGlueInfo->prAdapter->chip_info->bus_info;
-	if (prBusInfo->setCTSbyRate)
-		prBusInfo->setCTSbyRate(prGlueInfo, prMsduInfo, pucSrc);
-#endif
 
 	/* Use MsduInfo to select TxRing */
 	prToken->prMsduInfo = prMsduInfo;
@@ -3190,9 +3187,17 @@ bool halWpdmaWriteMsdu(struct GLUE_INFO *prGlueInfo,
 
 	if (!halWpdmaWriteData(prGlueInfo, prMsduInfo, prToken,
 			       prToken, 0, 1)) {
+		DBGLOG(HAL, WARN, "[WMSDU] halWpdmaWriteData FAILED\n");
 		halReturnMsduToken(prGlueInfo->prAdapter, prToken->u4Token);
 		return false;
 	}
+	DBGLOG(HAL, WARN, "[WMSDU] halWpdmaWriteData OK token=%u\n", prToken->u4Token);
+
+#if CFG_SUPPORT_PCIE_ASPM_IMPROVE
+	prBusInfo = prGlueInfo->prAdapter->chip_info->bus_info;
+	if (prBusInfo->setCTSbyRate)
+		prBusInfo->setCTSbyRate(prGlueInfo, prMsduInfo, prToken->prPacket);
+#endif
 
 	if (prCurList) {
 		list_del(prCurList);

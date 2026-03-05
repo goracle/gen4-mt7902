@@ -5263,9 +5263,8 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 
 		DBGLOG(AIS, INFO, "[AIS%d] Sovereign Grant Accepted - Moving to JOIN\n", ucBssIndex);
 
-		aisFsmSteps(prAdapter, AIS_STATE_JOIN, ucBssIndex);
-		
 		prAisFsmInfo->fgIsChannelGranted = TRUE;
+		aisFsmSteps(prAdapter, AIS_STATE_JOIN, ucBssIndex);
 		return;
 	}
 

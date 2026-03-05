@@ -224,7 +224,7 @@ static void halDumpHifDebugLog(struct ADAPTER *prAdapter)
 	prAdapter->u4HifDbgFlag = 0;
 }
 
-static void halDumpTxRing(IN struct GLUE_INFO *prGlueInfo,
+void halDumpTxRing(IN struct GLUE_INFO *prGlueInfo,
 			  IN uint16_t u2Port, IN uint32_t u4Idx)
 {
 	struct GL_HIF_INFO *prHifInfo = &prGlueInfo->rHifInfo;

@@ -600,6 +600,9 @@ void halHwRecoveryTimeout(unsigned long arg);
 #endif
 void halHwRecoveryFromError(IN struct ADAPTER *prAdapter);
 
+void halDumpTxRing(IN struct GLUE_INFO *prGlueInfo,
+		   IN uint16_t u2Port, IN uint32_t u4Idx);
+
 /* Debug functions */
 #if KERNEL_VERSION(5, 0, 0) <= LINUX_VERSION_CODE
 int halTimeCompare(struct timespec64 *prTs1, struct timespec64 *prTs2);

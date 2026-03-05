@@ -320,7 +320,8 @@ void nic_txd_v2_compose(
 	uint32_t u4TxHeadRoomSize;
 #endif
 
-	prTxDesc = (struct HW_MAC_CONNAC2X_TX_DESC *) prTxDescBuffer;
+	prTxDesc = (struct HW_MAC_CONNAC2X_TX_DESC *)ALIGN((uintptr_t)prTxDescBuffer, 4);
+	DBGLOG(TX, WARN, "TXD ptr=%p aligned=%d\n", prTxDesc, ((uintptr_t)prTxDesc & 0x3) == 0);
 	prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, prMsduInfo->ucBssIndex);
 	prStaRec = cnmGetStaRecByIndex(prAdapter, prMsduInfo->ucStaRecIndex);
 
