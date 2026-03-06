@@ -139,20 +139,20 @@ const uint8_t aucValidDataRate[] = {
  *******************************************************************************
  */
 static void cnmStaRoutinesForAbort(struct ADAPTER *prAdapter,
-	struct STA_RECORD *prStaRec);
+								   struct STA_RECORD *prStaRec);
 
 static __maybe_unused void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
-	struct CMD_INFO *prCmdInfo, uint8_t *pucEventBuf);
+												   struct CMD_INFO *prCmdInfo, uint8_t *pucEventBuf);
 
 static void
 cnmStaSendRemoveCmd(struct ADAPTER *prAdapter,
-	enum ENUM_STA_REC_CMD_ACTION eActionType, uint8_t ucStaRecIndex,
-	uint8_t ucBssIndex);
+					enum ENUM_STA_REC_CMD_ACTION eActionType, uint8_t ucStaRecIndex,
+					uint8_t ucBssIndex);
 
 #if (CFG_SUPPORT_802_11AX == 1)
 static void cnmStaRecCmdHeContentFill(
-	struct STA_RECORD *prStaRec,
-	struct CMD_UPDATE_STA_RECORD *prCmdContent);
+									  struct STA_RECORD *prStaRec,
+									  struct CMD_UPDATE_STA_RECORD *prCmdContent);
 #endif
 
 
@@ -171,13 +171,13 @@ static void cnmStaRecCmdHeContentFill(
  */
 /*----------------------------------------------------------------------------*/
 struct MSDU_INFO *cnmPktAllocWrapper(struct ADAPTER *prAdapter,
-	uint32_t u4Length, uint8_t *pucStr)
+									 uint32_t u4Length, uint8_t *pucStr)
 {
 	struct MSDU_INFO *prMsduInfo;
 
 	prMsduInfo = cnmPktAlloc(prAdapter, u4Length);
 	log_dbg(MEM, LOUD, "Alloc MSDU_INFO[0x%p] by [%s]\n",
-		prMsduInfo, pucStr);
+			prMsduInfo, pucStr);
 
 	return prMsduInfo;
 }
@@ -192,10 +192,10 @@ struct MSDU_INFO *cnmPktAllocWrapper(struct ADAPTER *prAdapter,
  */
 /*----------------------------------------------------------------------------*/
 void cnmPktFreeWrapper(struct ADAPTER *prAdapter, struct MSDU_INFO *prMsduInfo,
-	uint8_t *pucStr)
+					   uint8_t *pucStr)
 {
 	log_dbg(MEM, LOUD, "Free MSDU_INFO[0x%p] by [%s]\n",
-		prMsduInfo, pucStr);
+			prMsduInfo, pucStr);
 
 	cnmPktFree(prAdapter, prMsduInfo);
 }
@@ -227,16 +227,16 @@ struct MSDU_INFO *cnmPktAlloc(struct ADAPTER *prAdapter, uint32_t u4Length)
 	if (prMsduInfo) {
 		if (u4Length) {
 			prMsduInfo->prPacket = cnmMemAlloc(prAdapter,
-				RAM_TYPE_BUF, u4Length);
+											   RAM_TYPE_BUF, u4Length);
 			prMsduInfo->eSrc = TX_PACKET_MGMT;
 
 			if (prMsduInfo->prPacket == NULL) {
 				KAL_ACQUIRE_SPIN_LOCK(prAdapter,
-					SPIN_LOCK_TX_MSDU_INFO_LIST);
+									  SPIN_LOCK_TX_MSDU_INFO_LIST);
 				QUEUE_INSERT_TAIL(prQueList,
-					&prMsduInfo->rQueEntry);
+								  &prMsduInfo->rQueEntry);
 				KAL_RELEASE_SPIN_LOCK(prAdapter,
-					SPIN_LOCK_TX_MSDU_INFO_LIST);
+									  SPIN_LOCK_TX_MSDU_INFO_LIST);
 				prMsduInfo = NULL;
 			}
 		} else {
@@ -250,9 +250,9 @@ struct MSDU_INFO *cnmPktAlloc(struct ADAPTER *prAdapter, uint32_t u4Length)
 
 #if CFG_DBG_MGT_BUF
 		log_dbg(MEM, WARN, "rMgtBufInfo: alloc#=%ld, free#=%ld, null#=%ld\n",
-			prAdapter->rMgtBufInfo.u4AllocCount,
-			prAdapter->rMgtBufInfo.u4FreeCount,
-			prAdapter->rMgtBufInfo.u4AllocNullCount);
+				prAdapter->rMgtBufInfo.u4AllocCount,
+				prAdapter->rMgtBufInfo.u4FreeCount,
+				prAdapter->rMgtBufInfo.u4AllocNullCount);
 #endif
 
 		log_dbg(MEM, WARN, "\n");
@@ -315,7 +315,7 @@ void cnmMemInit(struct ADAPTER *prAdapter)
 
 	/* Setup available memory blocks. 1 indicates FREE */
 	prBufInfo->rFreeBlocksBitmap = (uint32_t) BITS(0,
-		MAX_NUM_OF_BUF_BLOCKS - 1);
+												   MAX_NUM_OF_BUF_BLOCKS - 1);
 
 	/* Initialize Message buffer pool */
 	prBufInfo = &prAdapter->rMsgBufInfo;
@@ -324,7 +324,7 @@ void cnmMemInit(struct ADAPTER *prAdapter)
 
 	/* Setup available memory blocks. 1 indicates FREE */
 	prBufInfo->rFreeBlocksBitmap = (uint32_t) BITS(0,
-		MAX_NUM_OF_BUF_BLOCKS - 1);
+												   MAX_NUM_OF_BUF_BLOCKS - 1);
 
 	return;
 
@@ -344,10 +344,10 @@ void cnmMemInit(struct ADAPTER *prAdapter)
 /*----------------------------------------------------------------------------*/
 #if CFG_DBG_MGT_BUF
 void *cnmMemAllocX(IN struct ADAPTER *prAdapter, IN enum ENUM_RAM_TYPE eRamType,
-	IN uint32_t u4Length, uint8_t *fileAndLine)
+				   IN uint32_t u4Length, uint8_t *fileAndLine)
 #else
-void *cnmMemAlloc(IN struct ADAPTER *prAdapter, IN enum ENUM_RAM_TYPE eRamType,
-	IN uint32_t u4Length)
+	void *cnmMemAlloc(IN struct ADAPTER *prAdapter, IN enum ENUM_RAM_TYPE eRamType,
+					  IN uint32_t u4Length)
 #endif
 {
 	struct BUF_INFO *prBufInfo;
@@ -420,8 +420,8 @@ void *cnmMemAlloc(IN struct ADAPTER *prAdapter, IN enum ENUM_RAM_TYPE eRamType,
 	KAL_RELEASE_SPIN_LOCK(prAdapter, eLockBufCat);
 
 	/* 5. Fallback: Allocate from system memory (Heap) */
-/* 5. Fallback: Allocate from system memory (Heap) */
-FALLBACK_KMALLOC:
+	/* 5. Fallback: Allocate from system memory (Heap) */
+ FALLBACK_KMALLOC:
 
 #ifdef LINUX
 #if CFG_DBG_MGT_BUF
@@ -492,24 +492,24 @@ void cnmMemFree(IN struct ADAPTER *prAdapter, IN void *pvMemory)
 
 	/* Judge it belongs to which RAM type */
 	if (((unsigned long) pvMemory
-		>= (unsigned long)&prAdapter->aucMsgBuf[0])
+		 >= (unsigned long)&prAdapter->aucMsgBuf[0])
 		&& ((unsigned long) pvMemory
-		<= (unsigned long)&prAdapter->aucMsgBuf[MSG_BUFFER_SIZE - 1])) {
+			<= (unsigned long)&prAdapter->aucMsgBuf[MSG_BUFFER_SIZE - 1])) {
 
 		prBufInfo = &prAdapter->rMsgBufInfo;
 		u4BlockIndex = ((unsigned long) pvMemory
-			- (unsigned long) prBufInfo->pucBuf)
+						- (unsigned long) prBufInfo->pucBuf)
 			>> MSG_BUF_BLOCK_SIZE_IN_POWER_OF_2;
 		ASSERT(u4BlockIndex < MAX_NUM_OF_BUF_BLOCKS);
 		eRamType = RAM_TYPE_MSG;
 	} else if (((unsigned long) pvMemory
-		>= (unsigned long) prAdapter->pucMgtBufCached)
-		&& ((unsigned long) pvMemory
-		<= ((unsigned long) prAdapter->pucMgtBufCached
-		 + MGT_BUFFER_SIZE - 1))) {
+				>= (unsigned long) prAdapter->pucMgtBufCached)
+			   && ((unsigned long) pvMemory
+				   <= ((unsigned long) prAdapter->pucMgtBufCached
+					   + MGT_BUFFER_SIZE - 1))) {
 		prBufInfo = &prAdapter->rMgtBufInfo;
 		u4BlockIndex = ((unsigned long) pvMemory
-			- (unsigned long) prBufInfo->pucBuf)
+						- (unsigned long) prBufInfo->pucBuf)
 			>> MGT_BUF_BLOCK_SIZE_IN_POWER_OF_2;
 		ASSERT(u4BlockIndex < MAX_NUM_OF_BUF_BLOCKS);
 		eRamType = RAM_TYPE_BUF;
@@ -521,7 +521,7 @@ void cnmMemFree(IN struct ADAPTER *prAdapter, IN void *pvMemory)
 
 		KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_MGT_BUF);
 		LINK_REMOVE_KNOWN_ENTRY(
-			&prAdapter->rMemTrackLink, &prTrack->rLinkEntry);
+								&prAdapter->rMemTrackLink, &prTrack->rLinkEntry);
 		KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_MGT_BUF);
 		kalMemFree(prTrack, PHY_MEM_TYPE, 0);
 #else
@@ -606,7 +606,7 @@ void cnmStaRecInit(struct ADAPTER *prAdapter)
  */
 /*----------------------------------------------------------------------------*/
 struct STA_RECORD *cnmStaRecAlloc(struct ADAPTER *prAdapter,
-	enum ENUM_STA_TYPE eStaType, uint8_t ucBssIndex, uint8_t *pucMacAddr)
+								  enum ENUM_STA_TYPE eStaType, uint8_t ucBssIndex, uint8_t *pucMacAddr)
 {
 	struct STA_RECORD *prStaRec = NULL;
 	uint16_t i, k;
@@ -638,7 +638,7 @@ struct STA_RECORD *cnmStaRecAlloc(struct ADAPTER *prAdapter,
 	prStaRec->fgIsInUse = TRUE;
 
 	DBGLOG(CNM, INFO, "SAA: Allocating StaRec[%u] for " MACSTR "\n", 
-		i, MAC2STR(prStaRec->aucMacAddr));
+		   i, MAC2STR(prStaRec->aucMacAddr));
 
 	/* 3. Initialize SN caches and TID structures */
 	for (k = 0; k < TID_NUM + 1; k++) {
@@ -666,14 +666,14 @@ struct STA_RECORD *cnmStaRecAlloc(struct ADAPTER *prAdapter,
 		/* State will be set and synced by caller after alloc */
 	} else {
 		DBGLOG(CNM, ERROR, "SAA: Failed to seek privacy entry for " MACSTR "\n", 
-			MAC2STR(prStaRec->aucMacAddr));
+			   MAC2STR(prStaRec->aucMacAddr));
 		prStaRec->fgIsInUse = FALSE;
 		return NULL;
 	}
 
 	/* 6. Cleanup stale packets from this slot's previous life */
 	nicFreePendingTxMsduInfo(prAdapter, 
-		prStaRec->ucWlanIndex, MSDU_REMOVE_BY_WLAN_INDEX);
+							 prStaRec->ucWlanIndex, MSDU_REMOVE_BY_WLAN_INDEX);
 
 	return prStaRec;
 }
@@ -704,7 +704,7 @@ void cnmStaRecFree(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec)
 	cnmStaRoutinesForAbort(prAdapter, prStaRec);
 
 	cnmStaSendRemoveCmd(prAdapter, STA_REC_CMD_ACTION_STA,
-		ucStaRecIndex, ucBssIndex);
+						ucStaRecIndex, ucBssIndex);
 #if DSCP_SUPPORT
 	if (prStaRec->qosMapSet) {
 		QosMapSetRelease(prStaRec);
@@ -723,7 +723,7 @@ void cnmStaRecFree(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec)
  */
 /*----------------------------------------------------------------------------*/
 static void cnmStaRoutinesForAbort(struct ADAPTER *prAdapter,
-	struct STA_RECORD *prStaRec)
+								   struct STA_RECORD *prStaRec)
 {
 	ASSERT(prAdapter);
 
@@ -742,7 +742,7 @@ static void cnmStaRoutinesForAbort(struct ADAPTER *prAdapter,
 
 	if (prStaRec->pucAssocReqIe) {
 		kalMemFree(prStaRec->pucAssocReqIe,
-			VIR_MEM_TYPE, prStaRec->u2AssocReqIeLen);
+				   VIR_MEM_TYPE, prStaRec->u2AssocReqIeLen);
 		prStaRec->pucAssocReqIe = NULL;
 		prStaRec->u2AssocReqIeLen = 0;
 	}
@@ -765,7 +765,7 @@ static void cnmStaRoutinesForAbort(struct ADAPTER *prAdapter,
  */
 /*----------------------------------------------------------------------------*/
 void cnmStaFreeAllStaByNetwork(struct ADAPTER *prAdapter, uint8_t ucBssIndex,
-	uint8_t ucStaRecIndexExcluded)
+							   uint8_t ucStaRecIndexExcluded)
 {
 #if CFG_ENABLE_WIFI_DIRECT
 	struct BSS_INFO *prBssInfo;
@@ -791,8 +791,8 @@ void cnmStaFreeAllStaByNetwork(struct ADAPTER *prAdapter, uint8_t ucBssIndex,
 		eAction = STA_REC_CMD_ACTION_BSS;
 
 	cnmStaSendRemoveCmd(prAdapter,
-		eAction,
-		ucStaRecIndexExcluded, ucBssIndex);
+						eAction,
+						ucStaRecIndexExcluded, ucBssIndex);
 
 #if CFG_ENABLE_WIFI_DIRECT
 	/* To do: Confirm if it is invoked here or other location, but it should
@@ -817,7 +817,7 @@ void cnmStaFreeAllStaByNetwork(struct ADAPTER *prAdapter, uint8_t ucBssIndex,
  */
 /*----------------------------------------------------------------------------*/
 struct STA_RECORD *cnmGetStaRecByIndex(struct ADAPTER *prAdapter,
-	uint8_t ucIndex)
+									   uint8_t ucIndex)
 {
 	struct STA_RECORD *prStaRec;
 
@@ -844,7 +844,7 @@ struct STA_RECORD *cnmGetStaRecByIndex(struct ADAPTER *prAdapter,
  */
 /*----------------------------------------------------------------------------*/
 struct STA_RECORD *cnmGetStaRecByAddress(struct ADAPTER *prAdapter,
-	uint8_t ucBssIndex, uint8_t *pucPeerMacAddr)
+										 uint8_t ucBssIndex, uint8_t *pucPeerMacAddr)
 {
 	struct STA_RECORD *prStaRec;
 	uint16_t i;
@@ -860,7 +860,7 @@ struct STA_RECORD *cnmGetStaRecByAddress(struct ADAPTER *prAdapter,
 		if (prStaRec->fgIsInUse
 			&& prStaRec->ucBssIndex == ucBssIndex
 			&& EQUAL_MAC_ADDR(
-				prStaRec->aucMacAddr, pucPeerMacAddr)) {
+							  prStaRec->aucMacAddr, pucPeerMacAddr)) {
 			break;
 		}
 	}
@@ -880,7 +880,7 @@ struct STA_RECORD *cnmGetStaRecByAddress(struct ADAPTER *prAdapter,
  */
 /*----------------------------------------------------------------------------*/
 void cnmStaRecChangeState(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec
-	, uint8_t ucNewState)
+						  , uint8_t ucNewState)
 {
 	u_int8_t fgNeedResp;
 
@@ -894,12 +894,12 @@ void cnmStaRecChangeState(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec
 
 	if (!prStaRec->fgIsInUse) {
 		log_dbg(MEM, WARN, "%s: StaRec[%u] is not in use, skip!\n",
-			__func__, prStaRec->ucIndex);
+				__func__, prStaRec->ucIndex);
 		return;
 	}
 
 	DBGLOG(MEM, WARN, "cnmStaRecChangeState StaRec[%u] %u->%u\n",
-		prStaRec->ucIndex, prStaRec->ucStaState, ucNewState);
+		   prStaRec->ucIndex, prStaRec->ucStaState, ucNewState);
 	/* dump_stack(); */
 
 	/* Do nothing when following state transitions happen,
@@ -919,9 +919,9 @@ void cnmStaRecChangeState(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec
 			cnmDumpStaRec(prAdapter, prStaRec->ucIndex);
 		}
 	} else if (ucNewState == STA_STATE_2
-		&& prStaRec->ucStaState == STA_STATE_1) {
+			   && prStaRec->ucStaState == STA_STATE_1) {
 		/* Auth path: need FW ACK before TX can proceed */
-		fgNeedResp = FALSE;
+		fgNeedResp = TRUE;
 	} else {
 		if (ucNewState != prStaRec->ucStaState
 			&& prStaRec->ucStaState == STA_STATE_3)
@@ -942,7 +942,7 @@ void cnmStaRecChangeState(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec
 		struct BSS_INFO *prBssInfo;
 
 		prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter,
-			prStaRec->ucBssIndex);
+										  prStaRec->ucBssIndex);
 
 		if (prBssInfo->eCurrentOPMode == OP_MODE_ACCESS_POINT)
 			rlmUpdateParamsForAP(prAdapter, prBssInfo, FALSE);
@@ -961,8 +961,8 @@ void cnmStaRecChangeState(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec
  */
 /*----------------------------------------------------------------------------*/
 static __maybe_unused void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
-                                    struct CMD_INFO *prCmdInfo,
-                                    uint8_t *pucEventBuf)
+												   struct CMD_INFO *prCmdInfo,
+												   uint8_t *pucEventBuf)
 {
 	struct EVENT_ACTIVATE_STA_REC *prEventContent =
 		(struct EVENT_ACTIVATE_STA_REC *)pucEventBuf;
@@ -973,7 +973,7 @@ static __maybe_unused void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
 		return;
 
 	if (kalMemCmp(prStaRec->aucMacAddr, prEventContent->aucMacAddr,
-		      MAC_ADDR_LEN) != 0)
+				  MAC_ADDR_LEN) != 0)
 		return;
 
 	switch (prStaRec->ucStaState) {
@@ -997,10 +997,10 @@ static __maybe_unused void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
 		break;
 
 	case STA_STATE_3:
-	  DBGLOG(CNM, INFO,
-		 "StaRec[%u] legacy STATE_3 ACK — UNI path owns activation, skipping\n",
-		 prStaRec->ucIndex);
-	  break;
+		DBGLOG(CNM, INFO,
+			   "StaRec[%u] legacy STATE_3 ACK — UNI path owns activation, skipping\n",
+			   prStaRec->ucIndex);
+		break;
 
 	default:
 		DBGLOG(MEM, INFO, "StaRec[%u] FW ACK state=%u (no-op)\n",
@@ -1022,7 +1022,7 @@ static __maybe_unused void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
  */
 /*----------------------------------------------------------------------------*/
 void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
-	 u_int8_t fgNeedResp)
+						 u_int8_t fgNeedResp)
 {
 	struct CMD_UPDATE_STA_RECORD *prCmdContent;
 	uint32_t rStatus;
@@ -1037,7 +1037,7 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 
 	if (!prStaRec->fgIsInUse) {
 		log_dbg(MEM, WARN, "%s: StaRec[%u] is not in use, skip!\n",
-			__func__, prStaRec->ucIndex);
+				__func__, prStaRec->ucIndex);
 		return;
 	}
 
@@ -1050,12 +1050,12 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 	 *        One is here, the other is in wlanSendQueryCmd()
 	 */
 	prCmdContent = cnmMemAlloc(prAdapter, RAM_TYPE_BUF,
-		sizeof(struct CMD_UPDATE_STA_RECORD));
+							   sizeof(struct CMD_UPDATE_STA_RECORD));
 
 	/* To do: exception handle */
 	if (!prCmdContent) {
 		log_dbg(MEM, WARN, "%s: CMD_ID_UPDATE_STA_RECORD command allocation failed\n",
-			__func__);
+				__func__);
 
 		return;
 	}
@@ -1066,7 +1066,7 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 	prCmdContent->ucStaIndex = prStaRec->ucIndex;
 	prCmdContent->ucStaType = (uint8_t) prStaRec->eStaType;
 	kalMemCopy(&prCmdContent->aucMacAddr[0], &prStaRec->aucMacAddr[0],
-		MAC_ADDR_LEN);
+			   MAC_ADDR_LEN);
 	prCmdContent->u2AssocId = prStaRec->u2AssocId;
 	prCmdContent->u2ListenInterval = prStaRec->u2ListenInterval;
 	prCmdContent->ucBssIndex = prStaRec->ucBssIndex;
@@ -1081,7 +1081,7 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 
 	/* Size is SUP_MCS_RX_BITMASK_OCTET_NUM */
 	kalMemCopy(prCmdContent->aucRxMcsBitmask, prStaRec->aucRxMcsBitmask,
-		sizeof(prCmdContent->aucRxMcsBitmask));
+			   sizeof(prCmdContent->aucRxMcsBitmask));
 	prCmdContent->u2RxHighestSupportedRate
 		= prStaRec->u2RxHighestSupportedRate;
 	prCmdContent->u4TxRateInfo = prStaRec->u4TxRateInfo;
@@ -1093,13 +1093,13 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 	if (prAdapter->rWifiVar.eRateSetting != FIXED_RATE_NONE) {
 		/* override rate configuration */
 		nicUpdateRateParams(prAdapter,
-			prAdapter->rWifiVar.eRateSetting,
-			&(prCmdContent->ucDesiredPhyTypeSet),
-			&(prCmdContent->u2DesiredNonHTRateSet),
-			&(prCmdContent->u2BSSBasicRateSet),
-			&(prCmdContent->ucMcsSet),
-			&(prCmdContent->ucSupMcs32),
-			&(prCmdContent->u2HtCapInfo));
+							prAdapter->rWifiVar.eRateSetting,
+							&(prCmdContent->ucDesiredPhyTypeSet),
+							&(prCmdContent->u2DesiredNonHTRateSet),
+							&(prCmdContent->u2BSSBasicRateSet),
+							&(prCmdContent->ucMcsSet),
+							&(prCmdContent->ucSupMcs32),
+							&(prCmdContent->u2HtCapInfo));
 	}
 #endif
 
@@ -1139,7 +1139,7 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 #if CFG_SUPPORT_MTK_SYNERGY
 	if (IS_FEATURE_ENABLED(prAdapter->rWifiVar.ucMtkOui)) {
 		if (IS_FEATURE_ENABLED(
-			prAdapter->rWifiVar.ucGbandProbe256QAM)) {
+							   prAdapter->rWifiVar.ucGbandProbe256QAM)) {
 			prCmdContent->u4Flags
 				|= MTK_SYNERGY_CAP_SUPPORT_24G_MCS89_PROBING;
 		}
@@ -1160,42 +1160,42 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 			prAdapter->rWifiVar.ucHeAmsduInAmpduRx;
 	} else
 #endif
-	if ((prStaRec->ucDesiredPhyTypeSet & PHY_TYPE_SET_802_11AC) ||
-		(prStaRec->u4Flags & MTK_SYNERGY_CAP_SUPPORT_24G_MCS89)) {
-		/* VHT pear AMSDU in AMPDU configuration */
-		prCmdContent->ucTxAmsduInAmpdu
-			&= prAdapter->rWifiVar.ucVhtAmsduInAmpduTx;
-		prCmdContent->ucRxAmsduInAmpdu
-			&= prAdapter->rWifiVar.ucVhtAmsduInAmpduRx;
-	} else if (prStaRec->ucDesiredPhyTypeSet & PHY_TYPE_SET_802_11N) {
-		/* HT peer AMSDU in AMPDU configuration */
-		prCmdContent->ucTxAmsduInAmpdu
-			&= prAdapter->rWifiVar.ucHtAmsduInAmpduTx;
-		prCmdContent->ucRxAmsduInAmpdu
-			&= prAdapter->rWifiVar.ucHtAmsduInAmpduRx;
-	}
+		if ((prStaRec->ucDesiredPhyTypeSet & PHY_TYPE_SET_802_11AC) ||
+			(prStaRec->u4Flags & MTK_SYNERGY_CAP_SUPPORT_24G_MCS89)) {
+			/* VHT pear AMSDU in AMPDU configuration */
+			prCmdContent->ucTxAmsduInAmpdu
+				&= prAdapter->rWifiVar.ucVhtAmsduInAmpduTx;
+			prCmdContent->ucRxAmsduInAmpdu
+				&= prAdapter->rWifiVar.ucVhtAmsduInAmpduRx;
+		} else if (prStaRec->ucDesiredPhyTypeSet & PHY_TYPE_SET_802_11N) {
+			/* HT peer AMSDU in AMPDU configuration */
+			prCmdContent->ucTxAmsduInAmpdu
+				&= prAdapter->rWifiVar.ucHtAmsduInAmpduTx;
+			prCmdContent->ucRxAmsduInAmpdu
+				&= prAdapter->rWifiVar.ucHtAmsduInAmpduRx;
+		}
 
 	prCmdContent->u4TxMaxAmsduInAmpduLen
 		= prAdapter->rWifiVar.u4TxMaxAmsduInAmpduLen;
 #if (CFG_SUPPORT_802_11AX == 1)
 	if (prStaRec->ucDesiredPhyTypeSet & PHY_TYPE_SET_802_11AX) {
 		prCmdContent->rBaSize.rHeBaSize.u2RxBaSize =
-				prAdapter->rWifiVar.u2RxHeBaSize;
+			prAdapter->rWifiVar.u2RxHeBaSize;
 		prCmdContent->rBaSize.rHeBaSize.u2TxBaSize =
-				prAdapter->rWifiVar.u2TxHeBaSize;
+			prAdapter->rWifiVar.u2TxHeBaSize;
 	} else
 #endif
-	{
-		prCmdContent->rBaSize.rHtVhtBaSize.ucTxBaSize
-			= prAdapter->rWifiVar.ucTxBaSize;
+		{
+			prCmdContent->rBaSize.rHtVhtBaSize.ucTxBaSize
+				= prAdapter->rWifiVar.ucTxBaSize;
 
-		if (prStaRec->ucDesiredPhyTypeSet & PHY_TYPE_SET_802_11AC)
-			prCmdContent->rBaSize.rHtVhtBaSize.ucRxBaSize
-				= prAdapter->rWifiVar.ucRxVhtBaSize;
-		else
-			prCmdContent->rBaSize.rHtVhtBaSize.ucRxBaSize
-				= prAdapter->rWifiVar.ucRxHtBaSize;
-	}
+			if (prStaRec->ucDesiredPhyTypeSet & PHY_TYPE_SET_802_11AC)
+				prCmdContent->rBaSize.rHtVhtBaSize.ucRxBaSize
+					= prAdapter->rWifiVar.ucRxVhtBaSize;
+			else
+				prCmdContent->rBaSize.rHtVhtBaSize.ucRxBaSize
+					= prAdapter->rWifiVar.ucRxHtBaSize;
+		}
 
 	/* RTS Policy */
 	if (IS_FEATURE_ENABLED(prAdapter->rWifiVar.ucSigTaRts)) {
@@ -1215,37 +1215,37 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 #endif
 
 	log_dbg(REQ, TRACE, "Update StaRec[%u] WIDX[%u] State[%u] Type[%u] BssIdx[%u] AID[%u]\n",
-		prCmdContent->ucStaIndex,
-		prCmdContent->ucWlanIndex,
-		prCmdContent->ucStaState,
-		prCmdContent->ucStaType,
-		prCmdContent->ucBssIndex,
-		prCmdContent->u2AssocId);
+			prCmdContent->ucStaIndex,
+			prCmdContent->ucWlanIndex,
+			prCmdContent->ucStaState,
+			prCmdContent->ucStaType,
+			prCmdContent->ucBssIndex,
+			prCmdContent->u2AssocId);
 
 	log_dbg(REQ, TRACE, "Update StaRec[%u] QoS[%u] UAPSD[%u]\n",
-		prCmdContent->ucStaIndex,
-		prCmdContent->ucIsQoS,
-		prCmdContent->ucIsUapsdSupported);
+			prCmdContent->ucStaIndex,
+			prCmdContent->ucIsQoS,
+			prCmdContent->ucIsUapsdSupported);
 
 	rStatus = wlanSendSetQueryCmd(prAdapter,	/* prAdapter */
-		CMD_ID_UPDATE_STA_RECORD,		/* ucCID */
-		TRUE,					/* fgSetQuery */
-		fgNeedResp,				/* fgNeedResp */
-		FALSE,					/* fgIsOid */
-		fgNeedResp ? nicUniCmdStaRecHandleEventPkt : NULL, NULL,
-		/* pfCmdTimeoutHandler */
-		sizeof(struct CMD_UPDATE_STA_RECORD),	/* u4SetQueryInfoLen */
-		(uint8_t *) prCmdContent,	/* pucInfoBuffer */
-		NULL,				/* pvSetQueryBuffer */
-		0				/* u4SetQueryBufferLen */
-	);
+								  CMD_ID_UPDATE_STA_RECORD,		/* ucCID */
+								  TRUE,					/* fgSetQuery */
+								  fgNeedResp,				/* fgNeedResp */
+								  FALSE,					/* fgIsOid */
+								  fgNeedResp ? nicUniCmdStaRecHandleEventPkt : NULL, NULL,
+								  /* pfCmdTimeoutHandler */
+								  sizeof(struct CMD_UPDATE_STA_RECORD),	/* u4SetQueryInfoLen */
+								  (uint8_t *) prCmdContent,	/* pucInfoBuffer */
+								  NULL,				/* pvSetQueryBuffer */
+								  0				/* u4SetQueryBufferLen */
+								  );
 
 	cnmMemFree(prAdapter, prCmdContent);
 
 	if (rStatus != WLAN_STATUS_PENDING) {
 		log_dbg(MEM, WARN,
-			"%s: CMD_ID_UPDATE_STA_RECORD result 0x%08x\n",
-			__func__, rStatus);
+				"%s: CMD_ID_UPDATE_STA_RECORD result 0x%08x\n",
+				__func__, rStatus);
 	}
 }
 
@@ -1260,8 +1260,8 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 /*----------------------------------------------------------------------------*/
 static void
 cnmStaSendRemoveCmd(struct ADAPTER *prAdapter,
-	enum ENUM_STA_REC_CMD_ACTION eActionType,
-	uint8_t ucStaRecIndex, uint8_t ucBssIndex)
+					enum ENUM_STA_REC_CMD_ACTION eActionType,
+					uint8_t ucStaRecIndex, uint8_t ucBssIndex)
 {
 	struct CMD_REMOVE_STA_RECORD rCmdContent;
 	uint32_t rStatus;
@@ -1274,22 +1274,22 @@ cnmStaSendRemoveCmd(struct ADAPTER *prAdapter,
 	rCmdContent.ucReserved = 0;
 
 	rStatus = wlanSendSetQueryCmd(prAdapter,	/* prAdapter */
-		CMD_ID_REMOVE_STA_RECORD,		/* ucCID */
-		TRUE,	/* fgSetQuery */
-		FALSE,	/* fgNeedResp */
-		FALSE,	/* fgIsOid */
-		NULL,	/* pfCmdDoneHandler */
-		NULL,	/* pfCmdTimeoutHandler */
-		sizeof(struct CMD_REMOVE_STA_RECORD),	/* u4SetQueryInfoLen */
-		(uint8_t *) &rCmdContent,		/* pucInfoBuffer */
-		NULL,	/* pvSetQueryBuffer */
-		0	/* u4SetQueryBufferLen */
-	    );
+								  CMD_ID_REMOVE_STA_RECORD,		/* ucCID */
+								  TRUE,	/* fgSetQuery */
+								  FALSE,	/* fgNeedResp */
+								  FALSE,	/* fgIsOid */
+								  NULL,	/* pfCmdDoneHandler */
+								  NULL,	/* pfCmdTimeoutHandler */
+								  sizeof(struct CMD_REMOVE_STA_RECORD),	/* u4SetQueryInfoLen */
+								  (uint8_t *) &rCmdContent,		/* pucInfoBuffer */
+								  NULL,	/* pvSetQueryBuffer */
+								  0	/* u4SetQueryBufferLen */
+								  );
 
 	if (rStatus != WLAN_STATUS_PENDING) {
 		log_dbg(MEM, WARN,
-			"%s: CMD_ID_REMOVE_STA_RECORD result 0x%08x\n",
-			__func__, rStatus);
+				"%s: CMD_ID_REMOVE_STA_RECORD result 0x%08x\n",
+				__func__, rStatus);
 	}
 }
 
@@ -1313,19 +1313,19 @@ uint8_t *cnmStaRecGetRoleString(enum ENUM_STA_TYPE eStaType)
 
 	if (eStaType & STA_TYPE_ADHOC_MASK) {
 		pucRoleString = apucStaRecRole[
-			STA_ROLE_ADHOC_INDEX - STA_ROLE_BASE_INDEX];
+									   STA_ROLE_ADHOC_INDEX - STA_ROLE_BASE_INDEX];
 	}
 	if (eStaType & STA_TYPE_CLIENT_MASK) {
 		pucRoleString = apucStaRecRole[
-			STA_ROLE_CLIENT_INDEX - STA_ROLE_BASE_INDEX];
+									   STA_ROLE_CLIENT_INDEX - STA_ROLE_BASE_INDEX];
 	}
 	if (eStaType & STA_TYPE_AP_MASK) {
 		pucRoleString = apucStaRecRole[
-			STA_ROLE_AP_INDEX - STA_ROLE_BASE_INDEX];
+									   STA_ROLE_AP_INDEX - STA_ROLE_BASE_INDEX];
 	}
 	if (eStaType & STA_TYPE_DLS_MASK) {
 		pucRoleString = apucStaRecRole[
-			STA_ROLE_DLS_INDEX - STA_ROLE_BASE_INDEX];
+									   STA_ROLE_DLS_INDEX - STA_ROLE_BASE_INDEX];
 	}
 
 	return pucRoleString;
@@ -1353,7 +1353,7 @@ void cnmDumpStaRec(IN struct ADAPTER *prAdapter, IN uint8_t ucStaRecIdx)
 
 	if (!prStaRec) {
 		log_dbg(SW4, INFO, "Invalid StaRec index[%u], skip dump!\n",
-			ucStaRecIdx);
+				ucStaRecIdx);
 		return;
 	}
 
@@ -1363,7 +1363,7 @@ void cnmDumpStaRec(IN struct ADAPTER *prAdapter, IN uint8_t ucStaRecIdx)
 	ASSERT(prBssInfo);
 
 	log_dbg(SW4, INFO, "============= DUMP STA[%u] ===========\n",
-		ucStaRecIdx);
+			ucStaRecIdx);
 	/* [1]STA_IDX                  [2]BSS_IDX
 	 * [3]MAC                      [4]TYPE
 	 * [5]WTBL                     [6]USED
@@ -1388,79 +1388,79 @@ void cnmDumpStaRec(IN struct ADAPTER *prAdapter, IN uint8_t ucStaRecIdx)
 
 	log_dbg(SW4, INFO, "[1][%u],[2][%u],[3][" MACSTR
 			"],[4][%s %s],[5][%u],[6][%u],[7][%u],[8][%u],[9][%u/%u],[10][%u]\n",
-		prStaRec->ucIndex,
-		prStaRec->ucBssIndex,
-		MAC2STR(prStaRec->aucMacAddr),
-		cnmStaRecGetTypeString(prStaRec->eStaType),
-		cnmStaRecGetRoleString(prStaRec->eStaType),
-		ucWTEntry, prStaRec->fgIsInUse,
-		prStaRec->ucStaState, prStaRec->fgIsQoS,
-		(prStaRec->ucDesiredPhyTypeSet
-			& PHY_TYPE_SET_802_11N) ? TRUE : FALSE,
-		(prStaRec->ucDesiredPhyTypeSet
-			& PHY_TYPE_SET_802_11AC) ? TRUE : FALSE,
-		prStaRec->u2AssocId);
+			prStaRec->ucIndex,
+			prStaRec->ucBssIndex,
+			MAC2STR(prStaRec->aucMacAddr),
+			cnmStaRecGetTypeString(prStaRec->eStaType),
+			cnmStaRecGetRoleString(prStaRec->eStaType),
+			ucWTEntry, prStaRec->fgIsInUse,
+			prStaRec->ucStaState, prStaRec->fgIsQoS,
+			(prStaRec->ucDesiredPhyTypeSet
+			 & PHY_TYPE_SET_802_11N) ? TRUE : FALSE,
+			(prStaRec->ucDesiredPhyTypeSet
+			 & PHY_TYPE_SET_802_11AC) ? TRUE : FALSE,
+			prStaRec->u2AssocId);
 
 	log_dbg(SW4, INFO, "[11][%u],[12][%u],[13][%u],[14][0x%x],[15][0x%x],[16][0x%x],[17][0x%x],[18][0x%x],[19][0x%x],[20][0x%x]\n",
-		prStaRec->fgIsWmmSupported,
-		prStaRec->fgIsUapsdSupported,
-		secIsProtectedBss(prAdapter, prBssInfo),
-		prBssInfo->ucPhyTypeSet,
-		prStaRec->ucDesiredPhyTypeSet,
-		prStaRec->ucNonHTBasicPhyType,
-		prBssInfo->u2BSSBasicRateSet,
-		prStaRec->u2OperationalRateSet,
-		prStaRec->u2DesiredNonHTRateSet,
-		prStaRec->u2HwDefaultFixedRateCode);
+			prStaRec->fgIsWmmSupported,
+			prStaRec->fgIsUapsdSupported,
+			secIsProtectedBss(prAdapter, prBssInfo),
+			prBssInfo->ucPhyTypeSet,
+			prStaRec->ucDesiredPhyTypeSet,
+			prStaRec->ucNonHTBasicPhyType,
+			prBssInfo->u2BSSBasicRateSet,
+			prStaRec->u2OperationalRateSet,
+			prStaRec->u2DesiredNonHTRateSet,
+			prStaRec->u2HwDefaultFixedRateCode);
 
 	log_dbg(SW4, INFO, "[21][0x%x],[22][0x%x],[23][0x%x],[24][0x%x],[25][%u],[26][0x%x],[27][0x%x],[28][0x%x],[29][0x%x],[30][%u]\n",
-		prStaRec->u2HtCapInfo,
-		prStaRec->u2HtExtendedCap,
-		prStaRec->u4TxBeamformingCap,
-		prStaRec->ucMcsSet,
-		prStaRec->fgSupMcs32,
-		prStaRec->u4VhtCapInfo,
-		prStaRec->u2VhtTxMcsMap,
-		prStaRec->u2VhtRxMcsMap,
-		prStaRec->ucVhtOpMode,
-		prStaRec->ucRCPI);
+			prStaRec->u2HtCapInfo,
+			prStaRec->u2HtExtendedCap,
+			prStaRec->u4TxBeamformingCap,
+			prStaRec->ucMcsSet,
+			prStaRec->fgSupMcs32,
+			prStaRec->u4VhtCapInfo,
+			prStaRec->u2VhtTxMcsMap,
+			prStaRec->u2VhtRxMcsMap,
+			prStaRec->ucVhtOpMode,
+			prStaRec->ucRCPI);
 
 	log_dbg(SW4, INFO, "[31][%u],[32][%u],[33][%u],[34][%u/%u],[35][%u:%u:%u:%u],[36][%x/%x],[37][%u],[38][%u/%u],[39][0x%x][0x%x]\n",
-		prStaRec->fgIsInPS,
-		prStaRec->fgIsTxAllowed,
-		prStaRec->fgIsTxKeyReady,
-		prStaRec->fgTxAmpduEn,
-		prStaRec->fgRxAmpduEn,
-		prStaRec->aprTargetQueue[0]->u4NumElem,
-		prStaRec->aprTargetQueue[1]->u4NumElem,
-		prStaRec->aprTargetQueue[2]->u4NumElem,
-		prStaRec->aprTargetQueue[3]->u4NumElem,
-		prStaRec->ucBmpDeliveryAC,
-		prStaRec->ucBmpTriggerAC,
-		prStaRec->ucFreeQuota,
-		prStaRec->ucFreeQuotaForDelivery,
-		prStaRec->ucFreeQuotaForNonDelivery,
-		prStaRec->aucRxMcsBitmask[0],
-		prStaRec->aucRxMcsBitmask[1]);
+			prStaRec->fgIsInPS,
+			prStaRec->fgIsTxAllowed,
+			prStaRec->fgIsTxKeyReady,
+			prStaRec->fgTxAmpduEn,
+			prStaRec->fgRxAmpduEn,
+			prStaRec->aprTargetQueue[0]->u4NumElem,
+			prStaRec->aprTargetQueue[1]->u4NumElem,
+			prStaRec->aprTargetQueue[2]->u4NumElem,
+			prStaRec->aprTargetQueue[3]->u4NumElem,
+			prStaRec->ucBmpDeliveryAC,
+			prStaRec->ucBmpTriggerAC,
+			prStaRec->ucFreeQuota,
+			prStaRec->ucFreeQuotaForDelivery,
+			prStaRec->ucFreeQuotaForNonDelivery,
+			prStaRec->aucRxMcsBitmask[0],
+			prStaRec->aucRxMcsBitmask[1]);
 
 	for (i = 0; i < CFG_RX_MAX_BA_TID_NUM; i++) {
 		if (prStaRec->aprRxReorderParamRefTbl[i]) {
 			log_dbg(SW4, INFO, "TID[%u],Valid[%u],WinStart/End[%u/%u],WinSize[%u],ReOrderQueLen[%u],Bubble Exist[%u],SN[%u]\n",
-				prStaRec->aprRxReorderParamRefTbl[i]
+					prStaRec->aprRxReorderParamRefTbl[i]
 					->ucTid,
-				prStaRec->aprRxReorderParamRefTbl[i]
+					prStaRec->aprRxReorderParamRefTbl[i]
 					->fgIsValid,
-				prStaRec->aprRxReorderParamRefTbl[i]
+					prStaRec->aprRxReorderParamRefTbl[i]
 					->u2WinStart,
-				prStaRec->aprRxReorderParamRefTbl[i]
+					prStaRec->aprRxReorderParamRefTbl[i]
 					->u2WinEnd,
-				prStaRec->aprRxReorderParamRefTbl[i]
+					prStaRec->aprRxReorderParamRefTbl[i]
 					->u2WinSize,
-				prStaRec->aprRxReorderParamRefTbl[i]
+					prStaRec->aprRxReorderParamRefTbl[i]
 					->rReOrderQue.u4NumElem,
-				prStaRec->aprRxReorderParamRefTbl[i]
+					prStaRec->aprRxReorderParamRefTbl[i]
 					->fgHasBubble,
-				prStaRec->aprRxReorderParamRefTbl[i]
+					prStaRec->aprRxReorderParamRefTbl[i]
 					->u2FirstBubbleSn);
 		}
 	}
@@ -1468,7 +1468,7 @@ void cnmDumpStaRec(IN struct ADAPTER *prAdapter, IN uint8_t ucStaRecIdx)
 }
 
 uint32_t cnmDumpMemoryStatus(IN struct ADAPTER *prAdapter, IN uint8_t *pucBuf,
-	IN uint32_t u4Max)
+							 IN uint32_t u4Max)
 {
 	uint32_t u4Len = 0;
 #if CFG_DBG_MGT_BUF
@@ -1476,32 +1476,32 @@ uint32_t cnmDumpMemoryStatus(IN struct ADAPTER *prAdapter, IN uint8_t *pucBuf,
 
 	LOGBUF(pucBuf, u4Max, u4Len, "\n");
 	LOGBUF(pucBuf, u4Max, u4Len,
-		"============= DUMP Memory Status =============\n");
+		   "============= DUMP Memory Status =============\n");
 
 	LOGBUF(pucBuf, u4Max, u4Len,
-		"Dynamic alloc OS memory count: alloc[%u] free[%u]\n",
-		prAdapter->u4MemAllocDynamicCount,
-		prAdapter->u4MemFreeDynamicCount);
+		   "Dynamic alloc OS memory count: alloc[%u] free[%u]\n",
+		   prAdapter->u4MemAllocDynamicCount,
+		   prAdapter->u4MemFreeDynamicCount);
 
 	prBufInfo = &prAdapter->rMsgBufInfo;
 
 	LOGBUF(pucBuf, u4Max, u4Len,
-		"MSG memory count: alloc[%u] free[%u] null[%u] bitmap[0x%08x]\n"
-		,
-		prBufInfo->u4AllocCount,
-		prBufInfo->u4FreeCount,
-		prBufInfo->u4AllocNullCount,
-		(uint32_t) prBufInfo->rFreeBlocksBitmap);
+		   "MSG memory count: alloc[%u] free[%u] null[%u] bitmap[0x%08x]\n"
+		   ,
+		   prBufInfo->u4AllocCount,
+		   prBufInfo->u4FreeCount,
+		   prBufInfo->u4AllocNullCount,
+		   (uint32_t) prBufInfo->rFreeBlocksBitmap);
 
 	prBufInfo = &prAdapter->rMgtBufInfo;
 
 	LOGBUF(pucBuf, u4Max, u4Len,
-		"MGT memory count: alloc[%u] free[%u] null[%u] bitmap[0x%08x]\n"
-		,
-		prBufInfo->u4AllocCount,
-		prBufInfo->u4FreeCount,
-		prBufInfo->u4AllocNullCount,
-		(uint32_t) prBufInfo->rFreeBlocksBitmap);
+		   "MGT memory count: alloc[%u] free[%u] null[%u] bitmap[0x%08x]\n"
+		   ,
+		   prBufInfo->u4AllocCount,
+		   prBufInfo->u4FreeCount,
+		   prBufInfo->u4AllocNullCount,
+		   (uint32_t) prBufInfo->rFreeBlocksBitmap);
 
 	LOGBUF(pucBuf, u4Max, u4Len, "============= DUMP END =============\n");
 
@@ -1530,7 +1530,7 @@ uint32_t cnmDumpMemoryStatus(IN struct ADAPTER *prAdapter, IN uint8_t *pucBuf,
 /*----------------------------------------------------------------------------*/
 uint32_t	/* TDLS_STATUS, prStaRec->ucNetTypeIndex */
 cnmPeerAdd(struct ADAPTER *prAdapter, void *pvSetBuffer,
-	uint32_t u4SetBufferLen, uint32_t *pu4SetInfoLen)
+		   uint32_t u4SetBufferLen, uint32_t *pu4SetInfoLen)
 {
 	struct CMD_PEER_ADD *prCmd;
 	struct BSS_INFO *prBssInfo;
@@ -1555,14 +1555,14 @@ cnmPeerAdd(struct ADAPTER *prAdapter, void *pvSetBuffer,
 	}
 
 	prStaRec = cnmGetStaRecByAddress(prAdapter,
-		(uint8_t) prBssInfo->ucBssIndex,
-		prCmd->aucPeerMac);
+									 (uint8_t) prBssInfo->ucBssIndex,
+									 prCmd->aucPeerMac);
 
 	if (prStaRec == NULL) {
 		prStaRec =
-		cnmStaRecAlloc(prAdapter, STA_TYPE_DLS_PEER,
-			(uint8_t) prBssInfo->ucBssIndex,
-			prCmd->aucPeerMac);
+			cnmStaRecAlloc(prAdapter, STA_TYPE_DLS_PEER,
+						   (uint8_t) prBssInfo->ucBssIndex,
+						   prCmd->aucPeerMac);
 
 		if (prStaRec == NULL)
 			return TDLS_STATUS_RESOURCES;
@@ -1619,7 +1619,7 @@ cnmPeerAdd(struct ADAPTER *prAdapter, void *pvSetBuffer,
 /*----------------------------------------------------------------------------*/
 uint32_t	/* TDLS_STATUS */
 cnmPeerUpdate(struct ADAPTER *prAdapter, void *pvSetBuffer,
-		uint32_t u4SetBufferLen, uint32_t *pu4SetInfoLen)
+			  uint32_t u4SetBufferLen, uint32_t *pu4SetInfoLen)
 {
 
 	struct CMD_PEER_UPDATE *prCmd;
@@ -1649,8 +1649,8 @@ cnmPeerUpdate(struct ADAPTER *prAdapter, void *pvSetBuffer,
 		return TDLS_STATUS_FAIL;
 	}
 	prStaRec = cnmGetStaRecByAddress(prAdapter,
-		(uint8_t) prBssInfo->ucBssIndex,
-		prCmd->aucPeerMac);
+									 (uint8_t) prBssInfo->ucBssIndex,
+									 prCmd->aucPeerMac);
 
 	if ((!prStaRec) || !(prStaRec->fgIsInUse))
 		return TDLS_STATUS_FAIL;
@@ -1687,7 +1687,7 @@ cnmPeerUpdate(struct ADAPTER *prAdapter, void *pvSetBuffer,
 				ucRate = prCmd->aucSupRate[i] & RATE_MASK;
 				/* Search all valid data rates */
 				for (j = 0; j < sizeof(aucValidDataRate)
-					/ sizeof(uint8_t); j++) {
+						 / sizeof(uint8_t); j++) {
 					if (ucRate == aucValidDataRate[j]) {
 						u2OperationalRateSet |= BIT(j);
 						break;
@@ -1710,17 +1710,17 @@ cnmPeerUpdate(struct ADAPTER *prAdapter, void *pvSetBuffer,
 
 			/* if not 11n only */
 			if (!(prStaRec->u2BSSBasicRateSet
-				& RATE_SET_BIT_HT_PHY)) {
+				  & RATE_SET_BIT_HT_PHY)) {
 				/* check if support 11g */
 				if ((prStaRec->u2OperationalRateSet
-					& RATE_SET_OFDM)) {
+					 & RATE_SET_OFDM)) {
 					prStaRec->ucPhyTypeSet
 						|= PHY_TYPE_BIT_ERP;
 				}
 
 				/* if not 11g only */
 				if (!(prStaRec->u2BSSBasicRateSet
-					& RATE_SET_OFDM)) {
+					  & RATE_SET_OFDM)) {
 					/* check if support 11b */
 					if ((prStaRec->u2OperationalRateSet
 						 & RATE_SET_HR_DSSS)) {
@@ -1738,7 +1738,7 @@ cnmPeerUpdate(struct ADAPTER *prAdapter, void *pvSetBuffer,
 
 			/* if not 11n only */
 			if (!(prStaRec->u2BSSBasicRateSet
-				& RATE_SET_BIT_HT_PHY)) {
+				  & RATE_SET_BIT_HT_PHY)) {
 				/* Support 11a definitely */
 				prStaRec->ucPhyTypeSet |= PHY_TYPE_BIT_OFDM;
 			}
@@ -1750,18 +1750,18 @@ cnmPeerUpdate(struct ADAPTER *prAdapter, void *pvSetBuffer,
 
 			prConnSettings =
 				aisGetConnSettings(prAdapter,
-				prStaRec->ucBssIndex);
+								   prStaRec->ucBssIndex);
 
 			eEncStatus = prConnSettings->eEncStatus;
 
 			if (!((eEncStatus == ENUM_ENCRYPTION3_ENABLED)
-				|| (eEncStatus == ENUM_ENCRYPTION3_KEY_ABSENT)
-				|| (eEncStatus == ENUM_ENCRYPTION_DISABLED)
-				|| (prConnSettings->u2WSCAssocInfoIELen)
+				  || (eEncStatus == ENUM_ENCRYPTION3_KEY_ABSENT)
+				  || (eEncStatus == ENUM_ENCRYPTION_DISABLED)
+				  || (prConnSettings->u2WSCAssocInfoIELen)
 #if CFG_SUPPORT_WAPI
-				|| (prConnSettings->u2WapiAssocInfoIESz)
+				  || (prConnSettings->u2WapiAssocInfoIESz)
 #endif
-			    )) {
+				  )) {
 
 				prStaRec->ucPhyTypeSet &= ~PHY_TYPE_BIT_HT;
 			}
@@ -1782,7 +1782,7 @@ cnmPeerUpdate(struct ADAPTER *prAdapter, void *pvSetBuffer,
 					= PHY_TYPE_OFDM_INDEX;
 			else
 				prStaRec->ucNonHTBasicPhyType
-				= PHY_TYPE_HR_DSSS_INDEX;
+					= PHY_TYPE_HR_DSSS_INDEX;
 
 			prStaRec->fgHasBasicPhyType = TRUE;
 		} else {
@@ -1818,8 +1818,8 @@ cnmPeerUpdate(struct ADAPTER *prAdapter, void *pvSetBuffer,
 		else
 			prStaRec->fgSupMcs32 = FALSE;
 		kalMemCopy(prStaRec->aucRxMcsBitmask,
-			prCmd->rHtCap.rMCS.arRxMask,
-			sizeof(prStaRec->aucRxMcsBitmask));
+				   prCmd->rHtCap.rMCS.arRxMask,
+				   sizeof(prStaRec->aucRxMcsBitmask));
 	}
 	/* TODO ++VHT */
 
@@ -1838,7 +1838,7 @@ cnmPeerUpdate(struct ADAPTER *prAdapter, void *pvSetBuffer,
  */
 /*----------------------------------------------------------------------------*/
 struct STA_RECORD *cnmGetTdlsPeerByAddress(struct ADAPTER *prAdapter,
-	uint8_t ucBssIndex, uint8_t aucPeerMACAddress[])
+										   uint8_t ucBssIndex, uint8_t aucPeerMACAddress[])
 {
 	struct STA_RECORD *prStaRec;
 	uint16_t i;
@@ -1852,7 +1852,7 @@ struct STA_RECORD *cnmGetTdlsPeerByAddress(struct ADAPTER *prAdapter,
 			if (prStaRec->fgIsInUse
 				&& prStaRec->eStaType == STA_TYPE_DLS_PEER
 				&& EQUAL_MAC_ADDR(prStaRec->aucMacAddr,
-					aucPeerMACAddress)) {
+								  aucPeerMACAddress)) {
 				break;
 			}
 		}
@@ -1865,14 +1865,14 @@ struct STA_RECORD *cnmGetTdlsPeerByAddress(struct ADAPTER *prAdapter,
 
 #if (CFG_SUPPORT_802_11AX == 1)
 static void cnmStaRecCmdHeContentFill(
-	struct STA_RECORD *prStaRec,
-	struct CMD_UPDATE_STA_RECORD *prCmdContent)
+									  struct STA_RECORD *prStaRec,
+									  struct CMD_UPDATE_STA_RECORD *prCmdContent)
 {
 	prCmdContent->ucVersion = CMD_UPDATE_STAREC_VER1;
 	memcpy(prCmdContent->ucHeMacCapInfo, prStaRec->ucHeMacCapInfo,
-		HE_MAC_CAP_BYTE_NUM);
+		   HE_MAC_CAP_BYTE_NUM);
 	memcpy(prCmdContent->ucHePhyCapInfo, prStaRec->ucHePhyCapInfo,
-		HE_PHY_CAP_BYTE_NUM);
+		   HE_PHY_CAP_BYTE_NUM);
 
 	prCmdContent->u2HeRxMcsMapBW80 =
 		CPU_TO_LE16(prStaRec->u2HeRxMcsMapBW80);

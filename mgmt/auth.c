@@ -395,7 +395,7 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
                  WLAN_MAC_MGMT_HEADER_LEN + u2PayloadLen,
                  saaFsmRunEventTxDone,
                  MSDU_RATE_MODE_AUTO);
-    //prMsduInfo->fgMgmtUseDataQ = TRUE;
+    prMsduInfo->fgMgmtUseDataQ = TRUE;
     {   /* point skb at TXD+frame for halWpdmaWriteMsdu DMA copy.
          * cnmMgtPktAlloc layout: [TXD+padding][802.11 frame]
          * prPacket points to TXD start; MAC_TX_RESERVED_FIELD covers TXD+padding.
