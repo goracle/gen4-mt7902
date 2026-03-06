@@ -2457,11 +2457,7 @@ uint32_t nicTxCmd(IN struct ADAPTER *prAdapter,
 		prMsduInfo = prCmdInfo->prMsduInfo;
 
 		prCmdInfo->pucTxd = prMsduInfo->aucTxDescBuffer;
-		if (prTxDescOps->nic_txd_long_format_op(
-			prMsduInfo->aucTxDescBuffer, FALSE))
-			prCmdInfo->u4TxdLen = NIC_TX_DESC_LONG_FORMAT_LENGTH;
-		else
-			prCmdInfo->u4TxdLen = NIC_TX_DESC_SHORT_FORMAT_LENGTH;
+		prCmdInfo->u4TxdLen = NIC_TX_DESC_LONG_FORMAT_LENGTH;
 
 		skb = (struct sk_buff *)prMsduInfo->prPacket;
 		prCmdInfo->pucTxp = skb->data;
@@ -2494,23 +2490,20 @@ uint32_t nicTxCmd(IN struct ADAPTER *prAdapter,
 		ASSERT(prMsduInfo->eSrc == TX_PACKET_MGMT);
 
 		prCmdInfo->pucTxd = prMsduInfo->aucTxDescBuffer;
-		if (prTxDescOps->nic_txd_long_format_op(
-			prMsduInfo->aucTxDescBuffer, FALSE))
-			prCmdInfo->u4TxdLen = NIC_TX_DESC_LONG_FORMAT_LENGTH;
-		else
-			prCmdInfo->u4TxdLen = NIC_TX_DESC_SHORT_FORMAT_LENGTH;
+		/* Always use long format: TXD was composed with long format
+		 * byte count. Short format clips DW1/DW2 (wlan_idx,
+		 * header_format) to zero, causing firmware to drop the frame
+		 * as non-802.11.
+		 */
+		prCmdInfo->u4TxdLen = NIC_TX_DESC_LONG_FORMAT_LENGTH;
 
 		prCmdInfo->pucTxp = prMsduInfo->prPacket;
 		prCmdInfo->u4TxpLen = prMsduInfo->u2FrameLength;
 
 		if (prMsduInfo->pfTxDoneHandler) {
-			KAL_ACQUIRE_SPIN_LOCK(prAdapter,
-				SPIN_LOCK_TXING_MGMT_LIST);
-			QUEUE_INSERT_TAIL(&(prTxCtrl->rTxMgmtTxingQueue),
-					  (struct QUE_ENTRY *) prMsduInfo);
-			KAL_RELEASE_SPIN_LOCK(prAdapter,
-				SPIN_LOCK_TXING_MGMT_LIST);
-			DBGLOG(TX, INFO, "Insert msdu WIDX:PID[%u:%u]\n",
+			prMsduInfo->ucPID = nicTxAssignPID(prAdapter,
+				prMsduInfo->ucWlanIndex);
+			DBGLOG(TX, WARN, "[MGMT-PID] WIDX=%u assigned PID=%u\n",
 				prMsduInfo->ucWlanIndex, prMsduInfo->ucPID);
 		}
 
@@ -2525,7 +2518,16 @@ uint32_t nicTxCmd(IN struct ADAPTER *prAdapter,
 		/* <4> Management Frame Post-Processing */
 		GLUE_DEC_REF_CNT(prTxCtrl->i4TxMgmtPendingNum);
 
-		if (prMsduInfo->pfTxDoneHandler == NULL) {
+		if (prMsduInfo->pfTxDoneHandler) {
+			KAL_ACQUIRE_SPIN_LOCK(prAdapter,
+				SPIN_LOCK_TXING_MGMT_LIST);
+			QUEUE_INSERT_TAIL(&(prTxCtrl->rTxMgmtTxingQueue),
+					  (struct QUE_ENTRY *) prMsduInfo);
+			KAL_RELEASE_SPIN_LOCK(prAdapter,
+				SPIN_LOCK_TXING_MGMT_LIST);
+			DBGLOG(TX, INFO, "Insert msdu WIDX:PID[%u:%u]\n",
+				prMsduInfo->ucWlanIndex, prMsduInfo->ucPID);
+		} else {
 			cnmMgtPktFree(prAdapter, prMsduInfo);
 		}
 
@@ -3318,7 +3320,7 @@ nicTxProcessUniTxDoneEvent(struct ADAPTER *ad, struct UNI_EVENT_TX_DONE *e)
 	struct MSDU_INFO *prMsduInfo = NULL;
 	if (!ad || !e)
 		return NULL;
-	DBGLOG(TX, INFO,
+	DBGLOG(TX, WARN,
 		"UNI_TXDONE status=%u widx=%u pid=%u sn=%u\n",
 		e->ucStatus, e->ucWlanIndex, e->ucPacketSeq, e->u2SequenceNumber);
 	DBGLOG(TX, INFO, "[TX-DIAG] Looking up WIDX=%u PID=%u\n",
@@ -3367,8 +3369,26 @@ nicTxProcessUniTxDoneEvent(struct ADAPTER *ad, struct UNI_EVENT_TX_DONE *e)
 	}
 	if (!prMsduInfo) {
 		DBGLOG(TX, WARN,
-			"UNI_TXDONE: no pending MSDU for WIDX:%u PID:%u\n",
+			"UNI_TXDONE: no pending MSDU for WIDX:%u PID:%u — dumping queue\n",
 			e->ucWlanIndex, e->ucPacketSeq);
+		{
+			struct TX_CTRL *prTxCtrl = &ad->rTxCtrl;
+			struct MSDU_INFO *prCur;
+			uint32_t idx = 0;
+			KAL_SPIN_LOCK_DECLARATION();
+			KAL_ACQUIRE_SPIN_LOCK(ad, SPIN_LOCK_TXING_MGMT_LIST);
+			prCur = (struct MSDU_INFO *)QUEUE_GET_HEAD(&prTxCtrl->rTxMgmtTxingQueue);
+			while (prCur) {
+				DBGLOG(TX, WARN,
+					"[TXMGMT-Q] [%u] WIDX=%u PID=%u src=%u bss=%u sta=%u\n",
+					idx++, prCur->ucWlanIndex, prCur->ucPID,
+					prCur->eSrc, prCur->ucBssIndex, prCur->ucStaRecIndex);
+				prCur = (struct MSDU_INFO *)QUEUE_GET_NEXT_ENTRY(&prCur->rQueEntry);
+			}
+			KAL_RELEASE_SPIN_LOCK(ad, SPIN_LOCK_TXING_MGMT_LIST);
+			if (idx == 0)
+				DBGLOG(TX, WARN, "[TXMGMT-Q] queue is empty\n");
+		}
 		return NULL;
 	}
 	/* DO NOT call saaFsmRunEventTxDone here.
@@ -3392,6 +3412,8 @@ nicTxProcessTxDoneEvent(IN struct ADAPTER *prAdapter,
 		return;
 
 	prTxDone = (struct EVENT_TX_DONE *)prEvent->aucBuffer;
+	DBGLOG(TX, WARN, "[TXDONE-ENTRY] WIDX=%u PID=%u status=%u\n",
+		prTxDone->ucWlanIndex, prTxDone->ucPacketSeq, prTxDone->ucStatus);
 
 	struct UNI_EVENT_TX_DONE uni = {0};
 
@@ -5924,4 +5946,3 @@ uint8_t nicTxResTc2WmmTc(uint8_t ucResTC)
 
 	return ucTcIdx;
 }
-

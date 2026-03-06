@@ -871,7 +871,7 @@ struct MSDU_INFO {
 #endif
 
 	/* Compose TxDesc in main_thread and place here */
-	uint8_t aucTxDescBuffer[NIC_TX_DESC_AND_PADDING_LENGTH] __aligned(4);
+	uint8_t aucTxDescBuffer[NIC_TX_DESC_AND_PADDING_LENGTH] __aligned(64);
 
 #if CFG_SUPPORT_NAN
 	uint8_t ucTxToNafQueFlag;

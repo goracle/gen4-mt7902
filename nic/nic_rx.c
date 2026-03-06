@@ -380,30 +380,37 @@ static uint8_t *relay_find_frame_start(uint8_t *buf_start, uint8_t *buf_end,
                                        size_t *pframe_len, uint8_t *pfc)
 {
     size_t i;
-    for (i = 0; i < ARRAY_SIZE(relay_candidate_prefixes); i++) {
-        size_t off = relay_candidate_prefixes[i];
-        uint8_t *candidate = buf_start + off;
 
-        if (candidate + 36 > buf_end) /* must contain at least fixed beacon header bytes */
+    for (i = 0; i < ARRAY_SIZE(relay_candidate_prefixes); i++) {
+        uint8_t *candidate = buf_start + relay_candidate_prefixes[i];
+
+        /* Safety: Ensure we can read the Frame Control byte and the minimum header */
+        if (candidate + 36 > buf_end)
             continue;
 
-        /* frame control byte at candidate[0] */
+        /*
+         * Validate Management Frame Control byte:
+         * 0x80: Beacon
+         * 0x50: Probe Response
+         * 0x40: Probe Request
+         * 0xD0: Action
+         */
         uint8_t fc = candidate[0];
-
         if (fc == 0x80 || fc == 0x50 || fc == 0xd0 || fc == 0x40) {
-            *pframe_len = buf_end - candidate;
             *pfc = fc;
+            *pframe_len = (size_t)(buf_end - candidate);
             return candidate;
         }
     }
 
-    /* none matched */
     return NULL;
 }
+
 
 /* Extract SSID from IE blob (if present), nul-terminate into ssid_out (33 bytes).
  * Returns true if SSID found (and non-empty), false otherwise.
  */
+#if 0
 static bool relay_extract_ssid(uint8_t *ies, size_t ie_len, char ssid_out[33])
 {
     size_t rem = ie_len;
@@ -440,6 +447,7 @@ static bool relay_extract_ssid(uint8_t *ies, size_t ie_len, char ssid_out[33])
     ssid_out[0] = '\0';
     return false;
 }
+#endif
 
 /* Compute channel frequency (kHz) from channel number.
  * Returns frequency in MHz (int) — same formula as original.
@@ -542,10 +550,8 @@ static int relay_pass_to_scan(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb,
     if (!prAdapter || !prSwRfb || !frame_start || frame_len < 36)
         return -EINVAL;
 
-    /* clamp to U16 max */
     new_pkt_len = (uint16_t)min_t(size_t, frame_len, U16_MAX);
 
-    /* Save and replace */
     pvSavedHeader = prSwRfb->pvHeader;
     u2SavedHeaderLen = prSwRfb->u2HeaderLen;
     u2SavedPacketLen = prSwRfb->u2PacketLen;
@@ -554,16 +560,20 @@ static int relay_pass_to_scan(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb,
     prSwRfb->u2HeaderLen = 0;
     prSwRfb->u2PacketLen = new_pkt_len;
 
-    /* Call into scan engine (assumes scanProcessBeaconAndProbeResp exists) */
+    /*
+     * Warning: This relies on scanProcessBeaconAndProbeResp being
+     * purely synchronous. If it ever schedules work or queues the RFB,
+     * this will corrupt the stack/state.
+     */
     scanProcessBeaconAndProbeResp(prAdapter, prSwRfb);
 
-    /* Restore */
     prSwRfb->pvHeader = pvSavedHeader;
     prSwRfb->u2HeaderLen = u2SavedHeaderLen;
     prSwRfb->u2PacketLen = u2SavedPacketLen;
 
     return 0;
 }
+
 
 /* Main refactored relay function */
 static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb)
@@ -576,13 +586,11 @@ static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *pr
     size_t buf_len = 0, frame_len = 0;
     uint8_t ucChnl, ucFC = 0;
     uint16_t u2BeaconInt = 0, u2Cap = 0;
-    int i4Freq;
     char ssid_str[33] = {0};
     uint8_t *ies = NULL;
     size_t ies_len = 0;
-    int rc;
+    int rc, i4Freq;
 
-    /* Basic validation */
     if (!prAdapter || !prSwRfb || !prSwRfb->pvHeader || prSwRfb->u2PacketLen == 0)
         return -EINVAL;
 
@@ -592,83 +600,66 @@ static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *pr
 
     wiphy = prGlueInfo->prDevHandler->ieee80211_ptr->wiphy;
 
-    /* Compute buffer bounds safely */
     rc = relay_compute_buf_bounds(prSwRfb, &buf_start, &buf_end, &buf_len);
-    if (rc) {
-        DBGLOG(RX, WARN, "[RELAY] invalid buf bounds\n");
+    if (rc)
         return rc;
-    }
 
-    /* Try candidate offsets for frame start */
     frame_start = relay_find_frame_start(buf_start, buf_end, &frame_len, &ucFC);
-    if (!frame_start) {
-        if (printk_ratelimit()) {
-            DBGLOG(RX, ERROR, "[RELAY] cannot locate 802.11 header in RFB (buf_len=%zu hdr=%u pkt=%u)\n",
-                   buf_len, prSwRfb->u2HeaderLen, prSwRfb->u2PacketLen);
-            DBGLOG_MEM8(RX, ERROR, buf_start, min_t(size_t, RELAY_DUMP_BYTES, buf_len));
-        }
+    if (!frame_start || frame_len < 36)
         return -EINVAL;
-    }
 
-    if (frame_len < 36) {
-        DBGLOG(RX, WARN, "[RELAY] frame too short after locate: %zu\n", frame_len);
-        return -EINVAL;
-    }
-
-    /* Logging summary */
     ucChnl = prSwRfb->ucChnlNum;
-    DBGLOG(RX, INFO, "[RELAY] FC=0x%02x Ch=%u len=%zu BSSID=%pM (offset=%td)\n",
-           ucFC, ucChnl, frame_len, frame_start + 16, (ptrdiff_t)(frame_start - buf_start));
-
-    /* Extract SSID for logs (safe) */
-    ies = frame_start + 36;
-    if (frame_len > 36) {
-        ies_len = frame_len - 36;
-        if (relay_extract_ssid(ies, ies_len, ssid_str))
-            DBGLOG(RX, INFO, "[RELAY] SSID='%s'\n", ssid_str);
-    }
-
-    /* Compute frequency & get channel */
     i4Freq = relay_channel_to_freq((int)ucChnl);
     chan = ieee80211_get_channel(wiphy, i4Freq);
-    if (!chan) {
-        DBGLOG(RX, WARN, "[RELAY] invalid channel freq=%d (ch=%u)\n", i4Freq, ucChnl);
+    if (!chan)
         return -EINVAL;
-    }
 
-    /* Read fixed fields safely (bounds-check) */
-    if (frame_len < 36) {
-        DBGLOG(RX, WARN, "[RELAY] not enough bytes for fixed fields\n");
-        return -EINVAL;
-    }
-    /* ensure we can read 4 bytes at offsets 32..35 */
+    /* Extract fixed fields: 8 bytes timestamp (ignored), 2 bytes beacon int, 2 bytes cap */
     u2BeaconInt = le16_to_cpu(*(const uint16_t *)(frame_start + 32));
     u2Cap = le16_to_cpu(*(const uint16_t *)(frame_start + 34));
 
-    /* Inform cfg80211 (validate IEs length) */
-    if (ies_len == 0) {
-        DBGLOG(RX, WARN, "[RELAY] no IEs present, skipping cfg80211_inform_bss\n");
-    } else {
-        rc = relay_inform_cfg80211(prGlueInfo, wiphy, ucFC, frame_start + 16,
-                                   ies, ies_len, u2Cap, u2BeaconInt, chan);
-        if (rc) {
-            DBGLOG(RX, WARN, "[RELAY] cfg80211_inform_bss failed (%d)\n", rc);
-            /* continue — still pass to scan engine if possible */
-        } else {
-            DBGLOG(RX, INFO, "[RELAY] BSS notified BSSID=%pM\n", frame_start + 16);
+    /* IEs start at offset 36 */
+    ies = frame_start + 36;
+    ies_len = frame_len - 36;
+
+    /* Extract SSID safely for logging */
+    if (ies_len > 0) {
+        uint8_t *ssid_ie = NULL;
+        size_t temp_len = ies_len;
+        uint8_t *p = ies;
+
+        while (temp_len >= 2) {
+            if (p[0] == 0) {
+                ssid_ie = p;
+                break;
+            }
+            temp_len -= (p[1] + 2);
+            p += (p[1] + 2);
+        }
+
+        if (ssid_ie && ssid_ie[1] <= 32) {
+            memcpy(ssid_str, ssid_ie + 2, ssid_ie[1]);
+            ssid_str[ssid_ie[1]] = '\0';
+            DBGLOG(RX, INFO, "[RELAY] SSID='%s'\n", ssid_str);
         }
     }
 
-    /* Finally pass to scan engine: this is best-effort */
+    /* Notify cfg80211 */
+    rc = relay_inform_cfg80211(prGlueInfo, wiphy, ucFC, frame_start + 16,
+                               ies, ies_len, u2Cap, u2BeaconInt, chan);
+    if (rc) {
+        DBGLOG(RX, WARN, "[RELAY] cfg80211_inform_bss failed (%d)\n", rc);
+    }
+
+    /* Pass to scan engine */
     rc = relay_pass_to_scan(prAdapter, prSwRfb, frame_start, frame_len);
     if (rc) {
-        DBGLOG(RX, WARN, "[RELAY] scanProcessBeaconAndProbeResp failed (%d)\n", rc);
+        DBGLOG(RX, WARN, "[RELAY] scanProcess failed (%d)\n", rc);
         return rc;
     }
 
     return 0;
 }
-
 
 
 
@@ -1718,8 +1709,12 @@ static void nicUniEventCmdResult(struct ADAPTER *prAdapter,
 
 	prCmdInfo = nicGetPendingCmdInfo(prAdapter, prEvent->ucSeqNum);
 	if (!prCmdInfo) {
-		DBGLOG(RX, WARN, "[CMD-RESULT] no pending cmd SEQ=%u CID=0x%04x status=%u\n",
-			prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
+		if (prResult->u4Status == 0)
+			DBGLOG(RX, TRACE, "[CMD-RESULT] no pending cmd SEQ=%u CID=0x%04x status=%u\n",
+				prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
+		else
+			DBGLOG(RX, WARN, "[CMD-RESULT] no pending cmd SEQ=%u CID=0x%04x status=%u\n",
+				prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
 		return;
 	}
 
@@ -1953,7 +1948,6 @@ void nicRxProcessDataPacket(IN struct ADAPTER *prAdapter,
 	struct RX_DESC_OPS_T *prRxDescOps;
 
 	DEBUGFUNC("nicRxProcessDataPacket");
-	/* DBGLOG(INIT, TRACE, ("\n")); */
 
 	ASSERT(prAdapter);
 	ASSERT(prSwRfb);
@@ -1967,6 +1961,37 @@ void nicRxProcessDataPacket(IN struct ADAPTER *prAdapter,
 
 	prSwRfb->fgDataFrame = TRUE;
 	nicRxFillRFB(prAdapter, prSwRfb);
+
+	/*
+	 * Management frames (auth, assoc, deauth, etc.) can arrive on the data
+	 * ring for unassociated wlan_idx. When fgHdrTran=1 the firmware has
+	 * Ethernet-translated the header, so pvHeader no longer points to 802.11
+	 * FC bytes — it points to a MAC address. Use u2RxStatusOffst (set by
+	 * nic_rxd_v3_fill_rfb to the sum of RXD group sizes, without the header
+	 * offset) to reach the raw 802.11 header in either case.
+	 */
+	{
+		uint8_t *pDot11Hdr = (uint8_t *)prSwRfb->pucRecvBuff +
+			prSwRfb->u2RxStatusOffst;
+		uint16_t fc = le16_to_cpu(*(uint16_t *)pDot11Hdr);
+		uint8_t fc_type = (fc >> 2) & 0x3;
+
+		DBGLOG(RX, WARN,
+			"[RX-DATA-HDR] fgHdrTran=%u fc=0x%04x type=%u wlan_idx=%u b0=0x%02x b1=0x%02x\n",
+			prSwRfb->fgHdrTran, fc, fc_type, prSwRfb->ucWlanIdx,
+			pDot11Hdr[0], pDot11Hdr[1]);
+
+		if (fc_type == 0x0) {
+			DBGLOG(RX, WARN,
+				"[RX-REROUTE] mgmt on data ring: fc=0x%04x wlan_idx=%u -> mgmt path\n",
+				fc, prSwRfb->ucWlanIdx);
+			prSwRfb->pvHeader = pDot11Hdr;
+			prSwRfb->fgHdrTran = FALSE;
+			prSwRfb->ucPacketType = RX_PKT_TYPE_SW_DEFINED;
+			nicRxProcessMgmtPacket(prAdapter, prSwRfb);
+			return;
+		}
+	}
 
 	fgDrop = FALSE;
 
@@ -2866,8 +2891,11 @@ void nicRxProcessPacketType(
 				get_ofld, prSwRfb->prRxStatus);
 			RX_STATUS_GET(prChipInfo->prRxDescOps, prSwRfb->fgHdrTran,
 				get_HdrTrans, prSwRfb->prRxStatus);
-			DBGLOG(RX, LOUD, "[PKT-ROUTE] ucOFLD=%u fgHdrTran=%u\n",
-				prSwRfb->ucOFLD, prSwRfb->fgHdrTran);
+			DBGLOG(RX, WARN, "[PKT-ROUTE] ucOFLD=%u fgHdrTran=%u len=%u wlan_idx=%u\n",
+				prSwRfb->ucOFLD, prSwRfb->fgHdrTran,
+				prSwRfb->u2RxByteCount, prSwRfb->ucWlanIdx);
+			DBGLOG_MEM8(RX, WARN, prSwRfb->pucRecvBuff + prChipInfo->rxd_size,
+				min_t(uint32_t, 64, prSwRfb->u2RxByteCount));
 			if ((prSwRfb->ucOFLD) || (prSwRfb->fgHdrTran)) {
 				if (HAL_IS_RX_DIRECT(prAdapter)) {
 					spin_lock_bh(&prGlueInfo->rSpinLock[

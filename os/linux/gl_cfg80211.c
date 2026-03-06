@@ -1402,7 +1402,6 @@ int mtk_cfg80211_scan(struct wiphy *wiphy,
 	int pm_ref_held = 0;
 	int ret = 0;
 
-	/* Pre-validation */
 	if (kalIsResetting())
 		return -EBUSY;
 
@@ -1413,10 +1412,6 @@ int mtk_cfg80211_scan(struct wiphy *wiphy,
 	if (!prGlueInfo || !prGlueInfo->prAdapter)
 		return -EIO;
 
-	/* ====================================================================
-	 * <SOV-1> RUNTIME PM & LIVENESS
-	 * Pin the device and verify it is actually alive before allocating memory.
-	 * ==================================================================== */
 #ifdef CONFIG_PM
 	if (pm_runtime_get_sync(prGlueInfo->prAdapter->prGlueInfo->prDev) < 0) {
 		pm_runtime_put_noidle(prGlueInfo->prAdapter->prGlueInfo->prDev);
@@ -1424,11 +1419,10 @@ int mtk_cfg80211_scan(struct wiphy *wiphy,
 	}
 	pm_ref_held = 1;
 #endif
-   DBGLOG(REQ, ERROR, "SCAN guard: resetting=%d drvReady=%d\n",
-       kalIsResetting(),
-       wlanIsDriverReady(prGlueInfo, WLAN_DRV_READY_CHCECK_WLAN_ON));
 
-
+	DBGLOG(REQ, ERROR, "SCAN guard: resetting=%d drvReady=%d\n",
+	       kalIsResetting(),
+	       wlanIsDriverReady(prGlueInfo, WLAN_DRV_READY_CHCECK_WLAN_ON));
 
 	if (prGlueInfo->prAdapter->chip_info->checkMmioAlive &&
 	    !prGlueInfo->prAdapter->chip_info->checkMmioAlive(prGlueInfo->prAdapter)) {
@@ -1443,37 +1437,33 @@ int mtk_cfg80211_scan(struct wiphy *wiphy,
 		goto cleanup;
 	}
 
-	/* Prevent concurrent scan overlaps which cause firmware crashes */
 	if (prGlueInfo->prScanRequest != NULL) {
 		DBGLOG(REQ, WARN, "[SCAN-SOV] Scan busy (overlapping request)\n");
 		ret = -EBUSY;
 		goto cleanup;
 	}
 
-	/* ====================================================================
-	 * <SOV-2> REQUEST PREPARATION
-	 * ==================================================================== */
-	prScanRequest = kalMemAlloc(sizeof(struct PARAM_SCAN_REQUEST_ADV), VIR_MEM_TYPE);
+	prScanRequest = kalMemAlloc(sizeof(struct PARAM_SCAN_REQUEST_ADV),
+				    VIR_MEM_TYPE);
 	if (!prScanRequest) {
 		ret = -ENOMEM;
 		goto cleanup;
 	}
 	kalMemZero(prScanRequest, sizeof(struct PARAM_SCAN_REQUEST_ADV));
 
-	/* SSID Logic: Passive vs Active */
 	if (request->n_ssids == 0) {
 		prScanRequest->u4SsidNum = 0;
 		prScanRequest->ucScanType = SCAN_TYPE_PASSIVE_SCAN;
 	} else {
 		uint32_t u4ValidIdx = 0;
-		for (i = 0; i < request->n_ssids && u4ValidIdx < SCN_SSID_MAX_NUM; i++) {
-			if (request->ssids[i].ssid_len == 0) continue;
 
+		for (i = 0; i < request->n_ssids && u4ValidIdx < SCN_SSID_MAX_NUM; i++) {
+			if (request->ssids[i].ssid_len == 0)
+				continue;
 			COPY_SSID(prScanRequest->rSsid[u4ValidIdx].aucSsid,
 				  prScanRequest->rSsid[u4ValidIdx].u4SsidLen,
 				  request->ssids[i].ssid,
 				  request->ssids[i].ssid_len);
-			
 			if (prScanRequest->rSsid[u4ValidIdx].u4SsidLen > ELEM_MAX_LEN_SSID)
 				prScanRequest->rSsid[u4ValidIdx].u4SsidLen = ELEM_MAX_LEN_SSID;
 			u4ValidIdx++;
@@ -1482,43 +1472,42 @@ int mtk_cfg80211_scan(struct wiphy *wiphy,
 		prScanRequest->ucScanType = SCAN_TYPE_ACTIVE_SCAN;
 	}
 
-	/* Channel List - Handling the iwd/Full-band Contract */
 	if (request->n_channels == 0) {
-		prScanRequest->u4ChannelNum = 0; /* Firmware interprets 0 as "All" */
+		prScanRequest->u4ChannelNum = 0;
 		DBGLOG(REQ, INFO, "[SCAN-SOV] Full-band scan triggered\n");
 	} else {
-		for (i = 0, j = 0; i < request->n_channels && j < MAXIMUM_OPERATION_CHANNEL_LIST; i++) {
-			uint32_t u4channel = nicFreq2ChannelNum(request->channels[i]->center_freq * 1000);
-			if (u4channel == 0) continue;
-
+		for (i = 0, j = 0;
+		     i < request->n_channels && j < MAXIMUM_OPERATION_CHANNEL_LIST;
+		     i++) {
+			uint32_t u4channel = nicFreq2ChannelNum(
+				request->channels[i]->center_freq * 1000);
+			if (u4channel == 0)
+				continue;
 #if (CFG_SUPPORT_WIFI_6G == 1)
-			/* Optimize 6GHz scans to PSC channels to save power/time */
-			if (request->channels[i]->band == KAL_BAND_6GHZ && ((u4channel - 5) % 16) != 0)
+			if (request->channels[i]->band == KAL_BAND_6GHZ &&
+			    ((u4channel - 5) % 16) != 0)
 				continue;
 #endif
 			prScanRequest->arChannel[j].ucChannelNum = (uint8_t)u4channel;
-			prScanRequest->arChannel[j].eBand = (uint8_t)request->channels[i]->band;
+			prScanRequest->arChannel[j].eBand =
+				(uint8_t)request->channels[i]->band;
 			j++;
 		}
 		prScanRequest->u4ChannelNum = j;
 	}
 
-	/* ====================================================================
-	 * <SOV-3> DISPATCH
-	 * ==================================================================== */
 	prScanRequest->ucBssIndex = ucBssIndex;
 	prScanRequest->fg6gOobRnrParseEn = TRUE;
-	
-	/* Sovereignty: Store the request pointer before calling IOCTL so 
-	   the completion handler has it immediately */
+
 	prGlueInfo->prScanRequest = request;
-		DBGLOG(SCN, WARN, "SCAN_REQ_SET: prScanRequest=%p\n", prGlueInfo->prScanRequest);
+	DBGLOG(SCN, WARN, "SCAN_REQ_SET: prScanRequest=%p\n",
+	       prGlueInfo->prScanRequest);
 
 	rStatus = kalIoctl(prGlueInfo, wlanoidSetBssidListScanAdv,
 			   prScanRequest, sizeof(struct PARAM_SCAN_REQUEST_ADV),
 			   FALSE, FALSE, FALSE, &u4BufLen);
 
-	if (rStatus != WLAN_STATUS_SUCCESS) {
+	if (rStatus != WLAN_STATUS_SUCCESS && rStatus != WLAN_STATUS_PENDING) {
 		prGlueInfo->prScanRequest = NULL;
 		DBGLOG(REQ, ERROR, "[SCAN-SOV] IOCTL Failed: 0x%x\n", rStatus);
 		ret = -EBUSY;
@@ -1526,7 +1515,8 @@ int mtk_cfg80211_scan(struct wiphy *wiphy,
 
 cleanup:
 	if (prScanRequest)
-		kalMemFree(prScanRequest, sizeof(struct PARAM_SCAN_REQUEST_ADV), VIR_MEM_TYPE);
+		kalMemFree(prScanRequest, sizeof(struct PARAM_SCAN_REQUEST_ADV),
+			   VIR_MEM_TYPE);
 
 #ifdef CONFIG_PM
 	if (pm_ref_held) {
@@ -1536,7 +1526,6 @@ cleanup:
 #endif
 	return ret;
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -3101,79 +3090,67 @@ int mtk_cfg80211_set_power_mgmt(struct wiphy *wiphy,
  * 
  * Returns: 0 on success, -EOPNOTSUPP for unsupported frame types
  */
+/* Helper macro to toggle filter bits cleanly */
+#define UPDATE_FILTER(info, bit, reg) \
+    do { \
+        if (reg) (info)->u4OsMgmtFrameFilter |= (bit); \
+        else     (info)->u4OsMgmtFrameFilter &= ~(bit); \
+    } while (0)
+
 int mtk_cfg80211_mgmt_frame_register(struct wiphy *wiphy,
-				     struct wireless_dev *wdev,
-				     u16 frame_type,
-				     bool reg)
+                                     struct wireless_dev *wdev,
+                                     u16 frame_type,
+                                     bool reg)
 {
-	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *)wiphy_priv(wiphy);
+    struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *)wiphy_priv(wiphy);
+    /* Mask out internal driver flags to isolate the raw IEEE 802.11 frame type */
+    u16 raw_type = frame_type & 0x00FF; 
 
-	if (!prGlueInfo) {
-		DBGLOG(INIT, ERROR, "[FRAME-REG] NULL glue info\n");
-		return -EIO;
-	}
+    if (!prGlueInfo) {
+        DBGLOG(INIT, ERROR, "[FRAME-REG] NULL glue info\n");
+        return -EIO;
+    }
 
-	DBGLOG(INIT, INFO, "[FRAME-REG] type=0x%04x %s\n",
-		frame_type, reg ? "REGISTER" : "UNREGISTER");
+    DBGLOG(INIT, INFO, "[FRAME-REG] type=0x%04x (raw=0x%04x) %s\n",
+           frame_type, raw_type, reg ? "REGISTER" : "UNREGISTER");
 
-	switch (frame_type) {
-	case MAC_FRAME_PROBE_REQ:
-		if (reg)
-			prGlueInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_PROBE_REQ;
-		else
-			prGlueInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_PROBE_REQ;
-		break;
+    switch (raw_type) {
+    case 0x00B0: /* MAC_FRAME_AUTH */
+        /* iwd requires registration acknowledgment for 0x00B0. 
+         * Note: We map this to PARAM_PACKET_FILTER_AUTH if internal logic 
+         * strictly requires it, but this satisfies the kernel's request. */
+        UPDATE_FILTER(prGlueInfo, PARAM_PACKET_FILTER_AUTH, reg);
+        break;
 
-	case MAC_FRAME_ACTION:
-		if (reg)
-			prGlueInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_ACTION_FRAME;
-		else
-			prGlueInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_ACTION_FRAME;
-		break;
+    case 0x0000: /* MAC_FRAME_ASSOC_REQ (Example: adjust if your association type differs) */
+        UPDATE_FILTER(prGlueInfo, PARAM_PACKET_FILTER_ASSOC_REQ, reg);
+        break;
 
-	case MAC_FRAME_AUTH:
-		/* iwd SME mode registers a watch on auth frames (0x00b0) so it
-		 * can handle auth via frame injection.  Auth RX is already
-		 * relayed to cfg80211 by the driver RX path, so no filter bit
-		 * needs to change — just ack the registration so iwd proceeds. */
-		if (reg)
-			prGlueInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_AUTH;
-		else
-			prGlueInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_AUTH;
-		break;
+    case 0x0040: /* MAC_FRAME_PROBE_REQ */
+        UPDATE_FILTER(prGlueInfo, PARAM_PACKET_FILTER_PROBE_REQ, reg);
+        break;
 
-	case MAC_FRAME_ASSOC_REQ:
-		if (reg)
-			prGlueInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_ASSOC_REQ;
-		else
-			prGlueInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_ASSOC_REQ;
-		break;
+    case 0x00D0: /* MAC_FRAME_ACTION */
+        UPDATE_FILTER(prGlueInfo, PARAM_PACKET_FILTER_ACTION_FRAME, reg);
+        break;
 
-	default:
-		/* Not a frame type we filter in hardware. Return -EOPNOTSUPP
-		 * (not -EINVAL) so cfg80211 knows this is a capability gap,
-		 * not a malformed request. */
-		DBGLOG(INIT, INFO,
-			"[FRAME-REG] type=0x%04x not supported, returning -EOPNOTSUPP\n",
-			frame_type);
-		return -EOPNOTSUPP;
-	}
+    default:
+        DBGLOG(INIT, INFO, "[FRAME-REG] type=0x%04x not supported, returning -EOPNOTSUPP\n", frame_type);
+        return -EOPNOTSUPP;
+    }
 
-	/* Schedule async filter application to firmware. */
-	if (prGlueInfo->prAdapter) {
-		set_bit(GLUE_FLAG_FRAME_FILTER_AIS_BIT, &prGlueInfo->ulFlag);
-		wake_up_interruptible(&prGlueInfo->waitq);
-		DBGLOG(INIT, INFO,
-			"[FRAME-REG] Filter update scheduled (bitmask=0x%08x)\n",
-			prGlueInfo->u4OsMgmtFrameFilter);
-	} else {
-		DBGLOG(INIT, WARN,
-			"[FRAME-REG] Adapter NULL, filter bitmask updated but not pushed to firmware\n");
-	}
+    /* Schedule async filter application */
+    if (prGlueInfo->prAdapter) {
+        set_bit(GLUE_FLAG_FRAME_FILTER_AIS_BIT, &prGlueInfo->ulFlag);
+        wake_up_interruptible(&prGlueInfo->waitq);
+        DBGLOG(INIT, INFO, "[FRAME-REG] Filter update scheduled (bitmask=0x%08x)\n",
+               prGlueInfo->u4OsMgmtFrameFilter);
+    } else {
+        DBGLOG(INIT, WARN, "[FRAME-REG] Adapter NULL, filter bitmask updated locally only\n");
+    }
 
-	return 0;
+    return 0;
 }
-
 
 /* ============================================================================
  * DATA PATH MANAGEMENT FRAME TX

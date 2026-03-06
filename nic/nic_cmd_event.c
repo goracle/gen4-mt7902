@@ -8361,69 +8361,61 @@ uint32_t nicUniCmdStaRecTagUapsd(struct ADAPTER *ad,
 	return tag->u2Length;
 }
 
-void nicUniCmdStaRecHandleEventPkt(IN struct ADAPTER
-	*prAdapter, IN struct CMD_INFO *prCmdInfo,
-	IN uint8_t *pucEventBuf)
+void nicUniCmdStaRecHandleEventPkt(IN struct ADAPTER *prAdapter,
+                                   IN struct CMD_INFO *prCmdInfo,
+                                   IN uint8_t *pucEventBuf)
 {
-	struct UNI_CMD_STAREC *uni_cmd =
-		(struct UNI_CMD_STAREC *) GET_UNI_CMD_DATA(prCmdInfo);
-	struct UNI_EVENT_CMD_RESULT *evt =
-		(struct UNI_EVENT_CMD_RESULT *)pucEventBuf;
+    struct UNI_CMD_STAREC *uni_cmd = (struct UNI_CMD_STAREC *)GET_UNI_CMD_DATA(prCmdInfo);
+    struct UNI_EVENT_CMD_RESULT *evt = (struct UNI_EVENT_CMD_RESULT *)pucEventBuf;
 
-	DBGLOG(NIC, INFO,
-		"[STAREC-CB] ucCID=0x%x UNI_CMD_ID_STAREC_INFO=0x%x status=%d wlanidx=%d\n",
-		evt->u2CID, UNI_CMD_ID_STAREC_INFO, evt->u4Status, uni_cmd->ucWlanIdxL);
+    DBGLOG(NIC, INFO, "[STAREC-CB] ucCID=0x%x UNI_CMD_ID_STAREC_INFO=0x%x status=%d wlanidx=%d\n",
+           evt->u2CID, UNI_CMD_ID_STAREC_INFO, evt->u4Status, uni_cmd->ucWlanIdxL);
 
-	if (evt->u2CID == UNI_CMD_ID_STAREC_INFO && evt->u4Status == 0) {
-		struct STA_RECORD *prStaRec = cnmGetStaRecByIndex(prAdapter,
-			secGetStaIdxByWlanIdx(prAdapter, uni_cmd->ucWlanIdxL));
-		if (!prStaRec)
-			return;
+    if (evt->u2CID != UNI_CMD_ID_STAREC_INFO || evt->u4Status != 0)
+        return;
 
+    struct STA_RECORD *prStaRec = cnmGetStaRecByIndex(prAdapter,
+                                  secGetStaIdxByWlanIdx(prAdapter, uni_cmd->ucWlanIdxL));
+    if (!prStaRec)
+        return;
 
-		switch (prStaRec->ucStaState) {
-		case STA_STATE_1:
-			DBGLOG(NIC, INFO,
-				"StaRec[%u] FW ACK state=1 (UNI), advancing to STATE_2\n",
-				prStaRec->ucIndex);
-			cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_2);
-			break;
-		case STA_STATE_2:
-			DBGLOG(NIC, INFO,
-				"StaRec[%u] FW ACK state=2 (UNI), sending STATE_3 cmd (SAA deferred)\n",
-				prStaRec->ucIndex);
-			cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_3);
-			break;
-		case STA_STATE_3:
-		  DBGLOG(CNM, INFO,
-			 "StaRec[%u] FW ACK state=3 — activating TX path\n",
-			 prStaRec->ucIndex);
+    switch (prStaRec->ucStaState) {
+    case STA_STATE_1:
+        DBGLOG(NIC, INFO, "StaRec[%u] FW ACK state=1 (UNI), advancing to STATE_2\n",
+               prStaRec->ucIndex);
+        cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_2);
+        break;
 
-		  if (prStaRec->fgIsTxAllowed) {
-		    DBGLOG(CNM, INFO,
-			   "StaRec[%u] STATE_3 already active, skipping\n",
-			   prStaRec->ucIndex);
-		    break;
-		  }
+    case STA_STATE_2:
+        /*
+         * Firmware ACK'd StaRec STATE_2. StaRec is set up; fire SAA
+         * so auth can proceed. State=3 must only be set by the SAA/AAA
+         * FSM after auth+assoc complete — NOT here.
+         */
+        DBGLOG(CNM, INFO, "StaRec[%u] FW ACK state=2 (UNI) — firing SAA for auth\n",
+               prStaRec->ucIndex);
+        aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
+        break;
 
-		  prStaRec->ucStaState = STA_STATE_3;
-		  qmActivateStaRec(prAdapter, prStaRec);
-		  nicTxUpdateStaRecDefaultRate(prAdapter, prStaRec);
-		  prStaRec->fgIsTxAllowed = TRUE;
-		  qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
-		  secPrivacySeekForEntry(prAdapter, prStaRec);
-		  cnmDumpStaRec(prAdapter, prStaRec->ucIndex);
-		  aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
-		  break;
+    case STA_STATE_3:
+        DBGLOG(CNM, INFO, "StaRec[%u] FW ACK state=3 (UNI) — activating TX path\n",
+               prStaRec->ucIndex);
+        if (!prStaRec->fgIsTxAllowed) {
+            qmActivateStaRec(prAdapter, prStaRec);
+            nicTxUpdateStaRecDefaultRate(prAdapter, prStaRec);
+            prStaRec->fgIsTxAllowed = TRUE;
+            qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
+            secPrivacySeekForEntry(prAdapter, prStaRec);
+            cnmDumpStaRec(prAdapter, prStaRec->ucIndex);
+        }
+        aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
+        break;
 
-		default:
-			DBGLOG(NIC, INFO,
-				"StaRec[%u] FW ACK state=%u (UNI, no-op)\n",
-				prStaRec->ucIndex, prStaRec->ucStaState);
-			break;
-		}
-
-	}
+    default:
+        DBGLOG(NIC, INFO, "StaRec[%u] FW ACK state=%u (UNI, no-op)\n",
+               prStaRec->ucIndex, prStaRec->ucStaState);
+        break;
+    }
 }
 
 
@@ -9160,6 +9152,10 @@ uint32_t nicUniCmdSetRxFilter(struct ADAPTER *ad,
 	tag->u2Tag = UNI_CMD_BAND_CONFIG_TAG_SET_RX_FILTER;
 	tag->u2Length = sizeof(*tag);
 	tag->u4RxPacketFilter = cmd->u4RxPacketFilter;
+	DBGLOG(RX, WARN, "[RX-FILTER] u4RxPacketFilter=0x%08x\n",
+		tag->u4RxPacketFilter);
+	DBGLOG(RX, WARN, "[RX-FILTER] u4RxPacketFilter=0x%08x\n",
+		tag->u4RxPacketFilter);
 
 	LINK_INSERT_TAIL(&info->rUniCmdList, &entry->rLinkEntry);
 
@@ -10558,7 +10554,6 @@ wlanSendSetQueryCmdHelper(IN struct ADAPTER *prAdapter,
 			pvSetQueryBuffer, u4SetQueryBufferLen,
 			eMethodint);
 
-	/* prepare info */
 	info.ucCID = ucCID;
 	info.ucExtCID = ucExtCID;
 	info.fgSetQuery = fgSetQuery;
@@ -10572,27 +10567,16 @@ wlanSendSetQueryCmdHelper(IN struct ADAPTER *prAdapter,
 	info.u4SetQueryBufferLen = u4SetQueryBufferLen;
 	LINK_INITIALIZE(&info.rUniCmdList);
 
-	/* collect unified cmd info */
-	DBGLOG(REQ, WARN, "[AUTH-DBG] === wlanSendSetQueryCmdHelper ===\n");
-	DBGLOG(REQ, WARN, "[AUTH-DBG] ucCID: 0x%x, Handler: %pS\n", 
-	       ucCID, arUniCmdTable[ucCID]);
-    
-	/* collect unified cmd info */
 	status = arUniCmdTable[ucCID](prAdapter, &info);
-    
-	DBGLOG(REQ, ERROR, "[AUTH-DBG] UniCmd handler returned: 0x%x\n", status);
-    
 	if (status != WLAN_STATUS_SUCCESS) {
-	  DBGLOG(REQ, ERROR, "[AUTH-DBG] *** UniCmd PREPARATION FAILED ***\n");
-	  DBGLOG(REQ, ERROR, "[AUTH-DBG] ucCID=0x%x returned status=0x%x\n", ucCID, status);
-	  goto done;
+		DBGLOG(REQ, ERROR, "UniCmd handler failed: CID=0x%x status=0x%x\n",
+			ucCID, status);
+		goto done;
 	}
 
 	link = &info.rUniCmdList;
-
 	LINK_FOR_EACH_ENTRY_SAFE(entry, next,
 		link, rLinkEntry, struct WIFI_UNI_CMD_ENTRY) {
-
 		DBGLOG(REQ, TRACE,
 			"UCMD[0x%x] SET[%d] RSP[%d] OID[%d] LEN[%d]\n",
 			entry->ucUCID, fgSetQuery, fgNeedResp, fgIsOid,
@@ -10607,20 +10591,16 @@ wlanSendSetQueryCmdHelper(IN struct ADAPTER *prAdapter,
 		if (status != WLAN_STATUS_SUCCESS &&
 		    status != WLAN_STATUS_PENDING) {
 			DBGLOG(REQ, ERROR,
-				"[AUTH-DBG] UniCmd TX failed UCID=0x%x status=0x%x\n",
+				"UniCmd TX failed: UCID=0x%x status=0x%x\n",
 				entry->ucUCID, status);
 			goto done;
 		}
 	}
 done:
-	/* clear any remaining entries on early exit */
 	LINK_FOR_EACH_ENTRY_SAFE(entry, next,
 		link, rLinkEntry, struct WIFI_UNI_CMD_ENTRY) {
-
 		LINK_REMOVE_KNOWN_ENTRY(link, entry);
 		nicUniCmdFreeEntry(prAdapter, entry);
 	}
-
 	return status;
 }
-
