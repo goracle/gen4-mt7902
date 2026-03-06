@@ -346,6 +346,7 @@ void glBusFreeIrq(void *pvData, void *pvCookie)
 
 	if (prDev->irq) {
 		disable_irq(prDev->irq);
+		synchronize_irq(prDev->irq);
 		free_irq(prDev->irq, pvCookie);
 		prDev->irq = 0;
 	}

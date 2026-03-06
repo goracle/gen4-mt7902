@@ -835,6 +835,29 @@ uint32_t wlanSendSetQueryUniCmdAdv(IN struct ADAPTER *prAdapter,
 		&prCmdInfo->ucCmdSeqNum,
 		&pucCmfBuf, S2D_INDEX_CMD_H2N,
 		ucOption);
+
+	DBGLOG(NIC, INFO,
+	       "UNI CMD TX: CID=0x%02x seq=%u len=%u hdr=%u opt=0x%x\n",
+	       prCmdInfo->ucCID,
+	       prCmdInfo->ucCmdSeqNum,
+	       prCmdInfo->u2InfoBufLen,
+	       prAdapter->chip_info->u2UniCmdTxHdrSize,
+	       ucOption);
+
+	print_hex_dump(KERN_INFO,
+		       "UNI_CMD: ",
+		       DUMP_PREFIX_OFFSET,
+		       16, 1,
+		       prCmdInfo->pucInfoBuffer,
+		       64,
+		       false);
+
+	DBGLOG(NIC, INFO,
+	       "UNI BUF PTR=%p alignment=%ld\n",
+	       prCmdInfo->pucInfoBuffer,
+	       (unsigned long)prCmdInfo->pucInfoBuffer & 3);
+
+
 	DBGLOG(NIC, INFO, "SEND uni CID=0x%02x seq=%u\n", prCmdInfo->ucCID, prCmdInfo->ucCmdSeqNum);
 	prCmdInfo->pucSetInfoBuffer = pucCmfBuf;
 	if (u4SetQueryInfoLen > 0 && pucInfoBuffer != NULL)

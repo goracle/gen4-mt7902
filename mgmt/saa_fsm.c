@@ -1408,6 +1408,8 @@ void saaFsmRunEventRxAuth(IN struct ADAPTER *prAdapter,
 	ucWlanIdx = prSwRfb->ucWlanIdx;
 
 	/* We should have the corresponding Sta Record. */
+	DBGLOG(SAA, WARN, "[RX-AUTH] called: wlanIdx=%d staRecIdx=%d prStaRec=%p\n",
+		ucWlanIdx, prSwRfb->ucStaRecIdx, prStaRec);
 	if (!prStaRec) {
 		DBGLOG(SAA, WARN,
 		       "Received a AuthResp: wlanIdx[%d] w/o corresponding staRec\n",

@@ -760,11 +760,15 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 		cnmMemFree(prAdapter, prAisFsmInfo->prPendingSAAMsg);
 	prAisFsmInfo->prPendingSAAMsg = NULL;
 
-	DBGLOG(AIS, INFO, "[AIS%d] Deferring SAA until StaRec STATE_1 ACK: Seq %u BSSID " MACSTR "\n",
+	DBGLOG(AIS, INFO, "[AIS%d] Deferring SAA until STATE_3 ACK: Seq %u BSSID " MACSTR "\n",
 	       ucBssIndex, prJoinReqMsg->ucSeqNum, MAC2STR(prBssDesc->aucBSSID));
 	prStaRec->fgIsValid = FALSE;
 	prAisFsmInfo->prPendingSAAMsg = prJoinReqMsg;
 	/* ucStaState is already STA_STATE_1 from bssCreateStaRecFromBssDesc -- keep it */
+	/* Do NOT send prPendingSAAMsg to mbox here -- aisFsmFirePendingSAA fires it
+	 * after STATE_3 ACK confirms WTBL is armed. Sending it now causes
+	 * saaFsmRunEventStart to call saaSendAuthAssoc before STATE_3, racing WTBL.
+	 */
 	cnmStaSendUpdateCmd(prAdapter, prStaRec, TRUE);
 }
 

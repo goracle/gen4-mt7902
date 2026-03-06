@@ -605,7 +605,18 @@ static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *pr
         return rc;
 
     frame_start = relay_find_frame_start(buf_start, buf_end, &frame_len, &ucFC);
-    if (!frame_start || frame_len < 36)
+    if (!frame_start)
+        return -EINVAL;
+
+    /* Only beacons and probe responses carry the fixed beacon fields
+     * (timestamp, beacon interval, capability) starting at offset 24.
+     * Auth, assoc, and other mgmt frames are shorter — skip relay for them.
+     */
+    if ((ucFC & MASK_FRAME_TYPE) != MAC_FRAME_BEACON &&
+        (ucFC & MASK_FRAME_TYPE) != MAC_FRAME_PROBE_RSP)
+        return 0;
+
+    if (frame_len < 36)
         return -EINVAL;
 
     ucChnl = prSwRfb->ucChnlNum;
@@ -1709,14 +1720,34 @@ static void nicUniEventCmdResult(struct ADAPTER *prAdapter,
 
 	prCmdInfo = nicGetPendingCmdInfo(prAdapter, prEvent->ucSeqNum);
 	if (!prCmdInfo) {
+        print_hex_dump(KERN_WARNING,
+                       "UNI_CMD_RESULT_RAW: ",
+                       DUMP_PREFIX_OFFSET,
+                       16, 1,
+                       prEvent->aucBuffer,
+                       64,
+                       false);
+
 		if (prResult->u4Status == 0)
-			DBGLOG(RX, TRACE, "[CMD-RESULT] no pending cmd SEQ=%u CID=0x%04x status=%u\n",
+			DBGLOG(RX, WARN, "[CMD-RESULT] no pending cmd SEQ=%u CID=0x%04x status=%u\n",
 				prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
 		else
 			DBGLOG(RX, WARN, "[CMD-RESULT] no pending cmd SEQ=%u CID=0x%04x status=%u\n",
 				prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
 		return;
 	}
+
+	DBGLOG(RX, WARN,
+	       "UNI_CMD_RESULT: CID=0x%x Seq=%u Status=%u\n",
+	       prResult->u2CID,
+	       prEvent->ucSeqNum,
+	       prResult->u4Status);
+
+	DBGLOG(RX, WARN,
+	       "event_seq=%u result_seq=%u CID=0x%x status=%u\n",
+	       prEvent->ucSeqNum,
+	       prResult->u2CID,
+	       prResult->u4Status);
 
 	DBGLOG(RX, WARN, "[CMD-RESULT] matched SEQ=%u CID=0x%04x status=%u\n",
 			prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
@@ -2280,6 +2311,8 @@ void nicRxProcessMgmtPacket(IN struct ADAPTER *prAdapter,
 
     /* Extract management subtype from the 802.11 header */
     ucSubtype = (*(uint8_t *)(prSwRfb->pvHeader) & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
+    DBGLOG(RX, WARN, "[MGMT-RX] subtype=0x%02x wlanIdx=%d staRecIdx=%d pktType=%d\n",
+        ucSubtype, prSwRfb->ucWlanIdx, prSwRfb->ucStaRecIdx, prSwRfb->ucPacketType);
 
     /* Extract the frame type (beacon/probe vs other mgmt) */
     u2TxFrameCtrl = (*(uint8_t *)(prSwRfb->pvHeader) & MASK_FRAME_TYPE);

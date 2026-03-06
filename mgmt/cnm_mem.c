@@ -141,7 +141,7 @@ const uint8_t aucValidDataRate[] = {
 static void cnmStaRoutinesForAbort(struct ADAPTER *prAdapter,
 	struct STA_RECORD *prStaRec);
 
-static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
+static __maybe_unused void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
 	struct CMD_INFO *prCmdInfo, uint8_t *pucEventBuf);
 
 static void
@@ -898,6 +898,10 @@ void cnmStaRecChangeState(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec
 		return;
 	}
 
+	DBGLOG(MEM, WARN, "cnmStaRecChangeState StaRec[%u] %u->%u\n",
+		prStaRec->ucIndex, prStaRec->ucStaState, ucNewState);
+	/* dump_stack(); */
+
 	/* Do nothing when following state transitions happen,
 	 * other 6 conditions should be sync to FW, including 1-->1, 3-->3
 	 */
@@ -917,7 +921,7 @@ void cnmStaRecChangeState(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec
 	} else if (ucNewState == STA_STATE_2
 		&& prStaRec->ucStaState == STA_STATE_1) {
 		/* Auth path: need FW ACK before TX can proceed */
-		fgNeedResp = TRUE;
+		fgNeedResp = FALSE;
 	} else {
 		if (ucNewState != prStaRec->ucStaState
 			&& prStaRec->ucStaState == STA_STATE_3)
@@ -956,7 +960,7 @@ void cnmStaRecChangeState(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec
  * @return (none)
  */
 /*----------------------------------------------------------------------------*/
-static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
+static __maybe_unused void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
                                     struct CMD_INFO *prCmdInfo,
                                     uint8_t *pucEventBuf)
 {
@@ -975,67 +979,27 @@ static void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
 	switch (prStaRec->ucStaState) {
 	case STA_STATE_1:
 		/*
-		 * FW ack'd WTBL allocation. Advance to STATE_2, wait for
-		 * next ACK. QM and SAA are not touched yet.
+		 * UNI path owns STATE_1->STATE_2 transition.
+		 * Doing it here too causes duplicate STATE_2/STATE_3 cmds,
+		 * two STATE_3 ACKs, and aisFsmFirePendingSAA firing before
+		 * WTBL is fully armed.
 		 */
 		DBGLOG(MEM, INFO,
-		       "StaRec[%u] FW ACK state=1, advancing to STATE_2\n",
+		       "StaRec[%u] legacy STATE_1 ACK — UNI path owns transition, skipping\n",
 		       prStaRec->ucIndex);
-		cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_2);
 		break;
 
 	case STA_STATE_2:
-		/*
-		 * FW ack'd STATE_2. Send STATE_3 cmd and wait for its ACK.
-		 *
-		 * Do NOT activate QM or fire SAA here. The auth frame travels
-		 * via WFDMA data ring; the STATE_3 cmd travels via the cmd ring
-		 * (ring 15). There is no ordering guarantee between the two rings
-		 * inside the MCU. If we fire SAA now, the auth frame can reach
-		 * LMAC before the WTBL is armed by STATE_3, and FW flushes it
-		 * immediately with UNI_TXDONE status=33 / sn=0xFFFF.
-		 *
-		 * cnmStaRecChangeState sets ucStaState=3 synchronously, so the
-		 * STATE_3 ACK handler below will see case STA_STATE_3 and fire
-		 * SAA only after FW confirms the WTBL is fully committed.
-		 */
+		/* UNI path owns STATE_2->STATE_3 transition. No-op here. */
 		DBGLOG(MEM, INFO,
-		       "StaRec[%u] FW ACK state=2, sending STATE_3 cmd"
-		       " (SAA deferred until STATE_3 ACK)\n",
+		       "StaRec[%u] legacy STATE_2 ACK — UNI path owns transition, skipping\n",
 		       prStaRec->ucIndex);
-		cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_3);
 		break;
 
 	case STA_STATE_3:
 	  DBGLOG(CNM, INFO,
-		 "StaRec[%u] FW ACK state=3 — activating TX path\n",
+		 "StaRec[%u] legacy STATE_3 ACK — UNI path owns activation, skipping\n",
 		 prStaRec->ucIndex);
-
-	  if (!prStaRec->fgIsInUse) {
-	    DBGLOG(CNM, ERROR,
-		   "StaRec[%u] not in use — abort TX enable\n",
-		   prStaRec->ucIndex);
-	    break;
-	  }
-
-	  if (prStaRec->fgIsTxAllowed) {
-	    DBGLOG(CNM, INFO,
-		   "StaRec[%u] STATE_3 already active, skipping\n",
-		   prStaRec->ucIndex);
-	    break;
-	  }
-
-	  qmActivateStaRec(prAdapter, prStaRec);
-	  nicTxUpdateStaRecDefaultRate(prAdapter, prStaRec);
-	  prStaRec->fgIsTxAllowed = TRUE;
-	  qmSetStaRecTxAllowed(prAdapter, prStaRec, TRUE);
-
-	  DBGLOG(CNM, INFO,
-		 "MT7902 STA[%u] ACTIVE — TxAllowed=%u\n",
-		 prStaRec->ucIndex,
-		 prStaRec->fgIsTxAllowed);
-
-	  aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
 	  break;
 
 	default:
@@ -1268,7 +1232,7 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 		TRUE,					/* fgSetQuery */
 		fgNeedResp,				/* fgNeedResp */
 		FALSE,					/* fgIsOid */
-		fgNeedResp ? cnmStaRecHandleEventPkt : NULL, NULL,
+		fgNeedResp ? nicUniCmdStaRecHandleEventPkt : NULL, NULL,
 		/* pfCmdTimeoutHandler */
 		sizeof(struct CMD_UPDATE_STA_RECORD),	/* u4SetQueryInfoLen */
 		(uint8_t *) prCmdContent,	/* pucInfoBuffer */

@@ -2503,7 +2503,12 @@ uint32_t nicTxCmd(IN struct ADAPTER *prAdapter,
 		if (prMsduInfo->pfTxDoneHandler) {
 			prMsduInfo->ucPID = nicTxAssignPID(prAdapter,
 				prMsduInfo->ucWlanIndex);
-			DBGLOG(TX, WARN, "[MGMT-PID] WIDX=%u assigned PID=%u\n",
+			HAL_MAC_CONNAC2X_TXD_SET_PID(
+				(struct HW_MAC_CONNAC2X_TX_DESC *)prMsduInfo->aucTxDescBuffer,
+				prMsduInfo->ucPID);
+			HAL_MAC_CONNAC2X_TXD_SET_TXS_TO_MCU(
+				(struct HW_MAC_CONNAC2X_TX_DESC *)prMsduInfo->aucTxDescBuffer);
+			DBGLOG(TX, WARN, "[MGMT-PID] WIDX=%u assigned PID=%u written to TXD\n",
 				prMsduInfo->ucWlanIndex, prMsduInfo->ucPID);
 		}
 

@@ -8368,7 +8368,7 @@ void nicUniCmdStaRecHandleEventPkt(IN struct ADAPTER *prAdapter,
     struct UNI_CMD_STAREC *uni_cmd = (struct UNI_CMD_STAREC *)GET_UNI_CMD_DATA(prCmdInfo);
     struct UNI_EVENT_CMD_RESULT *evt = (struct UNI_EVENT_CMD_RESULT *)pucEventBuf;
 
-    DBGLOG(NIC, INFO, "[STAREC-CB] ucCID=0x%x UNI_CMD_ID_STAREC_INFO=0x%x status=%d wlanidx=%d\n",
+    DBGLOG(NIC, WARN, "[STAREC-CB] ucCID=0x%x UNI_CMD_ID_STAREC_INFO=0x%x status=%d wlanidx=%d\n",
            evt->u2CID, UNI_CMD_ID_STAREC_INFO, evt->u4Status, uni_cmd->ucWlanIdxL);
 
     if (evt->u2CID != UNI_CMD_ID_STAREC_INFO || evt->u4Status != 0)
@@ -8387,14 +8387,9 @@ void nicUniCmdStaRecHandleEventPkt(IN struct ADAPTER *prAdapter,
         break;
 
     case STA_STATE_2:
-        /*
-         * Firmware ACK'd StaRec STATE_2. StaRec is set up; fire SAA
-         * so auth can proceed. State=3 must only be set by the SAA/AAA
-         * FSM after auth+assoc complete — NOT here.
-         */
-        DBGLOG(CNM, INFO, "StaRec[%u] FW ACK state=2 (UNI) — firing SAA for auth\n",
+        DBGLOG(CNM, INFO, "StaRec[%u] FW ACK state=2 (UNI) — sending STATE_3 cmd\n",
                prStaRec->ucIndex);
-        aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
+        cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_3);
         break;
 
     case STA_STATE_3:
