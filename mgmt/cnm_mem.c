@@ -879,76 +879,94 @@ struct STA_RECORD *cnmGetStaRecByAddress(struct ADAPTER *prAdapter,
  * @return (none)
  */
 /*----------------------------------------------------------------------------*/
-void cnmStaRecChangeState(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec
-						  , uint8_t ucNewState)
+void cnmStaRecChangeState(struct ADAPTER *prAdapter,
+                         struct STA_RECORD *prStaRec,
+                         uint8_t ucNewState)
 {
-	u_int8_t fgNeedResp;
+    u_int8_t fgNeedResp = FALSE;
 
-	if (!prAdapter)
-		return;
+    if (!prAdapter)
+        return;
 
-	if (!prStaRec) {
-		log_dbg(MEM, WARN, "%s: StaRec is NULL, skip!\n", __func__);
-		return;
-	}
+    if (!prStaRec) {
+        DBGLOG(MEM, WARN, "%s: StaRec is NULL, skip!\n", __func__);
+        return;
+    }
 
-	if (!prStaRec->fgIsInUse) {
-		log_dbg(MEM, WARN, "%s: StaRec[%u] is not in use, skip!\n",
-				__func__, prStaRec->ucIndex);
-		return;
-	}
+    if (!prStaRec->fgIsInUse) {
+        DBGLOG(MEM, WARN, "%s: StaRec[%u] is not in use, skip!\n",
+               __func__, prStaRec->ucIndex);
+        return;
+    }
 
-	DBGLOG(MEM, WARN, "cnmStaRecChangeState StaRec[%u] %u->%u\n",
-		   prStaRec->ucIndex, prStaRec->ucStaState, ucNewState);
-	/* dump_stack(); */
+    DBGLOG(MEM, WARN, "cnmStaRecChangeState StaRec[%u] %u->%u\n",
+           prStaRec->ucIndex, prStaRec->ucStaState, ucNewState);
 
-	/* Do nothing when following state transitions happen,
-	 * other 6 conditions should be sync to FW, including 1-->1, 3-->3
-	 */
-	if (ucNewState == STA_STATE_1
-		&& prStaRec->ucStaState == STA_STATE_2) {
-		prStaRec->ucStaState = ucNewState;
-		return;
-	}
+    /*
+     * Preserve historical/special semantics:
+     * If firmware/logic requests moving from STA_STATE_2 back to STA_STATE_1,
+     * accept it and return early without sending update to FW/other subsystems.
+     * (This mirrors the old behaviour in-tree.)
+     */
+    if (ucNewState == STA_STATE_1 && prStaRec->ucStaState == STA_STATE_2) {
+        prStaRec->ucStaState = ucNewState;
+        return;
+    }
 
-	fgNeedResp = FALSE;
-	if (ucNewState == STA_STATE_3) {
-		/* secFsmEventStart(prAdapter, prStaRec); */
-		if (ucNewState != prStaRec->ucStaState) {
-			fgNeedResp = TRUE;
-			cnmDumpStaRec(prAdapter, prStaRec->ucIndex);
-		}
-	} else if (ucNewState == STA_STATE_2
-			   && prStaRec->ucStaState == STA_STATE_1) {
-		/* Auth path: need FW ACK before TX can proceed */
-		fgNeedResp = TRUE;
-	} else {
-		if (ucNewState != prStaRec->ucStaState
-			&& prStaRec->ucStaState == STA_STATE_3)
-			qmDeactivateStaRec(prAdapter, prStaRec);
-		fgNeedResp = FALSE;
-	}
-	prStaRec->ucStaState = ucNewState;
+    /*
+     * Default: no FW response required.
+     * Decide if this transition requires FW sync (fgNeedResp).
+     */
+    fgNeedResp = FALSE;
 
-	cnmStaSendUpdateCmd(prAdapter, prStaRec, fgNeedResp);
+    if (ucNewState == STA_STATE_3) {
+        /*
+         * Entering STA_STATE_3 (fully associated/authenticated).
+         * If this is actually a state-change, we will notify FW and
+         * dump the STA record for debug.
+         */
+        if (ucNewState != prStaRec->ucStaState) {
+            fgNeedResp = TRUE;
+            cnmDumpStaRec(prAdapter, prStaRec->ucIndex);
+        }
+    } else if (ucNewState == STA_STATE_2 && prStaRec->ucStaState == STA_STATE_1) {
+        /*
+         * Auth path: moving from 1 -> 2 indicates we must wait for FW ACK
+         * before transmitting authentication frames. Mark fgNeedResp so
+         * that the update command requests a response from firmware.
+         */
+        fgNeedResp = TRUE;
+    } else {
+        /*
+         * Any other transition:
+         * If we're leaving STA_STATE_3 for something else, deactivate
+         * the STA in QM (so pending TX won't be allowed), and do not
+         * require FW ACK for this transition by default.
+         */
+        if (ucNewState != prStaRec->ucStaState && prStaRec->ucStaState == STA_STATE_3) {
+            qmDeactivateStaRec(prAdapter, prStaRec);
+        }
+        fgNeedResp = FALSE;
+    }
 
-#if 1	/* Marked for MT6630 */
+    /* update local state and sync to firmware if needed */
+    prStaRec->ucStaState = ucNewState;
+    cnmStaSendUpdateCmd(prAdapter, prStaRec, fgNeedResp);
+
 #if CFG_ENABLE_WIFI_DIRECT
-	/* To do: Confirm if it is invoked here or other location, but it should
-	 *        be invoked after state sync of STA_REC
-	 * Update system operation parameters for AP mode
-	 */
-	if (prAdapter->fgIsP2PRegistered && (IS_STA_IN_P2P(prStaRec))) {
-		struct BSS_INFO *prBssInfo;
+    /*
+     * For P2P/AP mode: after state sync, we might need to update AP params.
+     * This was present in original code guarded by fgIsP2PRegistered check.
+     */
+    if (prAdapter->fgIsP2PRegistered && IS_STA_IN_P2P(prStaRec)) {
+        struct BSS_INFO *prBssInfo;
 
-		prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter,
-										  prStaRec->ucBssIndex);
-
-		if (prBssInfo->eCurrentOPMode == OP_MODE_ACCESS_POINT)
-			rlmUpdateParamsForAP(prAdapter, prBssInfo, FALSE);
-	}
-#endif
-#endif
+        prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, prStaRec->ucBssIndex);
+        if (prBssInfo && prBssInfo->eCurrentOPMode == OP_MODE_ACCESS_POINT) {
+            rlmUpdateParamsForAP(prAdapter, prBssInfo, FALSE);
+        }
+    }
+#endif /* CFG_ENABLE_WIFI_DIRECT */
 }
 
 /*----------------------------------------------------------------------------*/

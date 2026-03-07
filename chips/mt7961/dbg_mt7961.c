@@ -1656,7 +1656,7 @@ u_int8_t mt7961_show_debug_sop_info(struct ADAPTER *prAdapter,
 #endif
 		break;
 	case SLAVENORESP:
-		DBGLOG(HAL, ERROR, "Slave no response!\n");
+		DBGLOG(HAL, ERROR, "Device not responding!\n");
 #if defined(_HIF_USB)
 		usb_mt7961_dump_subsys_debug_cr(prAdapter);
 		usb_mt7961_dump_conninfra_debug_cr(prAdapter);

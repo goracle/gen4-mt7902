@@ -1288,6 +1288,10 @@ u_int8_t glBusInit(void *pvData)
            (unsigned long)pci_resource_len(pdev, 0),
            (unsigned long)pci_resource_start(pdev, 0));
 
+    {
+        uint32_t glo_raw = readl(CSRBaseAddress + 0xd4014);
+        printk(KERN_ERR "[mt7902] GLO_CFG raw read at ioremap+0xd4014 = 0x%08x\n", glo_raw);
+    }
     if (!CSRBaseAddress) {
         DBGLOG(INIT, ERROR,
                "ioremap failed for device %s, BAR 0 0x%llx len 0x%llx\n",

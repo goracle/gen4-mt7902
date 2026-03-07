@@ -371,7 +371,7 @@ u_int8_t mt7922_show_debug_sop_info(struct ADAPTER *prAdapter,
 		pcie_mt7922_dump_conninfra_debug_cr(prAdapter, ucCase);
 		break;
 	case SLAVENORESP:
-		DBGLOG(HAL, ERROR, "Slave no response!\n");
+		DBGLOG(HAL, ERROR, "Device not responding!\n");
 		pcie_mt7922_dump_wfsys_debug_cr(prAdapter, ucCase);
 		pcie_mt7922_dump_bgfsys_debug_cr(prAdapter, ucCase);
 		pcie_mt7922_dump_conninfra_debug_cr(prAdapter, ucCase);

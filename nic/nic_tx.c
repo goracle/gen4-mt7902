@@ -3278,11 +3278,17 @@ u_int8_t nicTxProcessMngPacket(IN struct ADAPTER *prAdapter,
 	prStaRec = cnmGetStaRecByIndex(prAdapter,
 				       prMsduInfo->ucStaRecIndex);
 
-	/* MMPDU: force stick to TC4 */
-	if (prMsduInfo->fgMgmtUseDataQ)
-		prMsduInfo->ucTC = TC0_INDEX;
-	else
-		prMsduInfo->ucTC = TC4_INDEX;
+	
+DBGLOG(TX, WARN,
+"[MGMT] useDataQ=%d tc(before)=%d sta=%d bss=%d len=%d\n",
+prMsduInfo->fgMgmtUseDataQ,
+prMsduInfo->ucTC,
+prMsduInfo->ucStaRecIndex,
+prMsduInfo->ucBssIndex,
+prMsduInfo->u2FrameLength);
+
+/* MMPDU: force stick to TC4 */
+    prMsduInfo->ucTC = TC4_INDEX;
 
 	/* No Tx descriptor template for MMPDU */
 	prMsduInfo->fgIsTXDTemplateValid = FALSE;
@@ -3543,41 +3549,61 @@ uint32_t nicTxEnqueueMsdu(IN struct ADAPTER *prAdapter,
     QUEUE_INITIALIZE(&qDataPort0);
     QUEUE_INITIALIZE(&qDataPort1);
 
-    /* 1. Categorize and queue management/data frames */
+    /* 1. Categorize and queue management/data frames.
+     *    Management frames are routed based on fgMgmtUseDataQ:
+     *      - fgMgmtUseDataQ == TRUE  -> DataPort0 (data queue path)
+     *      - fgMgmtUseDataQ == FALSE -> DataPort1 (command queue path)
+     */
     while (prMsduInfo) {
-        prNextMsduInfo = (struct MSDU_INFO *) QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *) prMsduInfo);
+        prNextMsduInfo = (struct MSDU_INFO *)
+                         QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *) prMsduInfo);
         QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *) prMsduInfo) = NULL;
 
         if (prMsduInfo->eSrc == TX_PACKET_MGMT) {
             if (nicTxProcessMngPacket(prAdapter, prMsduInfo)) {
                 if (prMsduInfo->fgMgmtUseDataQ) {
-                    QUEUE_INSERT_TAIL(&qDataPort0, (struct QUE_ENTRY *) prMsduInfo);
+                    /* Send management via data path (direct to HIF) */
+                    QUEUE_INSERT_TAIL(&qDataPort0,
+                                      (struct QUE_ENTRY *) prMsduInfo);
                 } else {
-                    QUEUE_INSERT_TAIL(&qDataPort1, (struct QUE_ENTRY *) prMsduInfo);
+                    /* Send management via command queue */
+                    QUEUE_INSERT_TAIL(&qDataPort1,
+                                      (struct QUE_ENTRY *) prMsduInfo);
                 }
             } else {
                 DBGLOG(TX, WARN, "Invalid MGMT[0x%p] BSS[%u] STA[%u], free it\n",
-                       prMsduInfo, prMsduInfo->ucBssIndex, prMsduInfo->ucStaRecIndex);
+                       prMsduInfo, prMsduInfo->ucBssIndex,
+                       prMsduInfo->ucStaRecIndex);
                 cnmMgtPktFree(prAdapter, prMsduInfo);
             }
         } else {
+            /* Data frames always go to DataPort0 */
             QUEUE_INSERT_TAIL(&qDataPort0, (struct QUE_ENTRY *) prMsduInfo);
         }
 
         prMsduInfo = prNextMsduInfo;
     }
 
-    /* 2. Process DataPort0 (Direct to HIF, bypass QM) */
-    if (qDataPort0.u4NumElem) {
-        struct MSDU_INFO *prDirectMsdu = (struct MSDU_INFO *) QUEUE_GET_HEAD(&qDataPort0);
+    /* 2. Process DataPort0 (Direct to HIF, bypass QM)
+     *    Process every MSDU on qDataPort0 and push it toward the HIF.
+     */
+    while (qDataPort0.u4NumElem) {
+        struct MSDU_INFO *prDirectMsdu = NULL;
         bool bSkbValid = true;
 
-        if (prDirectMsdu->eSrc == TX_PACKET_OS || prDirectMsdu->eSrc == TX_PACKET_OS_OID) {
+        /* Pop head */
+        QUEUE_REMOVE_HEAD(&qDataPort0, prDirectMsdu, struct MSDU_INFO *);
+        if (!prDirectMsdu)
+            break;
+
+        if (prDirectMsdu->eSrc == TX_PACKET_OS ||
+            prDirectMsdu->eSrc == TX_PACKET_OS_OID) {
+
             struct sk_buff *prSkb = (struct sk_buff *) prDirectMsdu->prPacket;
             if (prSkb) {
-                uint32_t u4HeadRoom = NIC_TX_DESC_AND_PADDING_LENGTH + 
+                uint32_t u4HeadRoom = NIC_TX_DESC_AND_PADDING_LENGTH +
                                       prAdapter->chip_info->txd_append_size;
-                
+
                 if (skb_headroom(prSkb) < u4HeadRoom) {
                     struct sk_buff *prNewSkb = skb_realloc_headroom(prSkb, u4HeadRoom);
                     if (prNewSkb) {
@@ -3593,45 +3619,52 @@ uint32_t nicTxEnqueueMsdu(IN struct ADAPTER *prAdapter,
 
         if (bSkbValid) {
             DBGLOG(TX, INFO, "[DIRECT-TX] auth/mgmt via dataQ, bypassing QM\n");
+            /* This expects a single MSDU (head of list) — nicTxMsduInfoListMthread
+             * may further walk a chain from prDirectMsdu->next if it expects it.
+             */
             nicTxMsduInfoListMthread(prAdapter, prDirectMsdu);
             kalSetTxEvent2Hif(prAdapter->prGlueInfo);
         } else {
-            /* If reallocation failed, we drop rather than process corrupted data */
+            /* If reallocation failed, drop the frame and notify upper layer */
             if (prDirectMsdu->pfTxDoneHandler) {
-                prDirectMsdu->pfTxDoneHandler(prAdapter, prDirectMsdu, TX_RESULT_DROPPED_IN_DRIVER);
+                prDirectMsdu->pfTxDoneHandler(prAdapter, prDirectMsdu,
+                                              TX_RESULT_DROPPED_IN_DRIVER);
             }
             cnmMgtPktFree(prAdapter, prDirectMsdu);
         }
+    }
 
 #if ARP_MONITER_ENABLE
-        if (prAdapter->cArpNoResponseIdx >= 0) {
+    if (prAdapter->cArpNoResponseIdx >= 0) {
 #if CFG_SUPPORT_DATA_STALL
-            KAL_REPORT_ERROR_EVENT(prAdapter, EVENT_ARP_NO_RESPONSE, prAdapter->cArpNoResponseIdx);
+        KAL_REPORT_ERROR_EVENT(prAdapter, EVENT_ARP_NO_RESPONSE, prAdapter->cArpNoResponseIdx);
 #endif
-            aisBssBeaconTimeout(prAdapter, prAdapter->cArpNoResponseIdx);
-            prAdapter->cArpNoResponseIdx = -1;
-        }
+        aisBssBeaconTimeout(prAdapter, prAdapter->cArpNoResponseIdx);
+        prAdapter->cArpNoResponseIdx = -1;
+    }
 #endif
 
-        /* Post-process dropped packets (assuming QM logic populates this elsewhere in a broader scope) */
-        if (prRetMsduInfo) {
-            DBGLOG(TX, WARN, "[QM-DROP] qmEnqueueTxPackets returned non-null, frame dropped\n");
-            nicTxFreeMsduInfoPacket(prAdapter, prRetMsduInfo);
-            nicTxReturnMsduInfo(prAdapter, prRetMsduInfo);
-        }
+    /* Post-process dropped packets (assuming QM logic populates this elsewhere in a broader scope) */
+    if (prRetMsduInfo) {
+        DBGLOG(TX, WARN, "[QM-DROP] qmEnqueueTxPackets returned non-null, frame dropped\n");
+        nicTxFreeMsduInfoPacket(prAdapter, prRetMsduInfo);
+        nicTxReturnMsduInfo(prAdapter, prRetMsduInfo);
     }
 
     /* 3. Process DataPort1 (Send to Command Queue) */
     if (qDataPort1.u4NumElem) {
-        struct MSDU_INFO *prMsduInfoHead = (struct MSDU_INFO *) QUEUE_GET_HEAD(&qDataPort1);
-        bool bHasEnoughCmds = (nicTxGetFreeCmdCount(prAdapter) >= NIC_TX_CMD_INFO_RESERVED_COUNT);
+        struct MSDU_INFO *prMsduInfoHead =
+            (struct MSDU_INFO *) QUEUE_GET_HEAD(&qDataPort1);
+        bool bHasEnoughCmds =
+            (nicTxGetFreeCmdCount(prAdapter) >= NIC_TX_CMD_INFO_RESERVED_COUNT);
 
         if (!bHasEnoughCmds) {
             u4Status = WLAN_STATUS_FAILURE;
         }
 
         while (prMsduInfoHead) {
-            prNextMsduInfo = (struct MSDU_INFO *) QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *) prMsduInfoHead);
+            prNextMsduInfo = (struct MSDU_INFO *)
+                             QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *) prMsduInfoHead);
             struct CMD_INFO *prCmdInfo = NULL;
 
             if (bHasEnoughCmds) {
@@ -3662,7 +3695,8 @@ uint32_t nicTxEnqueueMsdu(IN struct ADAPTER *prAdapter,
                 /* Drop packet if out of commands OR allocation failed */
                 u4Status = WLAN_STATUS_FAILURE;
                 if (prMsduInfoHead->pfTxDoneHandler != NULL) {
-                    prMsduInfoHead->pfTxDoneHandler(prAdapter, prMsduInfoHead, TX_RESULT_DROPPED_IN_DRIVER);
+                    prMsduInfoHead->pfTxDoneHandler(prAdapter, prMsduInfoHead,
+                                                    TX_RESULT_DROPPED_IN_DRIVER);
                 }
                 cnmMgtPktFree(prAdapter, prMsduInfoHead);
             }
@@ -3672,12 +3706,14 @@ uint32_t nicTxEnqueueMsdu(IN struct ADAPTER *prAdapter,
     }
 
     /* 4. Trigger Service Thread */
-    if (prTxCtrl->i4TxMgmtPendingNum > 0 || kalGetTxPendingFrameCount(prAdapter->prGlueInfo) > 0) {
+    if (prTxCtrl->i4TxMgmtPendingNum > 0 ||
+        kalGetTxPendingFrameCount(prAdapter->prGlueInfo) > 0) {
         kalSetEvent(prAdapter->prGlueInfo);
     }
 
     return u4Status;
 }
+
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief this function returns WLAN index

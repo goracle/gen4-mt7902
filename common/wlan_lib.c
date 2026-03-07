@@ -3930,34 +3930,24 @@ uint32_t wlanAccessRegisterStatus(IN struct ADAPTER *prAdapter,
 			u4Status = WLAN_STATUS_FAILURE;
 		} else if (nicRxWaitResponse(prAdapter, ucPortIdx, prEvent,
 		    u4EventLen, &u4RxPktLength) != WLAN_STATUS_SUCCESS) {
-			GL_USER_DEFINE_RESET_TRIGGER(prAdapter,
-						     RST_CMD_EVT_FAIL,
-						     RST_FLAG_DO_CORE_DUMP |
-						    RST_FLAG_PREVENT_POWER_OFF);
 			u4Status = WLAN_STATUS_FAILURE;
 		} else {
 			prInitEvent = (struct INIT_WIFI_EVENT *)
 				(prEvent + prChipInfo->rxd_size);
+			print_hex_dump(KERN_INFO, "RXBUF: ", DUMP_PREFIX_OFFSET, 16, 1, prEvent, prChipInfo->rxd_size + prChipInfo->init_event_size + 8, false);
+			{ int _i; for (_i = 0; _i < 40; _i++) { uint8_t *_b = (uint8_t *)prEvent + _i; if (_b[4] == 0x02 && _b[2] == 0x02) DBGLOG(INIT, INFO, "SCAN: EID=0x02 candidate at offset %d: %02x %02x %02x %02x %02x %02x %02x %02x\n", _i, _b[0], _b[1], _b[2], _b[3], _b[4], _b[5], _b[6], _b[7]); } }
 
 			/* EID / SeqNum check */
 			if (((prInitEvent->ucEID != INIT_EVENT_ID_CMD_RESULT) &&
 			     (ucSetQuery == 1)) ||
 			    ((prInitEvent->ucEID != INIT_EVENT_ID_ACCESS_REG)
 				&& (ucSetQuery == 0))) {
-				GL_USER_DEFINE_RESET_TRIGGER(prAdapter,
-							     RST_CMD_EVT_FAIL,
-							 RST_FLAG_DO_CORE_DUMP |
-						    RST_FLAG_PREVENT_POWER_OFF);
 				u4Status = WLAN_STATUS_FAILURE;
 				DBGLOG(INIT, ERROR,
 				       "wlanAccessRegisterStatus: incorrect ucEID. ucSetQuery = 0x%x\n",
 				       ucSetQuery);
 			} else if (prInitEvent->ucSeqNum != ucCmdSeqNum) {
 				u4Status = WLAN_STATUS_FAILURE;
-				GL_USER_DEFINE_RESET_TRIGGER(prAdapter,
-							     RST_CMD_EVT_FAIL,
-							 RST_FLAG_DO_CORE_DUMP |
-						    RST_FLAG_PREVENT_POWER_OFF);
 				DBGLOG(INIT, ERROR,
 				       "wlanAccessRegisterStatus: incorrect ucCmdSeqNum. = 0x%x\n",
 				       ucCmdSeqNum);

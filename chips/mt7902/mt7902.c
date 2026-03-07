@@ -409,26 +409,24 @@ void mt7902Connac2xProcessTxInterrupt(
 	}
 }
 
-void mt7902Connac2xProcessRxInterrupt(
-	struct ADAPTER *prAdapter)
+
+void mt7902Connac2xProcessRxInterrupt(struct ADAPTER *prAdapter)
 {
 	struct GL_HIF_INFO *prHifInfo = &prAdapter->prGlueInfo->rHifInfo;
 	union WPDMA_INT_STA_STRUCT rIntrStatus;
 
 	rIntrStatus = (union WPDMA_INT_STA_STRUCT)prHifInfo->u4IntStatus;
 
-	DBGLOG(HAL, WARN, "[INT-PROC] raw=0x%08x rx0=%d rx1=%d rx2=%d rx3=%d rx4=%d rx5=%d\n",
-	       prHifInfo->u4IntStatus,
-	       rIntrStatus.field_conn2x_single.wfdma0_rx_done_0,
-	       rIntrStatus.field_conn2x_single.wfdma0_rx_done_1,
-	       rIntrStatus.field_conn2x_single.wfdma0_rx_done_2,
-	       rIntrStatus.field_conn2x_single.wfdma0_rx_done_3,
-	       rIntrStatus.field_conn2x_single.wfdma0_rx_done_4,
-	       rIntrStatus.field_conn2x_single.wfdma0_rx_done_5);
+	DBGLOG(HAL, WARN, "[INT-PROC] raw=0x%08x rx0=%d rx1=%d rx2=%d rx3=%d rx4=%d rx5=%d ",
+		prHifInfo->u4IntStatus,
+		rIntrStatus.field_conn2x_single.wfdma0_rx_done_0,
+		rIntrStatus.field_conn2x_single.wfdma0_rx_done_1,
+		rIntrStatus.field_conn2x_single.wfdma0_rx_done_2,
+		rIntrStatus.field_conn2x_single.wfdma0_rx_done_3,
+		rIntrStatus.field_conn2x_single.wfdma0_rx_done_4,
+		rIntrStatus.field_conn2x_single.wfdma0_rx_done_5);
 
-	/* MT7902: rx_done_0 carries events; rx_done_0 ALSO triggers data on some fw builds.
-	 * Always drain data ring when rx_done_0 fires to handle both cases.
-	 */
+	/* MT7902: rx_done_0 carries events and tx done; some FW builds also push data here */
 	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_0) {
 		halRxReceiveRFBs(prAdapter, RX_RING_EVT_IDX_1, FALSE);
 		halRxReceiveRFBs(prAdapter, RX_RING_DATA_IDX_0, TRUE);
@@ -449,6 +447,7 @@ void mt7902Connac2xProcessRxInterrupt(
 	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_5)
 		halRxReceiveRFBs(prAdapter, RX_RING_DATA2_IDX_5, TRUE);
 }
+
 
 void mt7902WfdmaTxRingExtCtrl(
 	struct GLUE_INFO *prGlueInfo,
@@ -540,6 +539,10 @@ void mt7902Connac2xWfdmaManualPrefetch(
 	u_int32_t val = 0;
 
 	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
+	printk(KERN_ERR "[mt7902] ManualPrefetch: GLO_CFG read via HAL = 0x%08x\n", val);
+	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, 0xdeadbeef);
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
+	printk(KERN_ERR "[mt7902] ManualPrefetch: GLO_CFG after WR(0xdeadbeef) = 0x%08x\n", val);
 	/* disable prefetch offset calculation auto-mode */
 	val &=
 	~WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN_MASK;

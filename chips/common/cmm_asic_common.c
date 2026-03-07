@@ -326,13 +326,11 @@ void asicWakeUpWiFi(IN struct ADAPTER *prAdapter)
 	ASSERT(prAdapter);
 
 	HAL_LP_OWN_RD(prAdapter, &fgResult);
-
-	if (fgResult) {
-		prAdapter->fgIsFwOwn = FALSE;
+	if (fgResult)
 		DBGLOG(HAL, WARN,
-			"Already DriverOwn, set flag only\n");
-	} else
-		HAL_LP_OWN_CLR(prAdapter, &fgResult);
+			"Already DriverOwn per LP_OWN_RD, but not setting flag - let halSetDriverOwn handle it\n");
 }
+
+
 #endif /* _HIF_PCIE || _HIF_AXI */
 

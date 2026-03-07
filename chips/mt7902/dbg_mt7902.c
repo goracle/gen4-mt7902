@@ -1467,7 +1467,7 @@ u_int8_t mt7902_show_debug_sop_info(struct ADAPTER *prAdapter,
 #endif
 		break;
 	case SLAVENORESP:
-		DBGLOG(HAL, ERROR, "Slave no response!\n");
+		DBGLOG(HAL, ERROR, "Device not responding!\n");
 #if defined(_HIF_PCIE)
 		pcie_mt7902_dump_wfsys_debug_cr(prAdapter, ucCase);
 		pcie_mt7902_dump_bgfsys_debug_cr(prAdapter, ucCase);

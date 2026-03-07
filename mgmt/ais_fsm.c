@@ -2858,6 +2858,7 @@ void aisFsmRunEventAbort(IN struct ADAPTER *prAdapter,
 		if (prAisFsmInfo->fgIsCfg80211Connecting) {
 			DBGLOG(AIS, INFO, "[AIS%d] cfg80211 owns active join, skip reconnect in abort\n", ucBssIndex);
 			prAisFsmInfo->fgIsCfg80211Connecting = FALSE;
+			aisGetConnSettings(prAdapter, ucBssIndex)->fgIsConnReqIssued = TRUE;
 		} else {
 			aisFsmInsertRequest(prAdapter, AIS_REQUEST_RECONNECT, ucBssIndex);
 			aisGetConnSettings(prAdapter, ucBssIndex)->fgIsConnReqIssued = TRUE;

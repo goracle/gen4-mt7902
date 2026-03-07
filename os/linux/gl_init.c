@@ -5468,6 +5468,11 @@ static int32_t wlanPowerOnInit(void)
 
 			break;
 		}
+		{
+			extern void __iomem *CSRBaseAddress;
+			uint32_t glo = readl(CSRBaseAddress + 0xd4014);
+			printk(KERN_ERR "[mt7902] GLO_CFG after glBusInit (PWR path) = 0x%08x\n", glo);
+		}
 
 #if (CFG_SUPPORT_TRACE_TC4 == 1)
 		wlanDebugTC4Init();
@@ -6564,12 +6569,16 @@ int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter)
     int  attempts = 2;
     int  ret      = -ETIMEDOUT;
 
-    if (!prAdapter) return -EINVAL;
+    printk(KERN_ERR "[mt7902] mt79xx_wfsys_cold_boot_and_wait: entered\n");
+    if (!prAdapter) { printk(KERN_ERR "[mt7902] cold_boot: null adapter\n"); return -EINVAL; }
 
     prChipInfo = prAdapter->chip_info;
     if (!prChipInfo || !prChipInfo->asicWfsysRst ||
         !prChipInfo->asicPollWfsysSwInitDone) {
-        DBGLOG(INIT, WARN, "WFSYS reset/poll hooks not present\n");
+        printk(KERN_ERR "[mt7902] cold_boot: hooks missing chip=%p rst=%p poll=%p\n",
+            prChipInfo,
+            prChipInfo ? prChipInfo->asicWfsysRst : NULL,
+            prChipInfo ? prChipInfo->asicPollWfsysSwInitDone : NULL);
         return -ENOTSUPP;
     }
 
@@ -6726,6 +6735,7 @@ static int wlanProbe_BusInit(void *pvData)
      */
     dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 
+    printk(KERN_ERR "[mt7902] wlanProbe: about to call glBusInit\n");
     if (!glBusInit(pvData)) {
         DBGLOG(INIT, ERROR, "wlanProbe: glBusInit failed\n");
         return -EIO;
