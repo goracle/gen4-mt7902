@@ -3288,7 +3288,10 @@ prMsduInfo->ucBssIndex,
 prMsduInfo->u2FrameLength);
 
 /* MMPDU: force stick to TC4 */
-    prMsduInfo->ucTC = TC4_INDEX;
+	if (prMsduInfo->fgMgmtUseDataQ)
+		prMsduInfo->ucTC = TC0_INDEX;
+	else
+		prMsduInfo->ucTC = TC4_INDEX;
 
 	/* No Tx descriptor template for MMPDU */
 	prMsduInfo->fgIsTXDTemplateValid = FALSE;

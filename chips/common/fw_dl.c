@@ -960,6 +960,8 @@ u_int8_t wlanPatchIsDownloaded(IN struct ADAPTER *prAdapter)
 
 		rStatus = wlanPatchRecvSemaResp(prAdapter, ucSeqNum,
 						&ucPatchStatus);
+		DBGLOG(INIT, ERROR, "SEMA resp: status=%u count=%u rStatus=%u\n",
+		       ucPatchStatus, u4Count, rStatus);
 		if (rStatus != WLAN_STATUS_SUCCESS) {
 			DBGLOG(INIT, WARN,
 			       "Recv patch SEMA control EVT failed!!\n");
@@ -2348,6 +2350,7 @@ uint32_t wlanConnacFormatDownload(IN struct ADAPTER
 			prFwBuffer, u4FwSize, ucRegionNum, eDlIdx);
 
 	ram_entry = wlanDetectRamEntry(&prAdapter->rVerInfo);
+	DBGLOG(INIT, ERROR, "ram_entry=0x%x ucRegionNum=%u\n", ram_entry, ucRegionNum);
 
 /* To support dynamic memory map for WiFi RAM code download::Begin */
 #if (CFG_DOWNLOAD_DYN_MEMORY_MAP == 1)

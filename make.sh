@@ -1,2 +1,2 @@
 #!/bin/bash
-make -j 20 && sudo ./load.sh
+make clean && make -j 20 && sudo ./load.sh
