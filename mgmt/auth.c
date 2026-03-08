@@ -315,6 +315,11 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
     uint16_t u2PayloadLen;
     uint32_t i;
 
+    if (!prAdapter) {
+        DBGLOG(SAA, ERROR, "AUTH TX: NULL adapter\n");
+        return WLAN_STATUS_FAILURE;
+    }
+
     DBGLOG(SAA, INFO, "=== AUTH TX START === seq=%u status=%u\n",
            u2TransactionSeqNum, u2StatusCode);
 
@@ -326,7 +331,6 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
         return WLAN_STATUS_FAILURE;
     }
 
-    /* Estimate frame length */
     u2EstimatedFrameLen = MAC_TX_RESERVED_FIELD +
         WLAN_MAC_MGMT_HEADER_LEN +
         AUTH_ALGORITHM_NUM_FIELD_LEN +
@@ -335,26 +339,30 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
     u2EstimatedExtraIELen = 0;
 
     for (i = 0; i < ARRAY_SIZE(txAuthIETable); i++) {
-        if (txAuthIETable[i].u2EstimatedFixedIELen) {
+        if (txAuthIETable[i].u2EstimatedFixedIELen)
             u2EstimatedExtraIELen += txAuthIETable[i].u2EstimatedFixedIELen;
-        } else if (txAuthIETable[i].pfnCalculateVariableIELen) {
+        else if (txAuthIETable[i].pfnCalculateVariableIELen)
             u2EstimatedExtraIELen +=
                 txAuthIETable[i].pfnCalculateVariableIELen(
                     prAdapter, ucFinalBssIndex, prStaRec);
-        }
     }
     u2EstimatedFrameLen += u2EstimatedExtraIELen;
 
     prMsduInfo = cnmMgtPktAlloc(prAdapter, u2EstimatedFrameLen);
     if (!prMsduInfo) {
-        DBGLOG(SAA, WARN, "AUTH TX: no MSDU_INFO for auth frame\n");
+        DBGLOG(SAA, WARN, "AUTH TX: cnmMgtPktAlloc failed len=%u\n",
+               u2EstimatedFrameLen);
+        return WLAN_STATUS_RESOURCES;
+    }
+    if (!prMsduInfo->prPacket) {
+        DBGLOG(SAA, ERROR, "AUTH TX: prPacket NULL after alloc\n");
+        cnmMgtPktFree(prAdapter, prMsduInfo);
         return WLAN_STATUS_RESOURCES;
     }
 
     pucTxFrame = (uint8_t *)((unsigned long)prMsduInfo->prPacket +
                               MAC_TX_RESERVED_FIELD);
 
-    /* Resolve addresses and transaction seq for legacy (AP/AAA) path */
     if (!prStaRec && prFalseAuthSwRfb) {
         struct WLAN_AUTH_FRAME *prFalseAuthFrame =
             (struct WLAN_AUTH_FRAME *)prFalseAuthSwRfb->pvHeader;
@@ -395,21 +403,8 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
                  WLAN_MAC_MGMT_HEADER_LEN + u2PayloadLen,
                  saaFsmRunEventTxDone,
                  MSDU_RATE_MODE_AUTO);
-    prMsduInfo->fgMgmtUseDataQ = TRUE;
-    {   /* point skb at TXD+frame for halWpdmaWriteMsdu DMA copy.
-         * cnmMgtPktAlloc layout: [TXD+padding][802.11 frame]
-         * prPacket points to TXD start; MAC_TX_RESERVED_FIELD covers TXD+padding.
-         */
-        struct sk_buff *prSkb = (struct sk_buff *)prMsduInfo->prPacket;
-        uint32_t u4TxdLen = MAC_TX_RESERVED_FIELD;
-        if (prSkb) {
-            prSkb->data = (uint8_t *)prMsduInfo->prPacket;
-            prSkb->len = u4TxdLen + prMsduInfo->u2FrameLength;
-            DBGLOG(SAA, INFO, "[AUTH-FIX] skb=%p data=%p len=%u (txd=%u frame=%u)\\n",
-                   prSkb, prSkb->data, prSkb->len, u4TxdLen, prMsduInfo->u2FrameLength);
-        }
-    }
 
+    prMsduInfo->fgMgmtUseDataQ = TRUE;
 
     for (i = 0; i < ARRAY_SIZE(txAuthIETable); i++) {
         if (txAuthIETable[i].pfnAppendIE)
@@ -421,83 +416,18 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
     prMsduInfo->ucWlanIndex = nicTxGetWlanIdx(prAdapter,
         prMsduInfo->ucBssIndex,
         prMsduInfo->ucStaRecIndex);
-    DBGLOG(SAA, INFO, "[AUTH-WIDX] set wlanIdx=%u on MSDU\n",
-        prMsduInfo->ucWlanIndex);
 
     DBGLOG(SAA, INFO,
-           "AUTH TX FINAL: BSS=%u StaRecIdx=%u Len=%u\n",
+           "AUTH TX FINAL: BSS=%u StaRecIdx=%u wlanIdx=%u Len=%u pkt=%p\n",
            ucFinalBssIndex,
            prStaRec ? prStaRec->ucIndex : 0xFF,
-           prMsduInfo->u2FrameLength);
+           prMsduInfo->ucWlanIndex,
+           prMsduInfo->u2FrameLength,
+           prMsduInfo->prPacket);
 
-    DBGLOG(TX, INFO,
-           "TX auth: bss=%d sta_idx=%d wlan_idx=%d\n",
-           prMsduInfo->ucBssIndex,
-           prMsduInfo->ucStaRecIndex,
-           nicTxGetWlanIdx(prAdapter,
-                           prMsduInfo->ucBssIndex,
-                           prMsduInfo->ucStaRecIndex));
+    nicTxEnqueueMsdu(prAdapter, prMsduInfo);
 
-    {
-        uint8_t *pucFrame = (uint8_t *)((unsigned long)prMsduInfo->prPacket +
-                                        MAC_TX_RESERVED_FIELD);
-        DBGLOG(SAA, INFO,
-               "[AUTH-DUMP] frame bytes: %02x %02x %02x %02x %02x %02x %02x %02x "
-               "%02x %02x %02x %02x %02x %02x %02x %02x "
-               "%02x %02x %02x %02x %02x %02x %02x %02x "
-               "%02x %02x %02x %02x %02x %02x\n",
-               pucFrame[0],  pucFrame[1],  pucFrame[2],  pucFrame[3],
-               pucFrame[4],  pucFrame[5],  pucFrame[6],  pucFrame[7],
-               pucFrame[8],  pucFrame[9],  pucFrame[10], pucFrame[11],
-               pucFrame[12], pucFrame[13], pucFrame[14], pucFrame[15],
-               pucFrame[16], pucFrame[17], pucFrame[18], pucFrame[19],
-               pucFrame[20], pucFrame[21], pucFrame[22], pucFrame[23],
-               pucFrame[24], pucFrame[25], pucFrame[26], pucFrame[27],
-               pucFrame[28], pucFrame[29]);
-    }
-
-{
-		struct GL_HIF_INFO *prHifInfo = &prAdapter->prGlueInfo->rHifInfo;
-		struct RTMP_TX_RING *prTxRing0 = &prHifInfo->TxRing[0];
-		struct RTMP_TX_RING *prTxRing1 = &prHifInfo->TxRing[1];
-		DBGLOG(SAA, INFO,
-			"[PRE-ENQ] MSDU: bss=%u sta=%u wlanIdx=%u pid=%u len=%u pkt=%p\n",
-			prMsduInfo->ucBssIndex,
-			prMsduInfo->ucStaRecIndex,
-			prMsduInfo->ucWlanIndex,
-			prMsduInfo->ucPID,
-			prMsduInfo->u2FrameLength,
-			prMsduInfo->prPacket);
-		DBGLOG(SAA, INFO,
-			"[PRE-ENQ] RING0 CpuIdx=%u DmaIdx=%u Used=%u\n",
-			prTxRing0->TxCpuIdx, prTxRing0->TxDmaIdx,
-			prTxRing0->u4UsedCnt);
-		DBGLOG(SAA, INFO,
-			"[PRE-ENQ] RING1 CpuIdx=%u DmaIdx=%u Used=%u\n",
-			prTxRing1->TxCpuIdx, prTxRing1->TxDmaIdx,
-			prTxRing1->u4UsedCnt);
-	}
-
-	nicTxEnqueueMsdu(prAdapter, prMsduInfo);
-
-	DBGLOG(SAA, INFO, "=== AUTH TX ENQUEUED ===\n");
-	{
-		struct GL_HIF_INFO *prHifInfo = &prAdapter->prGlueInfo->rHifInfo;
-		struct RTMP_TX_RING *prTxRing0 = &prHifInfo->TxRing[0];
-		struct RTMP_TX_RING *prTxRing1 = &prHifInfo->TxRing[1];
-		DBGLOG(SAA, INFO,
-			"[POST-ENQ] RING0 CpuIdx=%u DmaIdx=%u Used=%u\n",
-			prTxRing0->TxCpuIdx, prTxRing0->TxDmaIdx,
-			prTxRing0->u4UsedCnt);
-		halDumpTxRing(prAdapter->prGlueInfo, 0, prTxRing0->TxCpuIdx > 0 ?
-			prTxRing0->TxCpuIdx - 1 : 0);
-		DBGLOG(SAA, INFO,
-			"[POST-ENQ] RING1 CpuIdx=%u DmaIdx=%u Used=%u\n",
-			prTxRing1->TxCpuIdx, prTxRing1->TxDmaIdx,
-			prTxRing1->u4UsedCnt);
-		halDumpTxRing(prAdapter->prGlueInfo, 1, prTxRing1->TxCpuIdx > 0 ?
-			prTxRing1->TxCpuIdx - 1 : 0);
-	}
+    DBGLOG(SAA, INFO, "=== AUTH TX ENQUEUED ===\n");
 
     return WLAN_STATUS_SUCCESS;
 }
@@ -527,7 +457,23 @@ uint32_t authCheckTxAuthFrame(IN struct ADAPTER *prAdapter,
 
 	ASSERT(prMsduInfo);
 
-	prAuthFrame = (struct WLAN_AUTH_FRAME *)((unsigned long)(prMsduInfo->prPacket) + MAC_TX_RESERVED_FIELD);
+	if (!prMsduInfo || !prMsduInfo->prPacket) {
+		DBGLOG(SAA, WARN, "[AUTH-CHECK] prMsduInfo or prPacket is NULL\n");
+		return WLAN_STATUS_INVALID_PACKET;
+	}
+
+/* prPacket may be a raw cnmMemAlloc buffer OR an skb (after nicTxEnsureSkbHeadroom).
+ * For the data-path (fgMgmtUseDataQ), it's an skb — use skb->data directly.
+ * For the cmd-path, it's a raw buffer — add MAC_TX_RESERVED_FIELD offset.
+ */
+if (prMsduInfo->fgMgmtUseDataQ) {
+    struct sk_buff *prSkb = (struct sk_buff *)prMsduInfo->prPacket;
+    prAuthFrame = (struct WLAN_AUTH_FRAME *)prSkb->data;
+} else {
+    prAuthFrame = (struct WLAN_AUTH_FRAME *)((unsigned long)(prMsduInfo->prPacket)
+                             + MAC_TX_RESERVED_FIELD);
+}
+
 	ASSERT(prAuthFrame);
 
 	prStaRec = cnmGetStaRecByIndex(prAdapter, prMsduInfo->ucStaRecIndex);
@@ -536,42 +482,31 @@ uint32_t authCheckTxAuthFrame(IN struct ADAPTER *prAdapter,
 	if (!prStaRec)
 		return WLAN_STATUS_INVALID_PACKET;
 
-	/* WLAN_GET_FIELD_16(&prAuthFrame->u2FrameCtrl, &u2TxFrameCtrl) */
 	u2TxFrameCtrl = prAuthFrame->u2FrameCtrl;
-	/* NOTE(Kevin): Optimized for ARM */
 	u2TxFrameCtrl &= MASK_FRAME_TYPE;
 	if (u2TxFrameCtrl != MAC_FRAME_AUTH)
 		return WLAN_STATUS_FAILURE;
 
-	/* WLAN_GET_FIELD_16(&prAuthFrame->u2AuthAlgNum, &u2TxAuthAlgNum) */
 	u2TxAuthAlgNum = prAuthFrame->u2AuthAlgNum;
-	/* NOTE(Kevin): Optimized for ARM */
-	if (u2TxAuthAlgNum != (uint16_t) (prStaRec->ucAuthAlgNum)) {
+	if (u2TxAuthAlgNum != (uint16_t)(prStaRec->ucAuthAlgNum)) {
 		DBGLOG(SAA, WARN,
-			"[AUTH-CHECK] alg mismatch: frame=%u staRec=%u eAuthAssocSent=%u\n",
-			u2TxAuthAlgNum, prStaRec->ucAuthAlgNum,
-			prStaRec->eAuthAssocSent);
+		       "[AUTH-CHECK] alg mismatch: frame=%u staRec=%u eAuthAssocSent=%u\n",
+		       u2TxAuthAlgNum, prStaRec->ucAuthAlgNum,
+		       prStaRec->eAuthAssocSent);
 		return WLAN_STATUS_FAILURE;
 	}
 
-	/* WLAN_GET_FIELD_16(&prAuthFrame->u2AuthTransSeqNo,
-	 *	&u2TxTransactionSeqNum)
-	 */
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 	u2TxTransactionSeqNum = (prAuthFrame->aucAuthData[1] << 8) +
-						prAuthFrame->aucAuthData[0];
-
+				 prAuthFrame->aucAuthData[0];
 #else
 	u2TxTransactionSeqNum = prAuthFrame->u2AuthTransSeqNo;
 #endif
-	/* NOTE(Kevin): Optimized for ARM */
 	if (u2TxTransactionSeqNum != u2TransactionSeqNum)
 		return WLAN_STATUS_FAILURE;
 
 	return WLAN_STATUS_SUCCESS;
-
-}				/* end of authCheckTxAuthFrame() */
-
+}
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief This function will check the incoming Auth Frame's Transaction
@@ -1239,7 +1174,7 @@ authSendDeauthFrame(IN struct ADAPTER *prAdapter,
 		}
 	}
 #endif
-	nicTxSetPktLifeTime(prMsduInfo, 100);
+	nicTxSetPktLifeTime(prMsduInfo, 2000);
 
 	nicTxSetPktRetryLimit(prMsduInfo, TX_DESC_TX_COUNT_NO_LIMIT);
 

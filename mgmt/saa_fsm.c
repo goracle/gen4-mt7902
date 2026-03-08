@@ -138,6 +138,7 @@ static uint8_t *apucDebugAAState[AA_STATE_NUM] = {
 static void saa_start_retry_timer(IN struct ADAPTER *prAdapter,
 				  IN struct STA_RECORD *prStaRec)
 {
+	cnmTimerStopTimer(prAdapter, &prStaRec->rTxReqDoneOrRxRespTimer);
 	cnmTimerInitTimer(prAdapter,
 			  &prStaRec->rTxReqDoneOrRxRespTimer,
 			  (PFN_MGMT_TIMEOUT_FUNC)saaFsmRunEventTxReqTimeOut,
@@ -225,10 +226,10 @@ static u_int8_t saa_get_connection_settings(IN struct ADAPTER *prAdapter,
  * logic for populating transaction sequence and (optionally) WPA3 status code.
  */
 static uint32_t saa_perform_auth_send(
-	IN struct ADAPTER *prAdapter,
-	IN struct STA_RECORD *prStaRec,
-	IN struct CONNECTION_SETTINGS *prConnSettings,
-	IN u_int8_t fgIsP2pConn)
+									  IN struct ADAPTER *prAdapter,
+									  IN struct STA_RECORD *prStaRec,
+									  IN struct CONNECTION_SETTINGS *prConnSettings,
+									  IN u_int8_t fgIsP2pConn)
 {
 	uint32_t rStatus = WLAN_STATUS_FAILURE;
 	uint16_t u2AuthTransSN = AUTH_TRANSACTION_SEQ_1;
@@ -255,8 +256,8 @@ static uint32_t saa_perform_auth_send(
 			    AUTH_TRANSACTION_SEQENCE_NUM_FIELD_LEN) {
 
 				kalMemCopy(&u2AuthTransSN,
-					   prConnSettings->aucAuthData,
-					   AUTH_TRANSACTION_SEQENCE_NUM_FIELD_LEN);
+						   prConnSettings->aucAuthData,
+						   AUTH_TRANSACTION_SEQENCE_NUM_FIELD_LEN);
 
 				DBGLOG(SAA, INFO,
 				       "[AUTH] SN from ConnSettings: %u\n",
@@ -271,8 +272,8 @@ static uint32_t saa_perform_auth_send(
 		     AUTH_STATUS_CODE_FIELD_LEN)) {
 
 			kalMemCopy(&u2AuthStatusCode,
-				   &prConnSettings->aucAuthData[2],
-				   AUTH_STATUS_CODE_FIELD_LEN);
+					   &prConnSettings->aucAuthData[2],
+					   AUTH_STATUS_CODE_FIELD_LEN);
 
 			DBGLOG(SAA, INFO,
 			       "[AUTH] StatusCode from ConnSettings: %u\n",
@@ -283,30 +284,30 @@ static uint32_t saa_perform_auth_send(
 
 #if !CFG_SUPPORT_AAA
 	rStatus = authSendAuthFrame(prAdapter,
-				    prStaRec,
-				    u2AuthTransSN);
+								prStaRec,
+								u2AuthTransSN);
 #else
 	rStatus = authSendAuthFrame(prAdapter,
-				    prStaRec,
-				    prStaRec->ucBssIndex,
-				    NULL,
-				    u2AuthTransSN,
+								prStaRec,
+								prStaRec->ucBssIndex,
+								NULL,
+								u2AuthTransSN,
 #if CFG_SUPPORT_WPA3_H2E
-				    u2AuthStatusCode);
+								u2AuthStatusCode);
 #else
-				    STATUS_CODE_RESERVED);
+	STATUS_CODE_RESERVED);
 #endif
 #endif
 
-	prStaRec->eAuthAssocSent = u2AuthTransSN;
+prStaRec->eAuthAssocSent = u2AuthTransSN;
 
-	/* Zero stack secrets */
-	kalMemZero(&u2AuthTransSN, sizeof(u2AuthTransSN));
+/* Zero stack secrets */
+kalMemZero(&u2AuthTransSN, sizeof(u2AuthTransSN));
 #if CFG_SUPPORT_WPA3_H2E
-	kalMemZero(&u2AuthStatusCode, sizeof(u2AuthStatusCode));
+kalMemZero(&u2AuthStatusCode, sizeof(u2AuthStatusCode));
 #endif
 
-	return rStatus;
+return rStatus;
 }
 
 
@@ -431,6 +432,16 @@ void saaSendAuthAssoc(IN struct ADAPTER *prAdapter,
 	DBGLOG(SAA, INFO, "[SAA]saaSendAuthAssoc, StaState:%d\n",
 	       prStaRec->ucStaState);
 
+DBGLOG(SAA, WARN, "[SAA-START] StaRec=%u BSS=%u priChan=%u fgIsGranted=%u\n",
+       prStaRec->ucIndex,
+       prStaRec->ucBssIndex,
+       prAdapter->prAisBssInfo[prStaRec->ucBssIndex] ?
+           prAdapter->prAisBssInfo[prStaRec->ucBssIndex]->ucPrimaryChannel : 0xFF,
+       prAdapter->prAisBssInfo[prStaRec->ucBssIndex] ?
+           prAdapter->prAisBssInfo[prStaRec->ucBssIndex]->fgIsGranted : 0xFF);
+
+
+
 	kalMemZero(&rSsid, sizeof(rSsid));
 
 	/* Pull per-connection settings (fills rSsid, flags, channel) */
@@ -438,6 +449,8 @@ void saaSendAuthAssoc(IN struct ADAPTER *prAdapter,
 					  &fgIsSendAssoc, &fgIsP2pConn,
 					  &ucChannelNum, &prConnSettings,
 					  &prP2pConnSettings);
+
+
 
 	/* Retry limit check */
 	if (prStaRec->ucTxAuthAssocRetryCount >= prStaRec->ucTxAuthAssocRetryLimit) {
@@ -447,7 +460,60 @@ void saaSendAuthAssoc(IN struct ADAPTER *prAdapter,
 		return;
 	}
 
-	prStaRec->ucTxAuthAssocRetryCount++;
+	/* Gate auth TX on WTBL armed (STATE_3 FW ACK sets fgIsValid=1).
+	 * Stale mbox SAA messages fire this path before WTBL is ready —
+	 * sending auth then causes a double-MSDU race that corrupts the
+	 * mgmt packet pool and panics in cnmPktFree. Defer via retry timer
+	 * until nicUniCmdStaRecHandleEventPkt fires aisFsmFirePendingSAA
+	 * with fgIsValid=1, which cancels the timer and re-enters cleanly.
+	 */
+
+	if (!prStaRec->fgIsValid) {
+		DBGLOG(SAA, WARN,
+			   "[SAA-GATE] StaRec[%u] fgIsValid=0 — WTBL not armed, deferring\n",
+			   prStaRec->ucIndex);
+		saa_start_retry_timer(prAdapter, prStaRec);
+		kalMemZero(&rSsid, sizeof(rSsid));
+		return;
+	}
+	if (prStaRec->ucStaState < STA_STATE_3) {
+		/* On the retry path (retryCount > 1) ucStaState is legitimately 2:
+		 * firmware has not ACK'd STATE_3 yet. Issuing cnmStaRecChangeState
+		 * here fires cmd-ring writes that race the in-flight retry MSDU
+		 * and NULL prPacket in halWpdmaWriteMsdu, causing a hard lock.
+		 * Only reset state on the first-send path (retryCount <= 1).
+		 */
+		if (prStaRec->ucTxAuthAssocRetryCount > 1) {
+			DBGLOG(SAA, WARN,
+				   "[SAA-GATE] StaRec[%u] retry path state=%u — skipping StaRec reset\n",
+				   prStaRec->ucIndex, prStaRec->ucStaState);
+			/* fall through to send */
+		} else {
+			DBGLOG(SAA, WARN,
+				   "[SAA-GATE] StaRec[%u] zombie state=%u fgIsValid=1 — resetting, deferring\n",
+				   prStaRec->ucIndex, prStaRec->ucStaState);
+			prStaRec->fgIsValid = FALSE;
+			prStaRec->ucStaState = STA_STATE_3;
+			cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_1);
+			saa_start_retry_timer(prAdapter, prStaRec);
+			kalMemZero(&rSsid, sizeof(rSsid));
+			return;
+		}
+	}
+
+
+ prStaRec->ucTxAuthAssocRetryCount++;
+ 
+
+	DBGLOG(SAA, WARN, "[SAA-STAREC] idx=%u bss=%u wlanIdx=%u state=%u authAssocSent=%u retryCount=%u fgIsValid=%u fgIsInUse=%u\n",
+		   prStaRec->ucIndex,
+		   prStaRec->ucBssIndex,
+		   prStaRec->ucWlanIndex,
+		   prStaRec->ucStaState,
+		   prStaRec->eAuthAssocSent,
+		   prStaRec->ucTxAuthAssocRetryCount,
+		   prStaRec->fgIsValid,
+		   prStaRec->fgIsInUse);
 
 	/* AUTH path */
 	if (!fgIsSendAssoc) {
@@ -956,6 +1022,14 @@ void saaFsmRunEventStart(IN struct ADAPTER *prAdapter,
 	ASSERT(prStaRec);
 
 	DBGLOG(SAA, LOUD, "EVENT-START: Trigger SAA FSM.\n");
+
+DBGLOG(SAA, WARN, "[SAA-START] StaRec=%u BSS=%u priChan=%u fgIsGranted=%u\n",
+       prStaRec->ucIndex,
+       prStaRec->ucBssIndex,
+       prAdapter->prAisBssInfo[prStaRec->ucBssIndex] ?
+           prAdapter->prAisBssInfo[prStaRec->ucBssIndex]->ucPrimaryChannel : 0xFF,
+       prAdapter->prAisBssInfo[prStaRec->ucBssIndex] ?
+           prAdapter->prAisBssInfo[prStaRec->ucBssIndex]->fgIsGranted : 0xFF);
 
 	/* record sequence number of request message */
 	prStaRec->ucAuthAssocReqSeqNum = prSaaFsmStartMsg->ucSeqNum;

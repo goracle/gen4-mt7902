@@ -212,8 +212,8 @@ void StatsEnvTxTime2Hif(IN struct ADAPTER *prAdapter,
 {
 	uint64_t u8SysTime, u8SysTimeIn;
 	uint32_t u4TimeDiff;
-	uint8_t *pucEth = ((struct sk_buff *)prMsduInfo->prPacket)->data;
-	uint32_t u4PacketLen = ((struct sk_buff *)prMsduInfo->prPacket)->len;
+	uint8_t *pucEth;
+	uint32_t u4PacketLen;
 	uint8_t ucIpVersion = 0;
 	uint8_t ucIpProto = 0;
 	uint8_t *pucEthBody = NULL;
@@ -223,16 +223,23 @@ void StatsEnvTxTime2Hif(IN struct ADAPTER *prAdapter,
 	uint16_t u2UdpDstPort = 0;
 	uint16_t u2UdpSrcPort = 0;
 
+	/* Only valid for OS-sourced data frames with a real skb */
+	if (prMsduInfo->eSrc != TX_PACKET_OS &&
+	    prMsduInfo->eSrc != TX_PACKET_OS_OID)
+		return;
+	if (!prMsduInfo->prPacket)
+		return;
+
+	pucEth = ((struct sk_buff *)prMsduInfo->prPacket)->data;
+	u4PacketLen = ((struct sk_buff *)prMsduInfo->prPacket)->len;
+
 	u8SysTime = StatsEnvTimeGet();
 	u8SysTimeIn = GLUE_GET_PKT_XTIME(prMsduInfo->prPacket);
 
 	if ((g_ucTxRxFlag & BIT(0)) == 0)
 		return;
-
 	if ((u8SysTimeIn == 0) || (u8SysTime <= u8SysTimeIn))
 		return;
-
-	/* units of u4TimeDiff is micro seconds (us) */
 	if (u4PacketLen < 24 + ETH_HLEN)
 		return;
 	pucAheadBuf = &pucEth[76];
@@ -248,9 +255,9 @@ void StatsEnvTxTime2Hif(IN struct ADAPTER *prAdapter,
 		>> IPVH_VERSION_OFFSET;
 	if (ucIpVersion != IPVERSION)
 		return;
-	u2IPID = pucEthBody[4]<<8 | pucEthBody[5];
+	u2IPID = pucEthBody[4] << 8 | pucEthBody[5];
 	u8SysTime = u8SysTime - u8SysTimeIn;
-	u4TimeDiff = (uint32_t) u8SysTime;
+	u4TimeDiff = (uint32_t)u8SysTime;
 	u4TimeDiff = u4TimeDiff / 1000;	/* ns to us */
 
 	switch (ucIpProto) {
@@ -279,6 +286,7 @@ void StatsEnvTxTime2Hif(IN struct ADAPTER *prAdapter,
 		break;
 	}
 }
+
 
 static void statsParsePktInfo(uint8_t *pucPkt, struct sk_buff *skb,
 	uint8_t status, uint8_t eventType)

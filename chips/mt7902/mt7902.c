@@ -540,6 +540,11 @@ void mt7902Connac2xWfdmaManualPrefetch(
 
 	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
 	/* disable prefetch offset calculation auto-mode */
+    printk(KERN_ERR "[mt7902] ManualPrefetch: GLO_CFG read via HAL = 0x%08x\n", val);
+    //HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, 0xdeadbeef);
+    //HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
+    //printk(KERN_ERR "[mt7902] ManualPrefetch: GLO_CFG after WR(0xdeadbeef) = 0x%08x\n", val);
+
 	val &=
 	~WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN_MASK;
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, val);

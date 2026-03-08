@@ -3526,9 +3526,9 @@ struct SW_RFB *qmHandleRxPackets(IN struct ADAPTER *prAdapter,
 				prCurrSwRfb->ucPacketType,
 				prCurrSwRfb->fgReorderBuffer);
 
-			DBGLOG_MEM8(SW4, TRACE,
-				(uint8_t *) prCurrSwRfb->pvHeader,
-				prCurrSwRfb->u2PacketLen);
+			//DBGLOG_MEM8(SW4, TRACE,
+			//(uint8_t *) prCurrSwRfb->pvHeader,
+			//prCurrSwRfb->u2PacketLen);
 		}
 #endif
 
@@ -3546,22 +3546,22 @@ struct SW_RFB *qmHandleRxPackets(IN struct ADAPTER *prAdapter,
 			if (prCurrSwRfb->prRxStatusGroup4 == NULL) {
 				DBGLOG(QM, ERROR,
 					"H/W did Header Trans but prRxStatusGroup4 is NULL !!!\n");
-				DBGLOG_MEM8(QM, ERROR, prCurrSwRfb->pucRecvBuff,
-					prCurrSwRfb->u2RxByteCount);
+				//DBGLOG_MEM8(QM, ERROR, prCurrSwRfb->pucRecvBuff,
+				//prCurrSwRfb->u2RxByteCount);
 				prCurrSwRfb->eDst = RX_PKT_DESTINATION_NULL;
 				QUEUE_INSERT_TAIL(prReturnedQue,
 					(struct QUE_ENTRY *)
 					prCurrSwRfb);
 				DBGLOG(RX, WARN,
 				       "rxStatusGroup4 for data packet is NULL, drop this packet, and dump RXD and Packet\n");
-				DBGLOG_MEM8(RX, WARN, (uint8_t *) prRxStatus,
-					sizeof(*prRxStatus));
-				if (prCurrSwRfb->pvHeader)
-					DBGLOG_MEM8(RX, WARN,
-						prCurrSwRfb->pvHeader,
-						prCurrSwRfb->u2PacketLen >
-						 32 ? 32 :
-						prCurrSwRfb->u2PacketLen);
+				//DBGLOG_MEM8(RX, WARN, (uint8_t *) prRxStatus,
+				//sizeof(*prRxStatus));
+				//if (prCurrSwRfb->pvHeader)
+					//DBGLOG_MEM8(RX, WARN,
+					//prCurrSwRfb->pvHeader,
+					//prCurrSwRfb->u2PacketLen >
+					// 32 ? 32 :
+					//prCurrSwRfb->u2PacketLen);
 #if 0
 				GL_DEFAULT_RESET_TRIGGER(prAdapter,
 							 RST_GROUP4_NULL);
@@ -3762,13 +3762,13 @@ struct SW_RFB *qmHandleRxPackets(IN struct ADAPTER *prAdapter,
 					prCurrSwRfb->ucStaRecIdx,
 					prCurrSwRfb->ucWlanIdx,
 					prCurrSwRfb->u2PacketLen);
-				DBGLOG_MEM8(QM, WARN,
-						(uint8_t *)
-						prCurrSwRfb->pvHeader,
-						(prCurrSwRfb->
-						u2PacketLen > 64) ? 64 :
-						prCurrSwRfb->
-						u2PacketLen);
+				//DBGLOG_MEM8(QM, WARN,
+				//	(uint8_t *)
+				//	prCurrSwRfb->pvHeader,
+				//	(prCurrSwRfb->
+				//	u2PacketLen > 64) ? 64 :
+				//	prCurrSwRfb->
+				//	u2PacketLen);
 				if (prAisBssInfo
 				    && prAisBssInfo->prStaRecOfAP)
 				if (EQUAL_MAC_ADDR(
@@ -3826,13 +3826,13 @@ struct SW_RFB *qmHandleRxPackets(IN struct ADAPTER *prAdapter,
 							prAdapter,
 							prCurrSwRfb->
 							ucWlanIdx));
-					DBGLOG_MEM8(QM, WARN,
-						(uint8_t *)
-						prCurrSwRfb->pvHeader,
-						(prCurrSwRfb->
-						u2PacketLen > 64) ? 64 :
-						prCurrSwRfb->
-						u2PacketLen);
+					//DBGLOG_MEM8(QM, WARN,
+					//	(uint8_t *)
+					//	prCurrSwRfb->pvHeader,
+					//	(prCurrSwRfb->
+					//	u2PacketLen > 64) ? 64 :
+					//	prCurrSwRfb->
+					//	u2PacketLen);
 				}
 			}
 		}
@@ -3923,9 +3923,9 @@ struct SW_RFB *qmHandleRxPackets(IN struct ADAPTER *prAdapter,
 				log_dbg(QM, ERROR,
 					"TID from RXD = %d, out of range !!!\n",
 					prCurrSwRfb->ucTid);
-				DBGLOG_MEM8(QM, ERROR,
-					prCurrSwRfb->pucRecvBuff,
-					prCurrSwRfb->u2RxByteCount);
+				//DBGLOG_MEM8(QM, ERROR,
+				//	prCurrSwRfb->pucRecvBuff,
+				//	prCurrSwRfb->u2RxByteCount);
 				QUEUE_INSERT_TAIL(prReturnedQue,
 					(struct QUE_ENTRY *) prCurrSwRfb);
 			} else
@@ -4373,8 +4373,8 @@ void qmProcessPktWithReordering(IN struct ADAPTER *prAdapter,
 	if (prSwRfb->ucTid >= CFG_RX_MAX_BA_TID_NUM) {
 		DBGLOG(QM, WARN, "TID from RXD = %d, out of range!!\n",
 			prSwRfb->ucTid);
-		DBGLOG_MEM8(QM, ERROR, prSwRfb->pucRecvBuff,
-			prSwRfb->u2RxByteCount);
+		//DBGLOG_MEM8(QM, ERROR, prSwRfb->pucRecvBuff,
+		//prSwRfb->u2RxByteCount);
 		prSwRfb->eDst = RX_PKT_DESTINATION_NULL;
 		QUEUE_INSERT_TAIL(prReturnedQue,
 			(struct QUE_ENTRY *) prSwRfb);

@@ -809,9 +809,7 @@ struct MSG_HDR *prMsgHdr)
 	struct CNM_INFO *prCnmInfo;
 	uint32_t rStatus;
 	uint32_t u4UniCmdSize;
-#if CFG_SISO_SW_DEVELOP
 	struct BSS_INFO *prBssInfo;
-#endif
 #if CFG_SUPPORT_DBDC
 	struct LINK_ENTRY *prLinkEntry_pendingMsg;
 	struct MSG_CH_REQ *prPendingMsg;
@@ -896,12 +894,12 @@ struct MSG_HDR *prMsgHdr)
 		NULL,
 		0);
 
-#if CFG_SISO_SW_DEVELOP
 	prBssInfo = prAdapter->aprBssInfo[prMsgChAbort->ucBssIndex];
-	prBssInfo->fgIsGranted = FALSE;
-	prBssInfo->eBandGranted = BAND_NULL;
-	prBssInfo->ucPrimaryChannelGranted = 0;
-#endif
+	if (prBssInfo) {
+		prBssInfo->fgIsGranted = FALSE;
+		prBssInfo->eBandGranted = BAND_NULL;
+		prBssInfo->ucPrimaryChannelGranted = 0;
+	}
 
 	cnmMemFree(prAdapter, prUniCmdCnm);
 	cnmMemFree(prAdapter, prMsgHdr);

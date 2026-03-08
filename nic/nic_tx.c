@@ -2399,25 +2399,64 @@ uint32_t nicTxMsduQueue(IN struct ADAPTER *prAdapter,
 }
 
 
-void nicTxMsduLifeTimeoutHandler(IN struct ADAPTER *prAdapter,
-	IN unsigned long plParamPtr)
+void nicTxMsduLifeTimeoutHandler(struct ADAPTER *prAdapter,
+                                 unsigned long plParamPtr)
 {
-	struct MSDU_INFO *prMsduInfo = (struct MSDU_INFO *)plParamPtr;
+    struct MSDU_INFO *prTimeoutMsdu =
+        (struct MSDU_INFO *)plParamPtr;
+    struct MSDU_INFO *prMsduInfo;
 
-	DBGLOG(TX, ERROR, "MSDU Life Timeout Tag[0x%08x] WIDX:PID[%u:%u]\n",
-		prMsduInfo->u4TxDoneTag, prMsduInfo->ucWlanIndex,
-		prMsduInfo->ucPID);
+    if (!prAdapter || !prTimeoutMsdu)
+        return;
 
-	prMsduInfo = nicGetPendingTxMsduInfo(prAdapter,
-			 prMsduInfo->ucWlanIndex, prMsduInfo->ucPID);
-	if (prMsduInfo) {
-		nicTxFreePacket(prAdapter, prMsduInfo, TRUE);
-		nicTxReturnMsduInfo(prAdapter, prMsduInfo);
-	} else {
-		DBGLOG(TX, ERROR, "Not in pending tx queue\n");
-	}
+    DBGLOG(TX, ERROR,
+        "MSDU Life Timeout Tag[0x%08x] WIDX:PID[%u:%u] ptr=%p\n",
+        prTimeoutMsdu->u4TxDoneTag,
+        prTimeoutMsdu->ucWlanIndex,
+        prTimeoutMsdu->ucPID,
+        prTimeoutMsdu);
+
+    /* lookup current pending entry */
+    prMsduInfo = nicGetPendingTxMsduInfo(prAdapter,
+        prTimeoutMsdu->ucWlanIndex,
+        prTimeoutMsdu->ucPID);
+
+    if (!prMsduInfo) {
+        DBGLOG(TX, WARN,
+            "Timeout: not in pending tx queue WIDX=%u PID=%u\n",
+            prTimeoutMsdu->ucWlanIndex,
+            prTimeoutMsdu->ucPID);
+        return;
+    }
+
+    /* prevent freeing the wrong recycled object */
+    if (prMsduInfo != prTimeoutMsdu) {
+        DBGLOG(TX, ERROR,
+            "Timeout mismatch timer=%p pending=%p WIDX=%u PID=%u\n",
+            prTimeoutMsdu,
+            prMsduInfo,
+            prTimeoutMsdu->ucWlanIndex,
+            prTimeoutMsdu->ucPID);
+        return;
+    }
+
+    DBGLOG(TX, ERROR,
+        "MSDU timeout freeing WIDX=%u PID=%u\n",
+        prMsduInfo->ucWlanIndex,
+        prMsduInfo->ucPID);
+
+    /* clear identifiers so late TXDONE can't match */
+    prMsduInfo->ucPID = 0xFF;
+    prMsduInfo->ucWlanIndex = 0xFF;
+
+    nicTxFreePacket(prAdapter, prMsduInfo, TRUE);
+    nicTxReturnMsduInfo(prAdapter, prMsduInfo);
+
+    /* poison for debugging */
+    prMsduInfo->prPacket = NULL;
+    prMsduInfo->prToken = NULL;
+    prMsduInfo->u4TxDoneTag = 0xDEADBEEF;
 }
-
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief In this function, we'll write Command(CMD_INFO_T) into HIF.
@@ -2518,6 +2557,20 @@ uint32_t nicTxCmd(IN struct ADAPTER *prAdapter,
 		prMsduInfo->ucPID,
 		prMsduInfo->ucTxSeqNum, prMsduInfo->ucStaRecIndex,
 		prMsduInfo->pfTxDoneHandler ? TRUE : FALSE);
+
+		{
+			struct BSS_INFO *__bss = GET_BSS_INFO_BY_INDEX(prAdapter, prMsduInfo->ucBssIndex);
+			uint32_t *__dw = (uint32_t *)prMsduInfo->aucTxDescBuffer;
+			DBGLOG(TX, WARN, "[TXDUMP] bssIdx=%u ownMacIdx=%u wlanIdx=%u\n",
+				   prMsduInfo->ucBssIndex,
+				   __bss ? __bss->ucOwnMacIndex : 0xFF,
+				   prMsduInfo->ucWlanIndex);
+			DBGLOG(TX, WARN, "[TXDUMP] DW0=0x%08x DW1=0x%08x DW2=0x%08x DW3=0x%08x\n",
+				   __dw[0], __dw[1], __dw[2], __dw[3]);
+			DBGLOG(TX, WARN, "[TXDUMP] DW4=0x%08x DW5=0x%08x DW6=0x%08x DW7=0x%08x\n",
+				   __dw[4], __dw[5], __dw[6], __dw[7]);
+		}
+
 
 		HAL_WRITE_TX_CMD(prAdapter, prCmdInfo, ucTC);
 		/* <4> Management Frame Post-Processing */
@@ -2686,8 +2739,46 @@ void nicTxFreePacket(IN struct ADAPTER *prAdapter,
 		if (prMsduInfo->pfTxDoneHandler)
 			prMsduInfo->pfTxDoneHandler(prAdapter, prMsduInfo,
 		    TX_RESULT_DROPPED_IN_DRIVER);
-		if (prNativePacket)
-			cnmMemFree(prAdapter, prNativePacket);
+		/*
+		 * Fix #3: NULL prPacket only if the handler did not replace it.
+		 *
+		 * The handler (saaFsmRunEventTxDone) may synchronously re-enqueue
+		 * this same MSDU struct with a fresh skb by setting prPacket to a
+		 * new value before returning.  If we unconditionally NULL here we
+		 * wipe that new pointer, causing halWpdmaWriteMsdu to see a NULL
+		 * skb on the very next TX attempt.
+		 *
+		 * Conversely, if we never NULL we leave the old (about-to-be-freed)
+		 * prPacket visible, risking a UAF if anything reads it before the
+		 * retry overwrites it.
+		 *
+		 * Safe rule: only NULL if prPacket still holds the value we saved
+		 * in prNativePacket.  If the handler installed a new skb the field
+		 * will differ and we leave it alone.
+		 */
+		if (prMsduInfo->prPacket == prNativePacket)
+			prMsduInfo->prPacket = NULL;
+		if (prNativePacket) {
+			/* Auth frames store an skb as prPacket (allocated via
+			 * kalPacketAlloc/dev_alloc_skb, not cnmMemAlloc).
+			 * cnmMemFree detects out-of-pool pointers and falls through
+			 * to kfree, but kfree on an skb triggers !PageLargeKmalloc.
+			 * Detect the skb case by checking pool membership and use
+			 * dev_kfree_skb instead.
+			 */
+			if (((unsigned long)prNativePacket >=
+			     (unsigned long)&prAdapter->aucMsgBuf[0] &&
+			     (unsigned long)prNativePacket <=
+			     (unsigned long)&prAdapter->aucMsgBuf[MSG_BUFFER_SIZE - 1]) ||
+			    ((unsigned long)prNativePacket >=
+			     (unsigned long)prAdapter->pucMgtBufCached &&
+			     (unsigned long)prNativePacket <=
+			     (unsigned long)prAdapter->pucMgtBufCached + MGT_BUFFER_SIZE - 1)) {
+				cnmMemFree(prAdapter, prNativePacket);
+			} else {
+				dev_kfree_skb((struct sk_buff *)prNativePacket);
+			}
+		}
 	} else if (prMsduInfo->eSrc == TX_PACKET_FORWARDING) {
 		GLUE_DEC_REF_CNT(prTxCtrl->i4PendingFwdFrameCount);
 	}
@@ -3329,88 +3420,109 @@ prMsduInfo->u2FrameLength);
  */
 
 struct MSDU_INFO *
-nicTxProcessUniTxDoneEvent(struct ADAPTER *ad, struct UNI_EVENT_TX_DONE *e)
+nicTxProcessUniTxDoneEvent(struct ADAPTER *ad,
+                           struct UNI_EVENT_TX_DONE *e)
 {
-	struct MSDU_INFO *prMsduInfo = NULL;
-	if (!ad || !e)
-		return NULL;
-	DBGLOG(TX, WARN,
-		"UNI_TXDONE status=%u widx=%u pid=%u sn=%u\n",
-		e->ucStatus, e->ucWlanIndex, e->ucPacketSeq, e->u2SequenceNumber);
-	DBGLOG(TX, INFO, "[TX-DIAG] Looking up WIDX=%u PID=%u\n",
-		e->ucWlanIndex, e->ucPacketSeq);
-	prMsduInfo = nicGetPendingTxMsduInfo(ad, e->ucWlanIndex, e->ucPacketSeq);
-	if (e->ucStatus == 5) {
-		struct STA_RECORD *pStaRec = prMsduInfo ?
-			cnmGetStaRecByIndex(ad, prMsduInfo->ucStaRecIndex) : NULL;
-		const char *reason_str;
-		switch (e->ucFlushReason) {
-		case 0:  reason_str = "TX_OK_BUT_FLUSHED"; break;
-		case 1:  reason_str = "DISCONNECTED"; break;
-		case 2:  reason_str = "BSS_ABSENT"; break;
-		case 3:  reason_str = "STA_NOT_EXIST"; break;
-		case 4:  reason_str = "STA_TX_NOT_ALLOWED"; break;
-		case 5:  reason_str = "STA_SLEEPING"; break;
-		case 6:  reason_str = "RESOURCE"; break;
-		case 7:  reason_str = "AGG_TIMEOUT"; break;
-		case 8:  reason_str = "AIRTIME_BACKPRESSURE"; break;
-		case 9:  reason_str = "HIF_TX_FAILED"; break;
-		case 10: reason_str = "BAR_TIMEOUT"; break;
-		case 11: reason_str = "RTS_RETRY_FAIL"; break;
-		case 12: reason_str = "DATA_RETRY_FAIL"; break;
-		case 13: reason_str = "LIFE_TIMEOUT"; break;
-		case 14: reason_str = "MGMT_RETRY_FAIL"; break;
-		case 15: reason_str = "AGING"; break;
-		default: reason_str = "UNKNOWN"; break;
-		}
-		DBGLOG(SAA, ERROR,
-			"[AUTH-FLUSH] Reason=%u(%s) StaState=%s WIDX=%u StaRecIdx=%u\n",
-			e->ucFlushReason, reason_str,
-			pStaRec ? "active" : "null",
-			e->ucWlanIndex,
-			prMsduInfo ? prMsduInfo->ucStaRecIndex : 0xFF);
-		if (e->ucStatus == 5 && e->ucWlanIndex == 1) {
-			struct GL_HIF_INFO *prHifInfo = &ad->prGlueInfo->rHifInfo;
-			struct RTMP_TX_RING *r0 = &prHifInfo->TxRing[0];
-			struct RTMP_TX_RING *r1 = &prHifInfo->TxRing[1];
-			DBGLOG(SAA, ERROR, "[LIFE_TO] RING0 CpuIdx=%u DmaIdx=%u Used=%u\n",
-				r0->TxCpuIdx, r0->TxDmaIdx, r0->u4UsedCnt);
-			halDumpTxRing(ad->prGlueInfo, 0, r0->TxCpuIdx > 0 ? r0->TxCpuIdx - 1 : 0);
-			DBGLOG(SAA, ERROR, "[LIFE_TO] RING1 CpuIdx=%u DmaIdx=%u Used=%u\n",
-				r1->TxCpuIdx, r1->TxDmaIdx, r1->u4UsedCnt);
-			halDumpTxRing(ad->prGlueInfo, 1, r1->TxCpuIdx > 0 ? r1->TxCpuIdx - 1 : 0);
-		}
-	}
-	if (!prMsduInfo) {
-		DBGLOG(TX, WARN,
-			"UNI_TXDONE: no pending MSDU for WIDX:%u PID:%u — dumping queue\n",
-			e->ucWlanIndex, e->ucPacketSeq);
-		{
-			struct TX_CTRL *prTxCtrl = &ad->rTxCtrl;
-			struct MSDU_INFO *prCur;
-			uint32_t idx = 0;
-			KAL_SPIN_LOCK_DECLARATION();
-			KAL_ACQUIRE_SPIN_LOCK(ad, SPIN_LOCK_TXING_MGMT_LIST);
-			prCur = (struct MSDU_INFO *)QUEUE_GET_HEAD(&prTxCtrl->rTxMgmtTxingQueue);
-			while (prCur) {
-				DBGLOG(TX, WARN,
-					"[TXMGMT-Q] [%u] WIDX=%u PID=%u src=%u bss=%u sta=%u\n",
-					idx++, prCur->ucWlanIndex, prCur->ucPID,
-					prCur->eSrc, prCur->ucBssIndex, prCur->ucStaRecIndex);
-				prCur = (struct MSDU_INFO *)QUEUE_GET_NEXT_ENTRY(&prCur->rQueEntry);
-			}
-			KAL_RELEASE_SPIN_LOCK(ad, SPIN_LOCK_TXING_MGMT_LIST);
-			if (idx == 0)
-				DBGLOG(TX, WARN, "[TXMGMT-Q] queue is empty\n");
-		}
-		return NULL;
-	}
-	/* DO NOT call saaFsmRunEventTxDone here.
-	 * The caller (nicTxProcessTxDoneEvent) calls pfTxDoneHandler on the
-	 * returned MSDU_INFO -- calling SAA here AND there is a double-fire
-	 * that causes two retries per TX_DONE and premature join failure.
-	 */
-	return prMsduInfo;
+    struct MSDU_INFO *prMsduInfo = NULL;
+
+    static uint8_t last_widx = 0xFF;
+    static uint8_t last_pid  = 0xFF;
+    static uint32_t repeat_cnt = 0;
+
+    if (!ad || !e)
+        return NULL;
+
+    DBGLOG(TX, INFO,
+        "UNI_TXDONE status=%u widx=%u pid=%u sn=%u\n",
+        e->ucStatus, e->ucWlanIndex,
+        e->ucPacketSeq, e->u2SequenceNumber);
+
+    /* ---- sanity checks ---- */
+
+    if (e->ucWlanIndex >= CFG_STA_REC_NUM) {
+        DBGLOG(TX, ERROR,
+            "TXDONE invalid WIDX=%u\n",
+            e->ucWlanIndex);
+        return NULL;
+    }
+
+    /* ---- lookup pending packet ---- */
+
+    prMsduInfo =
+        nicGetPendingTxMsduInfo(ad,
+                                e->ucWlanIndex,
+                                e->ucPacketSeq);
+
+    if (!prMsduInfo) {
+
+        /* detect firmware repeatedly sending the same bad event */
+
+        if (e->ucWlanIndex == last_widx &&
+            e->ucPacketSeq == last_pid)
+        {
+            repeat_cnt++;
+        } else {
+            repeat_cnt = 0;
+            last_widx = e->ucWlanIndex;
+            last_pid  = e->ucPacketSeq;
+        }
+
+        if (repeat_cnt > 32) {
+            DBGLOG(TX, ERROR,
+                "TXDONE stuck loop WIDX=%u PID=%u dropping events\n",
+                e->ucWlanIndex, e->ucPacketSeq);
+            return NULL;
+        }
+
+        /* limited diagnostics */
+
+        if (repeat_cnt < 4) {
+
+            DBGLOG(TX, WARN,
+                "TXDONE no MSDU for WIDX=%u PID=%u\n",
+                e->ucWlanIndex, e->ucPacketSeq);
+
+            struct TX_CTRL *tx = &ad->rTxCtrl;
+            struct MSDU_INFO *cur;
+            uint32_t idx = 0;
+
+            KAL_SPIN_LOCK_DECLARATION();
+
+            KAL_ACQUIRE_SPIN_LOCK(ad,
+                SPIN_LOCK_TXING_MGMT_LIST);
+
+            cur = (struct MSDU_INFO *)
+                QUEUE_GET_HEAD(&tx->rTxMgmtTxingQueue);
+
+            while (cur && idx < 32) {
+
+                DBGLOG(TX, WARN,
+                    "[TXMGMT-Q] %u WIDX=%u PID=%u\n",
+                    idx,
+                    cur->ucWlanIndex,
+                    cur->ucPID);
+
+                cur = (struct MSDU_INFO *)
+                    QUEUE_GET_NEXT_ENTRY(
+                        &cur->rQueEntry);
+
+                idx++;
+            }
+
+            KAL_RELEASE_SPIN_LOCK(ad,
+                SPIN_LOCK_TXING_MGMT_LIST);
+        }
+
+        /* event consumed but nothing to free */
+
+        return NULL;
+    }
+
+    /* valid packet found */
+
+    repeat_cnt = 0;
+
+    return prMsduInfo;
 }
 
 
@@ -3420,16 +3532,25 @@ nicTxProcessTxDoneEvent(IN struct ADAPTER *prAdapter,
 {
 	struct EVENT_TX_DONE *prTxDone;
 	struct MSDU_INFO *prMsduInfo = NULL;
-	struct TX_CTRL *prTxCtrl = &prAdapter->rTxCtrl;
-
-	if (!prAdapter || !prEvent)
-		return;
-
-	prTxDone = (struct EVENT_TX_DONE *)prEvent->aucBuffer;
-	DBGLOG(TX, WARN, "[TXDONE-ENTRY] WIDX=%u PID=%u status=%u\n",
-		prTxDone->ucWlanIndex, prTxDone->ucPacketSeq, prTxDone->ucStatus);
-
+	struct TX_CTRL *prTxCtrl;
 	struct UNI_EVENT_TX_DONE uni = {0};
+
+	if (!prAdapter || !prEvent) {
+		DBGLOG(TX, ERROR, "[TXDONE] NULL adapter=%p event=%p\n",
+			prAdapter, prEvent);
+		return;
+	}
+
+	prTxCtrl = &prAdapter->rTxCtrl;
+	prTxDone = (struct EVENT_TX_DONE *)prEvent->aucBuffer;
+	if (!prTxDone) {
+		DBGLOG(TX, ERROR, "[TXDONE] NULL prTxDone\n");
+		return;
+	}
+
+	DBGLOG(TX, WARN, "[TXDONE-ENTRY] WIDX=%u PID=%u status=%u\n",
+		prTxDone->ucWlanIndex, prTxDone->ucPacketSeq,
+		prTxDone->ucStatus);
 
 	uni.ucPacketSeq      = prTxDone->ucPacketSeq;
 	uni.ucStatus         = prTxDone->ucStatus;
@@ -3477,49 +3598,33 @@ nicTxProcessTxDoneEvent(IN struct ADAPTER *prAdapter,
 			prTxDone->u2SequenceNumber);
 	}
 
-	if (prMsduInfo) {
-		prMsduInfo->pfTxDoneHandler(prAdapter, prMsduInfo,
-			(enum ENUM_TX_RESULT_CODE)(prTxDone->ucStatus));
-
-		if (prMsduInfo->eSrc == TX_PACKET_MGMT) {
-			cnmMgtPktFree(prAdapter, prMsduInfo);
-		} else {
-			nicTxFreePacket(prAdapter, prMsduInfo, FALSE);
-			nicTxReturnMsduInfo(prAdapter, prMsduInfo);
-		}
-
-		if (prTxDone->ucStatus == 0 &&
-		    prMsduInfo->ucBssIndex < MAX_BSSID_NUM)
-			GET_CURRENT_SYSTIME(&prTxCtrl->u4LastTxTime[prMsduInfo->ucBssIndex]);
-
+	if (!prMsduInfo) {
+		DBGLOG(NIC, WARN,
+			"TXDONE: no pending MSDU for WIDX:%u PID/SN:%u/%u\n",
+			prTxDone->ucWlanIndex, prTxDone->ucPacketSeq,
+			prTxDone->u2SequenceNumber);
 		return;
 	}
 
-	prMsduInfo = nicGetPendingTxMsduInfo(prAdapter,
-					     prTxDone->ucWlanIndex,
-					     prTxDone->ucPacketSeq);
-
-	if (prMsduInfo) {
+	if (prMsduInfo->pfTxDoneHandler)
 		prMsduInfo->pfTxDoneHandler(prAdapter, prMsduInfo,
 			(enum ENUM_TX_RESULT_CODE)(prTxDone->ucStatus));
+	else
+		DBGLOG(TX, WARN, "[TXDONE] MSDU=%p has no pfTxDoneHandler\n",
+			prMsduInfo);
 
-		if (prMsduInfo->eSrc == TX_PACKET_MGMT)
-			cnmMgtPktFree(prAdapter, prMsduInfo);
-		else {
-			nicTxFreePacket(prAdapter, prMsduInfo, FALSE);
-			nicTxReturnMsduInfo(prAdapter, prMsduInfo);
-		}
+	if (prTxDone->ucStatus == 0 &&
+	    prMsduInfo->ucBssIndex < MAX_BSSID_NUM)
+		GET_CURRENT_SYSTIME(
+			&prTxCtrl->u4LastTxTime[prMsduInfo->ucBssIndex]);
 
-		if (prTxDone->ucStatus == 0 &&
-		    prMsduInfo->ucBssIndex < MAX_BSSID_NUM)
-			GET_CURRENT_SYSTIME(&prTxCtrl->u4LastTxTime[prMsduInfo->ucBssIndex]);
+	if (prMsduInfo->eSrc == TX_PACKET_MGMT) {
+		cnmMgtPktFree(prAdapter, prMsduInfo);
 	} else {
-		DBGLOG(NIC, WARN, "TXDONE: no pending MSDU for WIDX:%u PID/SN:%u/%u\n",
-			prTxDone->ucWlanIndex, prTxDone->ucPacketSeq,
-			prTxDone->u2SequenceNumber);
+		nicTxFreePacket(prAdapter, prMsduInfo, FALSE);
+		nicTxReturnMsduInfo(prAdapter, prMsduInfo);
 	}
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -3532,192 +3637,317 @@ nicTxProcessTxDoneEvent(IN struct ADAPTER *prAdapter,
  * @retval WLAN_STATUS_SUCCESS   Reset is done successfully.
  */
 /*----------------------------------------------------------------------------*/
-uint32_t nicTxEnqueueMsdu(IN struct ADAPTER *prAdapter,
-                          IN struct MSDU_INFO *prMsduInfo)
+/*
+ * nicTxEnqueueMsdu - Enqueue one or more MSDUs for transmission.
+ *
+ * Frames are routed to one of two paths:
+ *   DataPort0 (direct-to-HIF): data frames and mgmt frames with fgMgmtUseDataQ=TRUE
+ *   DataPort1 (cmd queue):     mgmt frames with fgMgmtUseDataQ=FALSE
+ *
+ * PID assignment for TX-done tracking:
+ *   - DataPort1 path: handled later in nicTxCmd (HAL_WRITE_TX_CMD block)
+ *   - DataPort0 mgmt path: must be done HERE before handing off to HIF,
+ *     because nicTxMsduInfoListMthread does not assign PIDs.
+ */
+
+/* ---------------------------------------------------------------------------
+ * nicTxAssignMgmtPidDataPath
+ *
+ * Called for mgmt frames taking the data-path (fgMgmtUseDataQ=TRUE).
+ * Assigns a PID, stamps it into the TXD, sets TXS_TO_MCU, and registers
+ * the MSDU in rTxMgmtTxingQueue so nicGetPendingTxMsduInfo can find it
+ * when the TX-done event arrives.
+ *
+ * Must be called with no spin locks held.
+ * --------------------------------------------------------------------------*/
+static void nicTxAssignMgmtPidDataPath(struct ADAPTER *prAdapter,
+                                        struct MSDU_INFO *prMsduInfo)
 {
     struct TX_CTRL *prTxCtrl;
-    struct QUE qDataPort0, qDataPort1;
-    struct MSDU_INFO *prNextMsduInfo;
-    struct MSDU_INFO *prRetMsduInfo = NULL; /* FIX: Initialized to prevent UB */
-    uint32_t u4Status = WLAN_STATUS_SUCCESS;
 
     KAL_SPIN_LOCK_DECLARATION();
 
-    ASSERT(prAdapter);
-    ASSERT(prMsduInfo);
+    if (!prAdapter || !prMsduInfo) {
+        DBGLOG(TX, ERROR, "[DATAPATH-PID] NULL adapter=%p msdu=%p\n",
+               prAdapter, prMsduInfo);
+        return;
+    }
+
+    if (!prMsduInfo->pfTxDoneHandler)
+        return;
+
+    if (!prMsduInfo->prPacket) {
+        DBGLOG(TX, ERROR,
+               "[DATAPATH-PID] MSDU=%p has NULL prPacket, refusing to enqueue WIDX=%u\n",
+               prMsduInfo, prMsduInfo->ucWlanIndex);
+        return;
+    }
 
     prTxCtrl = &prAdapter->rTxCtrl;
-    ASSERT(prTxCtrl);
 
-    QUEUE_INITIALIZE(&qDataPort0);
-    QUEUE_INITIALIZE(&qDataPort1);
+    prMsduInfo->ucPID = nicTxAssignPID(prAdapter, prMsduInfo->ucWlanIndex);
 
-    /* 1. Categorize and queue management/data frames.
-     *    Management frames are routed based on fgMgmtUseDataQ:
-     *      - fgMgmtUseDataQ == TRUE  -> DataPort0 (data queue path)
-     *      - fgMgmtUseDataQ == FALSE -> DataPort1 (command queue path)
-     */
-    while (prMsduInfo) {
-        prNextMsduInfo = (struct MSDU_INFO *)
-                         QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *) prMsduInfo);
-        QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *) prMsduInfo) = NULL;
+    HAL_MAC_CONNAC2X_TXD_SET_PID(
+        (struct HW_MAC_CONNAC2X_TX_DESC *)prMsduInfo->aucTxDescBuffer,
+        prMsduInfo->ucPID);
+    HAL_MAC_CONNAC2X_TXD_SET_TXS_TO_MCU(
+        (struct HW_MAC_CONNAC2X_TX_DESC *)prMsduInfo->aucTxDescBuffer);
 
-        if (prMsduInfo->eSrc == TX_PACKET_MGMT) {
-            if (nicTxProcessMngPacket(prAdapter, prMsduInfo)) {
-                if (prMsduInfo->fgMgmtUseDataQ) {
-                    /* Send management via data path (direct to HIF) */
-                    QUEUE_INSERT_TAIL(&qDataPort0,
-                                      (struct QUE_ENTRY *) prMsduInfo);
-                } else {
-                    /* Send management via command queue */
-                    QUEUE_INSERT_TAIL(&qDataPort1,
-                                      (struct QUE_ENTRY *) prMsduInfo);
-                }
-            } else {
-                DBGLOG(TX, WARN, "Invalid MGMT[0x%p] BSS[%u] STA[%u], free it\n",
-                       prMsduInfo, prMsduInfo->ucBssIndex,
-                       prMsduInfo->ucStaRecIndex);
-                cnmMgtPktFree(prAdapter, prMsduInfo);
-            }
-        } else {
-            /* Data frames always go to DataPort0 */
-            QUEUE_INSERT_TAIL(&qDataPort0, (struct QUE_ENTRY *) prMsduInfo);
-        }
+    KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_TXING_MGMT_LIST);
+    QUEUE_INSERT_TAIL(&prTxCtrl->rTxMgmtTxingQueue,
+                      (struct QUE_ENTRY *)prMsduInfo);
+    KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_TXING_MGMT_LIST);
 
-        prMsduInfo = prNextMsduInfo;
-    }
+    DBGLOG(TX, INFO,
+           "[DATAPATH-PID] WIDX=%u PID=%u stamped, inserted into TxingQueue\n",
+           prMsduInfo->ucWlanIndex, prMsduInfo->ucPID);
+}
+/* ---------------------------------------------------------------------------
+ * nicTxEnsureSkbHeadroom
+ *
+ * For OS-sourced frames, guarantees the skb has enough headroom for the TXD.
+ * Returns TRUE if the frame is still valid, FALSE if it must be dropped.
+ * --------------------------------------------------------------------------*/
+static bool nicTxEnsureSkbHeadroom(struct ADAPTER *prAdapter,
+				    struct MSDU_INFO *prMsduInfo)
+{
+	struct sk_buff *prSkb;
+	uint32_t u4HeadRoom;
 
-    /* 2. Process DataPort0 (Direct to HIF, bypass QM)
-     *    Process every MSDU on qDataPort0 and push it toward the HIF.
-     */
-    while (qDataPort0.u4NumElem) {
-        struct MSDU_INFO *prDirectMsdu = NULL;
-        bool bSkbValid = true;
+	u4HeadRoom = NIC_TX_DESC_AND_PADDING_LENGTH +
+		     prAdapter->chip_info->txd_append_size;
 
-        /* Pop head */
-        QUEUE_REMOVE_HEAD(&qDataPort0, prDirectMsdu, struct MSDU_INFO *);
-        if (!prDirectMsdu)
+	if (prMsduInfo->eSrc == TX_PACKET_MGMT) {
+		uint8_t *pucFrame = (uint8_t *)prMsduInfo->prPacket;
+		uint16_t u2FrameLen = prMsduInfo->u2FrameLength;
+
+		prSkb = dev_alloc_skb(u4HeadRoom + u2FrameLen);
+		if (!prSkb) {
+			DBGLOG(TX, ERROR, "[DIRECT-TX] dev_alloc_skb failed for mgmt\n");
+			return false;
+		}
+		skb_reserve(prSkb, u4HeadRoom);
+		skb_put_data(prSkb, pucFrame, u2FrameLen);
+		cnmMemFree(prAdapter, prMsduInfo->prPacket);
+		prMsduInfo->prPacket = prSkb;
+		return true;
+	}
+
+	if (prMsduInfo->eSrc != TX_PACKET_OS &&
+	    prMsduInfo->eSrc != TX_PACKET_OS_OID)
+		return true;
+
+	prSkb = (struct sk_buff *)prMsduInfo->prPacket;
+	if (!prSkb)
+		return true;
+
+	if (skb_headroom(prSkb) >= u4HeadRoom)
+		return true;
+
+	prSkb = skb_realloc_headroom(prSkb, u4HeadRoom);
+	if (!prSkb) {
+		DBGLOG(TX, ERROR, "[DIRECT-TX] skb_realloc_headroom failed\n");
+		return false;
+	}
+
+	dev_kfree_skb((struct sk_buff *)prMsduInfo->prPacket);
+	prMsduInfo->prPacket = prSkb;
+	return true;
+}
+/* ---------------------------------------------------------------------------
+ * nicTxFlushDataPort0
+ *
+ * Drains qDataPort0: ensures headroom, assigns PID for tracked mgmt frames,
+ * then hands each MSDU to nicTxMsduInfoListMthread.
+ * --------------------------------------------------------------------------*/
+static void nicTxFlushDataPort0(struct ADAPTER *prAdapter, struct QUE *prQueue)
+{
+    struct MSDU_INFO *prMsdu;
+
+    while (prQueue->u4NumElem) {
+        QUEUE_REMOVE_HEAD(prQueue, prMsdu, struct MSDU_INFO *);
+        if (WARN_ON(!prMsdu))
             break;
 
-        if (prDirectMsdu->eSrc == TX_PACKET_OS ||
-            prDirectMsdu->eSrc == TX_PACKET_OS_OID) {
-
-            struct sk_buff *prSkb = (struct sk_buff *) prDirectMsdu->prPacket;
-            if (prSkb) {
-                uint32_t u4HeadRoom = NIC_TX_DESC_AND_PADDING_LENGTH +
-                                      prAdapter->chip_info->txd_append_size;
-
-                if (skb_headroom(prSkb) < u4HeadRoom) {
-                    struct sk_buff *prNewSkb = skb_realloc_headroom(prSkb, u4HeadRoom);
-                    if (prNewSkb) {
-                        dev_kfree_skb(prSkb);
-                        prDirectMsdu->prPacket = prNewSkb;
-                    } else {
-                        DBGLOG(TX, ERROR, "[DIRECT-TX] skb_realloc_headroom failed\n");
-                        bSkbValid = false;
-                    }
-                }
-            }
+        if (!nicTxEnsureSkbHeadroom(prAdapter, prMsdu)) {
+            if (prMsdu->pfTxDoneHandler)
+                prMsdu->pfTxDoneHandler(prAdapter, prMsdu,
+                                        TX_RESULT_DROPPED_IN_DRIVER);
+            cnmMgtPktFree(prAdapter, prMsdu);
+            continue;
         }
 
-        if (bSkbValid) {
-            DBGLOG(TX, INFO, "[DIRECT-TX] auth/mgmt via dataQ, bypassing QM\n");
-            /* This expects a single MSDU (head of list) — nicTxMsduInfoListMthread
-             * may further walk a chain from prDirectMsdu->next if it expects it.
-             */
-            nicTxMsduInfoListMthread(prAdapter, prDirectMsdu);
-            kalSetTxEvent2Hif(prAdapter->prGlueInfo);
-        } else {
-            /* If reallocation failed, drop the frame and notify upper layer */
-            if (prDirectMsdu->pfTxDoneHandler) {
-                prDirectMsdu->pfTxDoneHandler(prAdapter, prDirectMsdu,
-                                              TX_RESULT_DROPPED_IN_DRIVER);
-            }
-            cnmMgtPktFree(prAdapter, prDirectMsdu);
+        if (prMsdu->eSrc == TX_PACKET_MGMT)
+            nicTxAssignMgmtPidDataPath(prAdapter, prMsdu);
+
+        DBGLOG(TX, INFO,
+               "[DIRECT-TX] WIDX=%u PID=%u len=%u to HIF\n",
+               prMsdu->ucWlanIndex, prMsdu->ucPID, prMsdu->u2FrameLength);
+
+        nicTxMsduInfoListMthread(prAdapter, prMsdu);
+        kalSetTxEvent2Hif(prAdapter->prGlueInfo);
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * nicTxFlushDataPort1
+ *
+ * Drains qDataPort1: wraps each MSDU in a CMD_INFO and enqueues it to the
+ * command queue. PID assignment for this path is deferred to nicTxCmd
+ * (inside HAL_WRITE_TX_CMD).
+ *
+ * Returns WLAN_STATUS_SUCCESS, or WLAN_STATUS_FAILURE if cmd resources
+ * were exhausted.
+ * --------------------------------------------------------------------------*/
+static uint32_t nicTxFlushDataPort1(struct ADAPTER *prAdapter,
+                                     struct TX_CTRL *prTxCtrl,
+                                     struct QUE *prQueue)
+{
+    struct MSDU_INFO *prMsdu, *prNext;
+    struct CMD_INFO *prCmdInfo;
+    uint32_t u4Status = WLAN_STATUS_SUCCESS;
+    bool bHasEnoughCmds;
+
+    KAL_SPIN_LOCK_DECLARATION();
+
+    if (!prQueue->u4NumElem)
+        return WLAN_STATUS_SUCCESS;
+
+    bHasEnoughCmds =
+        (nicTxGetFreeCmdCount(prAdapter) >= NIC_TX_CMD_INFO_RESERVED_COUNT);
+
+    if (!bHasEnoughCmds)
+        u4Status = WLAN_STATUS_FAILURE;
+
+    prMsdu = (struct MSDU_INFO *)QUEUE_GET_HEAD(prQueue);
+    while (prMsdu) {
+        prNext = (struct MSDU_INFO *)
+                 QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *)prMsdu);
+        prCmdInfo = NULL;
+
+        if (bHasEnoughCmds) {
+            KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_CMD_RESOURCE);
+            QUEUE_REMOVE_HEAD(&prAdapter->rFreeCmdList,
+                              prCmdInfo, struct CMD_INFO *);
+            KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_CMD_RESOURCE);
         }
-    }
 
-#if ARP_MONITER_ENABLE
-    if (prAdapter->cArpNoResponseIdx >= 0) {
-#if CFG_SUPPORT_DATA_STALL
-        KAL_REPORT_ERROR_EVENT(prAdapter, EVENT_ARP_NO_RESPONSE, prAdapter->cArpNoResponseIdx);
-#endif
-        aisBssBeaconTimeout(prAdapter, prAdapter->cArpNoResponseIdx);
-        prAdapter->cArpNoResponseIdx = -1;
-    }
-#endif
-
-    /* Post-process dropped packets (assuming QM logic populates this elsewhere in a broader scope) */
-    if (prRetMsduInfo) {
-        DBGLOG(TX, WARN, "[QM-DROP] qmEnqueueTxPackets returned non-null, frame dropped\n");
-        nicTxFreeMsduInfoPacket(prAdapter, prRetMsduInfo);
-        nicTxReturnMsduInfo(prAdapter, prRetMsduInfo);
-    }
-
-    /* 3. Process DataPort1 (Send to Command Queue) */
-    if (qDataPort1.u4NumElem) {
-        struct MSDU_INFO *prMsduInfoHead =
-            (struct MSDU_INFO *) QUEUE_GET_HEAD(&qDataPort1);
-        bool bHasEnoughCmds =
-            (nicTxGetFreeCmdCount(prAdapter) >= NIC_TX_CMD_INFO_RESERVED_COUNT);
-
-        if (!bHasEnoughCmds) {
-            u4Status = WLAN_STATUS_FAILURE;
-        }
-
-        while (prMsduInfoHead) {
-            prNextMsduInfo = (struct MSDU_INFO *)
-                             QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *) prMsduInfoHead);
-            struct CMD_INFO *prCmdInfo = NULL;
-
-            if (bHasEnoughCmds) {
-                KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_CMD_RESOURCE);
-                QUEUE_REMOVE_HEAD(&prAdapter->rFreeCmdList, prCmdInfo, struct CMD_INFO *);
-                KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_CMD_RESOURCE);
-            }
-
-            if (prCmdInfo) {
-                GLUE_INC_REF_CNT(prTxCtrl->i4TxMgmtPendingNum);
-                kalMemZero(prCmdInfo, sizeof(struct CMD_INFO));
+        if (prCmdInfo) {
+            GLUE_INC_REF_CNT(prTxCtrl->i4TxMgmtPendingNum);
+            kalMemZero(prCmdInfo, sizeof(struct CMD_INFO));
 
 #if CFG_ENABLE_PKT_LIFETIME_PROFILE
-                GET_CURRENT_SYSTIME(&prMsduInfoHead->rPktProfile.rEnqueueTimestamp);
+            GET_CURRENT_SYSTIME(&prMsdu->rPktProfile.rEnqueueTimestamp);
 #endif
-                prCmdInfo->eCmdType = COMMAND_TYPE_MANAGEMENT_FRAME;
-                prCmdInfo->u2InfoBufLen = prMsduInfoHead->u2FrameLength;
-                prCmdInfo->prMsduInfo = prMsduInfoHead;
-                prCmdInfo->fgSetQuery = TRUE;
-                prCmdInfo->ucCmdSeqNum = prMsduInfoHead->ucTxSeqNum;
+            prCmdInfo->eCmdType    = COMMAND_TYPE_MANAGEMENT_FRAME;
+            prCmdInfo->u2InfoBufLen = prMsdu->u2FrameLength;
+            prCmdInfo->prMsduInfo  = prMsdu;
+            prCmdInfo->fgSetQuery  = TRUE;
+            prCmdInfo->ucCmdSeqNum = prMsdu->ucTxSeqNum;
 
-                DBGLOG(TX, TRACE, "%s: EN-Q MSDU[0x%p] SEQ[%u] BSS[%u] STA[%u] to CMD Q\n",
-                       __func__, prMsduInfoHead, prMsduInfoHead->ucTxSeqNum,
-                       prMsduInfoHead->ucBssIndex, prMsduInfoHead->ucStaRecIndex);
+            DBGLOG(TX, TRACE,
+                   "%s: EN-Q MSDU[0x%p] SEQ[%u] BSS[%u] STA[%u] to CMD Q\n",
+                   __func__, prMsdu, prMsdu->ucTxSeqNum,
+                   prMsdu->ucBssIndex, prMsdu->ucStaRecIndex);
 
-                kalEnqueueCommand(prAdapter->prGlueInfo, (struct QUE_ENTRY *) prCmdInfo);
-            } else {
-                /* Drop packet if out of commands OR allocation failed */
-                u4Status = WLAN_STATUS_FAILURE;
-                if (prMsduInfoHead->pfTxDoneHandler != NULL) {
-                    prMsduInfoHead->pfTxDoneHandler(prAdapter, prMsduInfoHead,
-                                                    TX_RESULT_DROPPED_IN_DRIVER);
-                }
-                cnmMgtPktFree(prAdapter, prMsduInfoHead);
-            }
-
-            prMsduInfoHead = prNextMsduInfo;
+            kalEnqueueCommand(prAdapter->prGlueInfo,
+                              (struct QUE_ENTRY *)prCmdInfo);
+        } else {
+            u4Status = WLAN_STATUS_FAILURE;
+            DBGLOG(TX, WARN,
+                   "[CMD-Q] out of CMD_INFO, dropping MSDU BSS[%u] STA[%u]\n",
+                   prMsdu->ucBssIndex, prMsdu->ucStaRecIndex);
+            if (prMsdu->pfTxDoneHandler)
+                prMsdu->pfTxDoneHandler(prAdapter, prMsdu,
+                                        TX_RESULT_DROPPED_IN_DRIVER);
+            cnmMgtPktFree(prAdapter, prMsdu);
         }
-    }
 
-    /* 4. Trigger Service Thread */
-    if (prTxCtrl->i4TxMgmtPendingNum > 0 ||
-        kalGetTxPendingFrameCount(prAdapter->prGlueInfo) > 0) {
-        kalSetEvent(prAdapter->prGlueInfo);
+        prMsdu = prNext;
     }
 
     return u4Status;
 }
 
+/* ---------------------------------------------------------------------------
+ * nicTxEnqueueMsdu - main entry point
+ * --------------------------------------------------------------------------*/
+uint32_t nicTxEnqueueMsdu(IN struct ADAPTER *prAdapter,
+			   IN struct MSDU_INFO *prMsduInfo)
+{
+	struct TX_CTRL *prTxCtrl;
+	struct QUE qDataPort0, qDataPort1;
+	struct MSDU_INFO *prNext;
+	uint32_t u4Status = WLAN_STATUS_SUCCESS;
+
+	ASSERT(prAdapter);
+	ASSERT(prMsduInfo);
+
+	prTxCtrl = &prAdapter->rTxCtrl;
+	ASSERT(prTxCtrl);
+
+	QUEUE_INITIALIZE(&qDataPort0);
+	QUEUE_INITIALIZE(&qDataPort1);
+
+	/* 1. Classify: route each MSDU to DataPort0 or DataPort1. */
+	while (prMsduInfo) {
+		prNext = (struct MSDU_INFO *)
+			 QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *)prMsduInfo);
+		QUEUE_GET_NEXT_ENTRY((struct QUE_ENTRY *)prMsduInfo) = NULL;
+
+		if (prMsduInfo->eSrc == TX_PACKET_MGMT) {
+			if (!nicTxProcessMngPacket(prAdapter, prMsduInfo)) {
+				DBGLOG(TX, WARN,
+				       "Invalid MGMT[0x%p] BSS[%u] STA[%u], dropping\n",
+				       prMsduInfo, prMsduInfo->ucBssIndex,
+				       prMsduInfo->ucStaRecIndex);
+				cnmMgtPktFree(prAdapter, prMsduInfo);
+				prMsduInfo = prNext;
+				continue;
+			}
+			if (prMsduInfo->fgMgmtUseDataQ) {
+				QUEUE_INSERT_TAIL(&qDataPort0,
+						  (struct QUE_ENTRY *)prMsduInfo);
+			} else {
+				QUEUE_INSERT_TAIL(&qDataPort1,
+						  (struct QUE_ENTRY *)prMsduInfo);
+			}
+		} else {
+			QUEUE_INSERT_TAIL(&qDataPort0,
+					  (struct QUE_ENTRY *)prMsduInfo);
+		}
+
+		prMsduInfo = prNext;
+	}
+
+	/* 2. Flush DataPort0 directly to HIF. */
+	nicTxFlushDataPort0(prAdapter, &qDataPort0);
+
+#if ARP_MONITER_ENABLE
+	if (prAdapter->cArpNoResponseIdx >= 0) {
+#if CFG_SUPPORT_DATA_STALL
+		KAL_REPORT_ERROR_EVENT(prAdapter, EVENT_ARP_NO_RESPONSE,
+				       prAdapter->cArpNoResponseIdx);
+#endif
+		aisBssBeaconTimeout(prAdapter, prAdapter->cArpNoResponseIdx);
+		prAdapter->cArpNoResponseIdx = -1;
+	}
+#endif
+
+	/* 3. Flush DataPort1 through the command queue. */
+	u4Status = nicTxFlushDataPort1(prAdapter, prTxCtrl, &qDataPort1);
+
+	/* 4. Wake the service thread if there is pending work. */
+	if (prTxCtrl->i4TxMgmtPendingNum > 0 ||
+	    kalGetTxPendingFrameCount(prAdapter->prGlueInfo) > 0)
+		kalSetEvent(prAdapter->prGlueInfo);
+
+	return u4Status;
+}
+
+
 /*----------------------------------------------------------------------------*/
+
 /*!
  * \brief this function returns WLAN index
  *
@@ -3883,6 +4113,18 @@ void nicTxSetMngPacket(struct ADAPTER *prAdapter,
 	prMsduInfo->ucPacketType = TX_PACKET_TYPE_MGMT;
 	prMsduInfo->ucUserPriority = 0;
 	prMsduInfo->eSrc = TX_PACKET_MGMT;
+	/*
+	 * default mgmt frames to data tx ring (fgMgmtUseDataQ=TRUE).
+	 *
+	 * Pre-association frames (auth, assoc-req) are transmitted before
+	 * the firmware STA table entry for wlan_idx is fully activated.
+	 * Sending them via the data ring causes firmware HIF to return
+	 * HIF_TX_FAILED=9 because it gates data-ring TX on an active
+	 * STA record, so that must be checked.  
+	 *
+	 */
+	prMsduInfo->fgMgmtUseDataQ = TRUE;
+
 #if CFG_SUPPORT_NAN
 	prWifiHdr =
 		(struct WLAN_MAC_HEADER *)((uint8_t *)(prMsduInfo->prPacket) +

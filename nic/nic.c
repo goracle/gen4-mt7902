@@ -1063,7 +1063,8 @@ struct MSDU_INFO *nicGetPendingTxMsduInfo(IN struct ADAPTER *prAdapter, IN uint8
 	while (prQueueEntry) {
 		prMsduInfo = (struct MSDU_INFO *) prQueueEntry;
 
-		if (prMsduInfo->ucPID == ucPID)
+		if (prMsduInfo->ucPID == ucPID &&
+				prMsduInfo->ucWlanIndex == ucWlanIndex)
 			break;
 
 		QUEUE_INSERT_TAIL(prTxingQue, prQueueEntry);

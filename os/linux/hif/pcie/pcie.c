@@ -1609,28 +1609,55 @@ static bool pcieCopyEvent(struct GL_HIF_INFO *prHifInfo,
 }
 
 static bool pcieCopyTxData(struct MSDU_TOKEN_ENTRY *prToken,
-			   void *pucSrc, uint32_t u4Len)
+			    void *pucSrc, uint32_t u4Len)
 {
-	
-DBGLOG(HAL, WARN,
-    "[TXCOPY] token=%p token->pkt=%p src=%p len=%u\n",
-    prToken, prToken ? prToken->prPacket : NULL, pucSrc, u4Len);
+	struct MSDU_INFO *prMsduInfo;
+	uint8_t *pucDst;
+	uint32_t u4TxdLen;
 
-if (!prToken) {
-    DBGLOG(HAL, ERROR, "[TXCOPY] token NULL\n");
-    return false;
-}
-if (!pucSrc) {
-    DBGLOG(HAL, ERROR, "[TXCOPY] src NULL token=%p\n", prToken);
-    return false;
-}
-if (!prToken->prPacket) {
-    DBGLOG(HAL, ERROR, "[TXCOPY] token->prPacket NULL token=%p src=%p len=%u\n",
-        prToken, pucSrc, u4Len);
-    return false;
-}
+	DBGLOG(HAL, WARN,
+	       "[TXCOPY] token=%p token->pkt=%p src=%p len=%u\n",
+	       prToken, prToken ? prToken->prPacket : NULL, pucSrc, u4Len);
 
-memcpy(prToken->prPacket, pucSrc, u4Len);
+	if (!prToken) {
+		DBGLOG(HAL, ERROR, "[TXCOPY] token NULL\n");
+		return false;
+	}
+	if (!pucSrc) {
+		DBGLOG(HAL, ERROR, "[TXCOPY] src NULL token=%p\n", prToken);
+		return false;
+	}
+	if (!prToken->prPacket) {
+		DBGLOG(HAL, ERROR,
+		       "[TXCOPY] token->prPacket NULL token=%p src=%p len=%u\n",
+		       prToken, pucSrc, u4Len);
+		return false;
+	}
+
+	prMsduInfo = prToken->prMsduInfo;
+	pucDst = (uint8_t *)prToken->prPacket;
+
+	/*
+	 * Mgmt frames routed via the data path (fgMgmtUseDataQ=TRUE) skip
+	 * nicTxFillDataDesc, so their TXD lives in aucTxDescBuffer rather
+	 * than being pushed into the skb headroom.  Prepend it manually so
+	 * the token buffer layout is [TXD+padding][frame] as the HW expects.
+	 *
+	 * Data frames (TX_PACKET_OS*) already have the TXD in the skb
+	 * headroom; pucSrc points to [TXD][frame] and u4Len covers both.
+	 */
+	if (prMsduInfo &&
+	    prMsduInfo->eSrc == TX_PACKET_MGMT &&
+	    prMsduInfo->fgMgmtUseDataQ) {
+		u4TxdLen = NIC_TX_DESC_AND_PADDING_LENGTH;
+		DBGLOG(HAL, INFO,
+		       "[TXCOPY] mgmt-datapath: prepend TXD %u bytes then frame %u bytes\n",
+		       u4TxdLen, u4Len);
+		memcpy(pucDst, prMsduInfo->aucTxDescBuffer, u4TxdLen);
+		memcpy(pucDst + u4TxdLen, pucSrc, u4Len);
+	} else {
+		memcpy(pucDst, pucSrc, u4Len);
+	}
 
 	return true;
 }

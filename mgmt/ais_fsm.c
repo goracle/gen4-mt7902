@@ -674,7 +674,6 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	ASSERT(prBssDesc);
 
-	/* BSSID lock */
 	prBssDesc->fgIsConnecting = TRUE;
 	COPY_MAC_ADDR(prAisBssInfo->aucBSSID, prBssDesc->aucBSSID);
 
@@ -696,12 +695,6 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	prAisFsmInfo->prTargetStaRec = prStaRec;
 
-	/* Activate StaRec and sync to FW fire-and-forget.
-	 * CMD queue and TX queue are ordered — FW will process the StaRec
-	 * update before it sees the auth frame, so no ACK round-trip needed.
-	 */
-
-	/* Auth algorithm */
 	prStaRec->fgIsReAssoc = (prAisBssInfo->eConnectionState == MEDIA_STATE_CONNECTED);
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
@@ -717,7 +710,6 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 	prStaRec->ucTxAuthAssocRetryLimit = prStaRec->fgIsReAssoc ?
 		TX_AUTH_ASSOCI_RETRY_LIMIT_FOR_ROAMING : TX_AUTH_ASSOCI_RETRY_LIMIT;
 
-	/* Sync bands */
 	prAisBssInfo->eBand = prBssDesc->eBand;
 	prAisBssInfo->ucPrimaryChannel = prBssDesc->ucChannelNum;
 
@@ -756,20 +748,17 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 #endif
 
 	/* Clear any stale pending msg */
-	if (prAisFsmInfo->prPendingSAAMsg)
+	if (prAisFsmInfo->prPendingSAAMsg) {
 		cnmMemFree(prAdapter, prAisFsmInfo->prPendingSAAMsg);
-	prAisFsmInfo->prPendingSAAMsg = NULL;
+		prAisFsmInfo->prPendingSAAMsg = NULL;
+	}
 
-	DBGLOG(AIS, INFO, "[AIS%d] Deferring SAA until STATE_3 ACK: Seq %u BSSID " MACSTR "\n",
+	DBGLOG(AIS, INFO, "[AIS%d] Deferring SAA: Seq %u BSSID " MACSTR
+	       " waiting for STA_STATE_1 FW ACK\n",
 	       ucBssIndex, prJoinReqMsg->ucSeqNum, MAC2STR(prBssDesc->aucBSSID));
-	prStaRec->fgIsValid = FALSE;
+
 	prAisFsmInfo->prPendingSAAMsg = prJoinReqMsg;
-	/* ucStaState is already STA_STATE_1 from bssCreateStaRecFromBssDesc -- keep it */
-	/* Do NOT send prPendingSAAMsg to mbox here -- aisFsmFirePendingSAA fires it
-	 * after STATE_3 ACK confirms WTBL is armed. Sending it now causes
-	 * saaFsmRunEventStart to call saaSendAuthAssoc before STATE_3, racing WTBL.
-	 */
-	cnmStaSendUpdateCmd(prAdapter, prStaRec, TRUE);
+	cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_1);
 }
 
 /*----------------------------------------------------------------------------*/
@@ -5259,6 +5248,12 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 		}
 
 		prAisFsmInfo->u4ChGrantedInterval = u4GrantInterval;
+		prAisBssInfo->fgIsGranted = TRUE;
+		//prAisBssInfo->eBandGranted = prMsgChGrant->eBand;
+		prAisBssInfo->ucPrimaryChannelGranted = prMsgChGrant->ucPrimaryChannel;
+
+		/* Tell firmware what channel/band we're joining on */
+		nicUpdateBss(prAdapter, ucBssIndex);
 
 		/* Start join timeout timer */
 		cnmTimerStartTimer(prAdapter,
@@ -5269,6 +5264,7 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 		DBGLOG(AIS, INFO, "[AIS%d] Sovereign Grant Accepted - Moving to JOIN\n", ucBssIndex);
 
 		prAisFsmInfo->fgIsChannelGranted = TRUE;
+
 		aisFsmSteps(prAdapter, AIS_STATE_JOIN, ucBssIndex);
 		return;
 	}

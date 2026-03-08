@@ -263,6 +263,14 @@ void nic_rxd_v2_fill_rfb(
 		(uint8_t) HAL_MAC_CONNAC2X_RX_STATUS_GET_WLAN_IDX(prRxStatus));
 	prSwRfb->prStaRec = cnmGetStaRecByIndex(prAdapter,
 		prSwRfb->ucStaRecIdx);
+
+
+
+DBGLOG(RX, WARN, "[RXD-FILL] wlanIdx=%u staRecIdx=%u prStaRec=%p fgIsValid=%u\n",
+	       prSwRfb->ucWlanIdx, prSwRfb->ucStaRecIdx,
+	       prSwRfb->prStaRec,
+	       prSwRfb->prStaRec ? prSwRfb->prStaRec->fgIsValid : 0xFF);
+
 	prSwRfb->ucTid =
 		(uint8_t) HAL_MAC_CONNAC2X_RX_STATUS_GET_TID(prRxStatus);
 	prSwRfb->fgHdrTran =
