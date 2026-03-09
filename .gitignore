@@ -21,6 +21,7 @@ modules.order
 *.backup_*
 *.backup_compilefix_*
 *.backup_mobile_*
+err*.txt
 
 # editor undo files
 .*.~undo-tree~
