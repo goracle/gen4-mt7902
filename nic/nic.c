@@ -844,13 +844,9 @@ uint32_t wlanSendSetQueryUniCmdAdv(IN struct ADAPTER *prAdapter,
 	       prAdapter->chip_info->u2UniCmdTxHdrSize,
 	       ucOption);
 
-	print_hex_dump(KERN_INFO,
-				   "UNI_CMD: ",
-				   DUMP_PREFIX_OFFSET,
-				   16, 1,
-				   prCmdInfo->pucInfoBuffer,
-				   64,
-				   false);
+	/* UNI_CMD hex dump disabled
+	print_hex_dump(KERN_INFO, "UNI_CMD: ", DUMP_PREFIX_OFFSET,
+		16, 1, prCmdInfo->pucInfoBuffer, 64, false); */
 
 	DBGLOG(NIC, INFO,
 	       "UNI BUF PTR=%p alignment=%ld\n",
