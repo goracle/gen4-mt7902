@@ -2261,6 +2261,7 @@ void halProcessRxInterrupt(IN struct ADAPTER *prAdapter)
 {
 	struct BUS_INFO *prBusInfo = prAdapter->chip_info->bus_info;
 
+	DBGLOG(RX, WARN, "[RX-ENTRY] halProcessRxInterrupt called\n");
 	if (prBusInfo->processRxInterrupt)
 		prBusInfo->processRxInterrupt(prAdapter);
 	else
@@ -3045,11 +3046,11 @@ static uint8_t defaultSetRxRingHwAddr(
 		kalDevRegRead(prGlueInfo, prRxRing->hw_didx_addr, &u4DmaIdx);
 
 		if (u4CpuIdx > u4DmaIdx)
-			u4RxPktCnt = u4MaxCnt + u4DmaIdx - u4CpuIdx - 1;
+			u4RxPktCnt = u4MaxCnt + u4DmaIdx - u4CpuIdx;
 		else if (u4CpuIdx < u4DmaIdx)
-			u4RxPktCnt = u4DmaIdx - u4CpuIdx - 1;
+			u4RxPktCnt = u4DmaIdx - u4CpuIdx;
 		else
-			u4RxPktCnt = u4MaxCnt - 1;
+			u4RxPktCnt = 0;
 
 		return u4RxPktCnt;
 	}
@@ -3142,8 +3143,8 @@ static uint8_t defaultSetRxRingHwAddr(
 		{
 			uint32_t glo_pre = 0;
 			kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo_pre);
-			DBGLOG(HAL, ERROR, "[KICKRING] port=%u cidx=%u GLO_CFG=0x%08x\n",
-				   u2Port, prTxRing->TxCpuIdx, glo_pre);
+			DBGLOG(HAL, ERROR, "[KICKRING] port=%u cidx=%u GLO_CFG=0x%08x CID=0x%02x\n",
+				   u2Port, prTxRing->TxCpuIdx, glo_pre, prCmdInfo->ucCID);
 		}
 		kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr, prTxRing->TxCpuIdx);
 

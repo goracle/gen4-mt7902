@@ -404,7 +404,7 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
                  saaFsmRunEventTxDone,
                  MSDU_RATE_MODE_AUTO);
 
-    prMsduInfo->fgMgmtUseDataQ = TRUE;
+    prMsduInfo->fgMgmtUseDataQ = FALSE; //use mgmt tx queue, not data queue
 
     for (i = 0; i < ARRAY_SIZE(txAuthIETable); i++) {
         if (txAuthIETable[i].pfnAppendIE)
@@ -1174,7 +1174,7 @@ authSendDeauthFrame(IN struct ADAPTER *prAdapter,
 		}
 	}
 #endif
-	nicTxSetPktLifeTime(prMsduInfo, 2000);
+	nicTxSetPktLifeTime(prMsduInfo, 5000);
 
 	nicTxSetPktRetryLimit(prMsduInfo, TX_DESC_TX_COUNT_NO_LIMIT);
 

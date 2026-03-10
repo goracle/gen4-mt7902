@@ -378,6 +378,12 @@ void mt7902Connac2xProcessTxInterrupt(
 	union WPDMA_INT_STA_STRUCT rIntrStatus;
 
 	rIntrStatus = (union WPDMA_INT_STA_STRUCT)prHifInfo->u4IntStatus;
+	DBGLOG(HAL, WARN, "[TXINT-PROC] raw=0x%08x tx_done0=%d tx_done1=%d tx_done16=%d tx_done17=%d\n",
+		prHifInfo->u4IntStatus,
+		rIntrStatus.field_conn2x_single.wfdma0_tx_done_0,
+		rIntrStatus.field_conn2x_single.wfdma0_tx_done_1,
+		rIntrStatus.field_conn2x_single.wfdma0_tx_done_16,
+		rIntrStatus.field_conn2x_single.wfdma0_tx_done_17);
 	if (rIntrStatus.field_conn2x_single.wfdma0_tx_done_16)
 		halWpdmaProcessCmdDmaDone(
 			prAdapter->prGlueInfo, TX_RING_FWDL_IDX_3);
@@ -532,56 +538,57 @@ void mt7902WfdmaRxRingExtCtrl(
 		prBusInfo->host_rx_ring_ext_ctrl_base + u4Offset;
 }
 
+
 void mt7902Connac2xWfdmaManualPrefetch(
 	struct GLUE_INFO *prGlueInfo)
 {
 	struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
 	u_int32_t val = 0;
 
-	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
-	/* disable prefetch offset calculation auto-mode */
-    printk(KERN_ERR "[mt7902] ManualPrefetch: GLO_CFG read via HAL = 0x%08x\n", val);
-    //HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, 0xdeadbeef);
-    //HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
-    //printk(KERN_ERR "[mt7902] ManualPrefetch: GLO_CFG after WR(0xdeadbeef) = 0x%08x\n", val);
-
-	val &=
-	~WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN_MASK;
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, val);
-
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING0_EXT_CTRL_ADDR,
-	     0x00000004);
+		0x00000004);
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING1_EXT_CTRL_ADDR,
-	     0x00400004);
+		0x00400004);
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING2_EXT_CTRL_ADDR,
-	     0x00800004);
+		0x00800004);
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING3_EXT_CTRL_ADDR,
-	     0x00c00004);
+		0x00c00004);
 
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR,
-	     0x01000004);
+		0x01000004);
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING1_EXT_CTRL_ADDR,
-	     0x01400004);
+		0x01400004);
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING2_EXT_CTRL_ADDR,
-	     0x01800004);
-
+		0x01800004);
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING3_EXT_CTRL_ADDR,
-	     0x01c00004);
+		0x01c00004);
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING4_EXT_CTRL_ADDR,
-	     0x02000004);
+		0x02000004);
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING5_EXT_CTRL_ADDR,
-	     0x02400004);
+		0x02400004);
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING6_EXT_CTRL_ADDR,
-	     0x02800004);
+		0x02800004);
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING15_EXT_CTRL_ADDR,
-	     0x02c00004);
+		0x02c00004);
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING16_EXT_CTRL_ADDR,
-	     0x03000004);
+		0x03000004);
 
 	/* reset dma idx */
 	HAL_MCR_WR(prAdapter,
 		WF_WFDMA_HOST_DMA0_WPDMA_RST_DTX_PTR_ADDR, 0xFFFFFFFF);
+
+	/* Re-arm chain_en after EXT_CTRL writes (mirrors mt76 ordering:
+	 * prefetch runs before the final GLO_CFG set that includes chain_en).
+	 * EXT_CTRL writes clear bit 15; set it last so it sticks. */
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
+	val |= BIT(15); /* CSR_DISP_BASE_PTR_CHAIN_EN */
+	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, val);
+
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
+	DBGLOG(HAL, ERROR, "[PREFETCH] GLO_CFG after wfdmaManualPrefetch=0x%08x (bit15=%d)\n",
+		val, !!(val & BIT(15)));
 }
+
 
 void mt7902ReadIntStatus(
 	struct ADAPTER *prAdapter,

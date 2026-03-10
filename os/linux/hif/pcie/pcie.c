@@ -202,26 +202,11 @@ static inline u_int8_t mt7902_mmio_dead(struct GL_HIF_INFO *prHifInfo)
 
 static void pcieDisableInterrupt(struct ADAPTER *prAdapter)
 {
-	struct GLUE_INFO *prGlueInfo;
-	void __iomem *base;
-
-	if (unlikely(!prAdapter || !prAdapter->prGlueInfo))
+	if (unlikely(!prAdapter))
 		return;
 
-	prGlueInfo = prAdapter->prGlueInfo;
-	base = prGlueInfo->rHifInfo.CSRBaseAddress;
-
-	if (likely(base)) {
-		/* 1. Mask further interrupts */
-		writel(0, base + MT7902_PCIE_HOST_INT_ENA_SET);
-		
-		/* 2. Clear pending status bits */
-		writel(MT7902_PCIE_INT_ALL_MASK, base + MT7902_PCIE_HOST_INT_STATUS);
-		
-		/* 3. Flush write buffer to silicon */
-		(void)readl(base + MT7902_PCIE_HOST_INT_STATUS); 
-	}
-
+	/* MSI ACK is handled by the kernel automatically.
+	 * Just flip the flag; wlanIST re-arms via nicEnableInterrupt. */
 	prAdapter->fgIsIntEnable = FALSE;
 }
 

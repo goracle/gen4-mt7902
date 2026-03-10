@@ -100,7 +100,7 @@
 #define AIS_BMC_MIN_TIMEOUT_VALID           TRUE
 
 #define AIS_JOIN_CH_GRANT_THRESHOLD         10
-#define AIS_JOIN_CH_REQUEST_INTERVAL        4000
+#define AIS_JOIN_CH_REQUEST_INTERVAL        10000
 /* [TODO]Record SAE authentiacation time to check
 * if we need to extend this time when using SAE authentication
 */

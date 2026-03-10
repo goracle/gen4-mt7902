@@ -1516,6 +1516,24 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 #endif
 #endif
 			prAdapter->fgIsFwDownloaded = TRUE;
+
+			/* Re-arm WFDMA after FW boot resets GLO_CFG */
+			if (prAdapter->chip_info->asicWfdmaReInit) {
+				DBGLOG(INIT, ERROR, "[POST-FWDL] calling asicWfdmaReInit\n");
+				prAdapter->chip_info->asicWfdmaReInit(prAdapter);
+			} else {
+				struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
+				struct BUS_INFO *prBusInfo = prAdapter->chip_info->bus_info;
+				if (prBusInfo->pdmaSetup)
+					prBusInfo->pdmaSetup(prGlueInfo, TRUE);
+			}
+
+			{
+				uint32_t glo = 0;
+				HAL_MCR_RD(prAdapter, 0x7c024014, &glo);
+				DBGLOG(INIT, ERROR, "[POST-FWDL] GLO_CFG after pdmaSetup(TRUE)=0x%08x\n", glo);
+			}
+
 			wlanCfgSetCountryCode(prAdapter);
 
 
@@ -1780,7 +1798,7 @@ void wlanIST(struct ADAPTER *prAdapter)
 			DBGLOG(INIT, WARN,
 				"wlanIST: HALT detected at iteration %u, aborting IST loop\n",
 				i);
-			break;
+			return;
 		}
 
 		if (nicProcessIST(prAdapter) == WLAN_STATUS_NOT_INDICATING)
@@ -1788,6 +1806,9 @@ void wlanIST(struct ADAPTER *prAdapter)
 
 		i++;
 	}
+
+	/* Re-arm the interrupt now that we have drained all pending status. */
+	nicEnableInterrupt(prAdapter);
 }
 
 

@@ -4114,7 +4114,7 @@ void nicTxSetMngPacket(struct ADAPTER *prAdapter,
 	prMsduInfo->ucUserPriority = 0;
 	prMsduInfo->eSrc = TX_PACKET_MGMT;
 	/*
-	 * default mgmt frames to data tx ring (fgMgmtUseDataQ=TRUE).
+	 * default mgmt frames to mgmt tx ring (fgMgmtUseDataQ=FALSE).
 	 *
 	 * Pre-association frames (auth, assoc-req) are transmitted before
 	 * the firmware STA table entry for wlan_idx is fully activated.
@@ -4123,7 +4123,7 @@ void nicTxSetMngPacket(struct ADAPTER *prAdapter,
 	 * STA record, so that must be checked.  
 	 *
 	 */
-	prMsduInfo->fgMgmtUseDataQ = TRUE;
+	prMsduInfo->fgMgmtUseDataQ = FALSE;
 
 #if CFG_SUPPORT_NAN
 	prWifiHdr =

@@ -438,36 +438,51 @@ u_int8_t asicConnac2xWfdmaIsNeedReInit(
 	return fgNeedReInit;
 }
 
+
 void asicConnac2xWfdmaReInit(
 	struct ADAPTER *prAdapter)
 {
 	u_int8_t fgResult;
 	struct mt66xx_chip_info *prChipInfo = NULL;
+	uint32_t u4Val = 0;
 
 	prChipInfo = prAdapter->chip_info;
 
-	/*WFDMA re-init flow after chip deep sleep*/
 	asicConnac2xWfdmaDummyCrRead(prAdapter, &fgResult);
-	if (fgResult) {
-		DBGLOG(INIT, INFO, "WFDMA reinit due to deep sleep\n");
+	DBGLOG(INIT, ERROR, "[REINIT] DummyCrRead fgResult=%d\n", fgResult);
+
 #if defined(_HIF_PCIE) || defined(_HIF_AXI)
+	/* On PCIe, FW boot always resets GLO_CFG. Re-enable DMA unconditionally.
+	 * If fgResult is TRUE (deep sleep path), do the full ring reinit.
+	 * Either way, re-arm tx/rx DMA + chain_en after FW clears GLO_CFG. */
+	if (fgResult) {
+		DBGLOG(INIT, ERROR, "[REINIT] deep sleep path: full halWpdmaInitRing\n");
 		halWpdmaInitRing(prAdapter->prGlueInfo);
-#elif defined(_HIF_USB)
+	} else {
+		/* Cold boot path: FW reset GLO_CFG, re-enable DMA engine */
+		HAL_MCR_RD(prAdapter,
+			WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &u4Val);
+		DBGLOG(INIT, ERROR, "[REINIT] cold boot GLO_CFG before re-enable=0x%08x\n", u4Val);
+		asicConnac2xWpdmaConfig(prAdapter->prGlueInfo, TRUE);
+		HAL_MCR_RD(prAdapter,
+			WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &u4Val);
+		DBGLOG(INIT, ERROR, "[REINIT] cold boot GLO_CFG after re-enable=0x%08x\n", u4Val);
+	}
+	nicEnableInterrupt(prAdapter);
+	asicConnac2xWfdmaDummyCrWrite(prAdapter);
+#else
+	if (fgResult) {
 		if (prChipInfo->is_support_asic_lp && prChipInfo->asicUsbInit)
 			prChipInfo->asicUsbInit(prAdapter, prChipInfo);
-
-		if (prChipInfo->is_support_wacpu) {
-			/* command packet forward to TX ring 17 (WMCPU) or
-			 *	  TX ring 20 (WACPU)
-			 */
-			asicConnac2xEnableUsbCmdTxRing(prAdapter,
-				CONNAC2X_USB_CMDPKT2WA);
-		}
-#endif /* _HIF_PCIE */
+		if (prChipInfo->is_support_wacpu)
+			asicConnac2xEnableUsbCmdTxRing(prAdapter, CONNAC2X_USB_CMDPKT2WA);
 		nicEnableInterrupt(prAdapter);
 		asicConnac2xWfdmaDummyCrWrite(prAdapter);
 	}
+#endif
 }
+
+
 
 void asicConnac2xFillCmdTxd(
 	struct ADAPTER *prAdapter,
@@ -622,6 +637,7 @@ void asicConnac2xWfdmaStop(
 
 }
 
+
 void asicConnac2xWpdmaConfig(
 	struct GLUE_INFO *prGlueInfo,
 	u_int8_t enable)
@@ -648,10 +664,12 @@ void asicConnac2xWpdmaConfig(
 				asicConnac2xWfdmaCfgAddrGet(prGlueInfo, idx);
 			GloCfg[idx].field_conn2x.tx_dma_en = 1;
 			GloCfg[idx].field_conn2x.rx_dma_en = 1;
+			GloCfg[idx].field_conn2x.csr_disp_base_ptr_chain_en = 1;
 			HAL_MCR_WR(prAdapter, u4DmaCfgCr, GloCfg[idx].word);
 		}
 	}
 }
+
 
 u_int8_t asicConnac2xWfdmaWaitIdle(
 	struct GLUE_INFO *prGlueInfo,
@@ -1320,6 +1338,7 @@ void asicConnac2xWfdmaInitForUSB(
 			(CONNAC2X_WPDMA1_GLO_CFG_OMIT_TX_INFO |
 			 CONNAC2X_WPDMA1_GLO_CFG_OMIT_RX_INFO_PFET2 |
 			 CONNAC2X_WPDMA1_GLO_CFG_FW_DWLD_Bypass_dmashdl |
+			 WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN_MASK |
 			 CONNAC2X_WPDMA1_GLO_CFG_RX_DMA_EN |
 			 CONNAC2X_WPDMA1_GLO_CFG_TX_DMA_EN);
 		HAL_MCR_WR(prAdapter, u4WfdmaAddr, u4WfdmaCr);
