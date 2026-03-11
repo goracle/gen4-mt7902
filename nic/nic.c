@@ -1958,6 +1958,16 @@ uint32_t nicUpdateBss(IN struct ADAPTER *prAdapter,
 			rCmdSetBssInfo.ucAuthMode = (uint8_t) prConnSettings->eAuthMode;
 		rCmdSetBssInfo.ucEncStatus = (uint8_t)
 			prConnSettings->eEncStatus;
+		/* Override: if BSS has no RSN/WPA ciphers, force open */
+		if (prBssInfo->u4RsnSelectedPairwiseCipher == 0 &&
+		    prBssInfo->u4RsnSelectedGroupCipher == 0 &&
+		    prBssInfo->u4RsnSelectedAKMSuite == 0 &&
+		    !prConnSettings->fgWapiMode) {
+			DBGLOG(BSS, WARN, "[BSS-FIX] No ciphers, forcing EncStatus DISABLED (was %d)\n",
+			       rCmdSetBssInfo.ucEncStatus);
+			rCmdSetBssInfo.ucEncStatus = (uint8_t)ENUM_ENCRYPTION_DISABLED;
+			rCmdSetBssInfo.ucAuthMode = (uint8_t)AUTH_MODE_OPEN;
+		}
 		rCmdSetBssInfo.ucWapiMode = (uint8_t)
 			prConnSettings->fgWapiMode;
 	}

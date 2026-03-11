@@ -1608,7 +1608,6 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	prAdapter = prGlueInfo->prAdapter;
 	if (!prAdapter)
 		return -EINVAL;
-
 	ucBssIndex = wlanGetBssIdx(ndev);
 	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
 	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
@@ -1619,17 +1618,37 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		"[AUTH] bss=%d auth_type=%d target=" MACSTR "\n",
 		ucBssIndex, req->auth_type, MAC2STR(req->bss->bssid));
 
-	switch (req->auth_type) {
-	case NL80211_AUTHTYPE_SAE:
+	prBssDesc = scanSearchBssDescByBssid(prAdapter,
+		(uint8_t *)req->bss->bssid);
+
+	{
+		struct GL_WPA_INFO *prWpaInfo = aisGetWpaInfo(prAdapter, ucBssIndex);
+		DBGLOG(REQ, ERROR, "[AUTH-DIAG] fgPrivacyInvoke=%d fgIERSN=%d fgIEWPA=%d bssDesc=%p\n",
+			prWpaInfo ? prWpaInfo->fgPrivacyInvoke : -1,
+			prBssDesc ? prBssDesc->fgIERSN : -1,
+			prBssDesc ? prBssDesc->fgIEWPA : -1,
+			prBssDesc);
+	}
+
+	if (req->auth_type == NL80211_AUTHTYPE_SAE) {
 		eAuthMode = AUTH_MODE_WPA3_SAE;
 		eEncStatus = ENUM_ENCRYPTION3_ENABLED;
-		break;
-	case NL80211_AUTHTYPE_OPEN_SYSTEM:
-	default:
+	} else if (prBssDesc && prBssDesc->fgIERSN) {
 		eAuthMode = AUTH_MODE_WPA2_PSK;
 		eEncStatus = ENUM_ENCRYPTION3_ENABLED;
-		break;
+	} else if (prBssDesc && prBssDesc->fgIEWPA) {
+		eAuthMode = AUTH_MODE_WPA_PSK;
+		eEncStatus = ENUM_ENCRYPTION2_ENABLED;
+	} else {
+		eAuthMode = AUTH_MODE_OPEN;
+		eEncStatus = ENUM_ENCRYPTION_DISABLED;
 	}
+
+	DBGLOG(REQ, INFO,
+		"[AUTH] BSS RSN=%d WPA=%d -> AuthMode=%d EncStatus=%d\n",
+		prBssDesc ? prBssDesc->fgIERSN : -1,
+		prBssDesc ? prBssDesc->fgIEWPA : -1,
+		eAuthMode, eEncStatus);
 
 	kalIoctl(prGlueInfo, wlanoidSetAuthMode,
 		&eAuthMode, sizeof(eAuthMode),
@@ -1638,12 +1657,6 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 		&eEncStatus, sizeof(eEncStatus),
 		FALSE, FALSE, FALSE, &u4BufLen);
 
-	/* Look up the BSS_DESC for iwd's chosen BSSID and pin it as target.
-	 * This ensures SEARCH uses iwd's choice directly without policy
-	 * engine interference, and clears any stale target from a prior
-	 * failed attempt. */
-	prBssDesc = scanSearchBssDescByBssid(prAdapter,
-		(uint8_t *)req->bss->bssid);
 	if (prBssDesc) {
 		prAisFsmInfo->prTargetBssDesc = prBssDesc;
 		DBGLOG(REQ, INFO,
@@ -1657,7 +1670,6 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 			MAC2STR(req->bss->bssid));
 	}
 
-	/* Kick the AIS FSM */
 	kalMemZero(&rNewSsid, sizeof(rNewSsid));
 	rNewSsid.pucBssid = (uint8_t *)req->bss->bssid;
 	rNewSsid.u4CenterFreq = req->bss->channel ?
@@ -1669,7 +1681,6 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	rStatus = kalIoctl(prGlueInfo, wlanoidSetConnect,
 		(void *)&rNewSsid, sizeof(struct PARAM_CONNECT),
 		FALSE, FALSE, FALSE, &u4BufLen);
-
 	if (rStatus != WLAN_STATUS_SUCCESS) {
 		DBGLOG(REQ, ERROR,
 			"[AUTH] wlanoidSetConnect failed: 0x%x\n", rStatus);
@@ -1677,7 +1688,6 @@ int mtk_cfg80211_auth(struct wiphy *wiphy,
 	}
 
 	prAisFsmInfo->fgIsCfg80211Connecting = TRUE;
-
 	return 0;
 }
 
@@ -1873,6 +1883,16 @@ int mtk_cfg80211_connect(struct wiphy *wiphy,
 	u_int8_t fgCarryWPSIE = FALSE;
 	int ret = 0;
 	int pm_ref_held = 0;
+
+
+	DBGLOG(REQ, WARN, "[CONN-ENTRY] auth_type=%d n_akm=%d akm[0]=0x%x n_ciphers_pw=%d cipher_pw[0]=0x%x cipher_grp=0x%x wpa_versions=%d\n",
+		   sme->auth_type,
+		   sme->crypto.n_akm_suites,
+		   sme->crypto.n_akm_suites ? sme->crypto.akm_suites[0] : 0,
+		   sme->crypto.n_ciphers_pairwise,
+		   sme->crypto.n_ciphers_pairwise ? sme->crypto.ciphers_pairwise[0] : 0,
+		   sme->crypto.cipher_group,
+		   sme->crypto.wpa_versions);
 
 	/* Step 1: Validate parameters and get BSS index */
 	ret = validate_and_init_connection(wiphy, ndev, sme, &prGlueInfo, &ucBssIndex);
@@ -2473,6 +2493,9 @@ static int set_auth_and_encryption(struct GLUE_INFO *prGlueInfo,
 
 	/* Determine encryption status from cipher suites */
 	cipher = prWpaInfo->u4CipherGroup | prWpaInfo->u4CipherPairwise;
+	DBGLOG(REQ, ERROR, "[ENC-DIAG] cipher=0x%x group=0x%x pair=0x%x privacy=%d authMode=%d\n",
+	       cipher, prWpaInfo->u4CipherGroup, prWpaInfo->u4CipherPairwise,
+	       prWpaInfo->fgPrivacyInvoke, eAuthMode);
 
 	if (cipher & IW_AUTH_CIPHER_GCMP256) {
 		eEncStatus = ENUM_ENCRYPTION4_ENABLED;
@@ -6953,16 +6976,25 @@ int mtk_cfg_auth(struct wiphy *wiphy, struct net_device *ndev,
 #endif
 
 int mtk_cfg_connect(struct wiphy *wiphy,
-		    struct net_device *ndev,
-		    struct cfg80211_connect_params *sme)
+					struct net_device *ndev,
+					struct cfg80211_connect_params *sme)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
 
 	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
 
+	DBGLOG(REQ, WARN, "[CONN-ENTRY] auth_type=%d n_akm=%d akm[0]=0x%x n_ciphers_pw=%d cipher_pw[0]=0x%x cipher_grp=0x%x wpa_versions=%d\n",
+		   sme->auth_type,
+		   sme->crypto.n_akm_suites,
+		   sme->crypto.n_akm_suites ? sme->crypto.akm_suites[0] : 0,
+		   sme->crypto.n_ciphers_pairwise,
+		   sme->crypto.n_ciphers_pairwise ? sme->crypto.ciphers_pairwise[0] : 0,
+		   sme->crypto.cipher_group,
+		   sme->crypto.wpa_versions);
+
 	if ((!prGlueInfo) ||
 		!wlanIsDriverReady(prGlueInfo, WLAN_DRV_READY_CHCECK_WLAN_ON |
-		WLAN_DRV_READY_CHCECK_HIF_SUSPEND)) {
+						   WLAN_DRV_READY_CHCECK_HIF_SUSPEND)) {
 		DBGLOG(REQ, WARN, "driver is not ready\n");
 		return -EFAULT;
 	}

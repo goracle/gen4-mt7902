@@ -790,8 +790,12 @@ void nic_txd_v2_compose_security_frame(
 	HAL_MAC_CONNAC2X_TXD_SET_TID(prTxDesc, ucTid);
 
 	/* Remaining TX time */
-	HAL_MAC_CONNAC2X_TXD_SET_REMAINING_LIFE_TIME_IN_MS(prTxDesc,
-		nicTxGetRemainingTxTimeByTc(ucTempTC));
+	if (!(prMsduInfo->u4Option & MSDU_OPT_MANUAL_LIFE_TIME))
+		HAL_MAC_CONNAC2X_TXD_SET_REMAINING_LIFE_TIME_IN_MS(prTxDesc,
+			nicTxGetRemainingTxTimeByTc(ucTempTC));
+	else
+		HAL_MAC_CONNAC2X_TXD_SET_REMAINING_LIFE_TIME_IN_MS(prTxDesc,
+			prMsduInfo->u4RemainingLifetime);
 
 	/* Tx count limit */
 	HAL_MAC_CONNAC2X_TXD_SET_REMAINING_TX_COUNT(prTxDesc,

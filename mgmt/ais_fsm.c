@@ -75,7 +75,7 @@
  *******************************************************************************
  */
 #define AIS_ROAMING_CONNECTION_TRIAL_LIMIT  2
-#define AIS_JOIN_TIMEOUT                    7
+#define AIS_JOIN_TIMEOUT                    15
 
 #define AIS_FSM_STATE_SEARCH_ACTION_PHASE_0	0
 #define AIS_FSM_STATE_SEARCH_ACTION_PHASE_1	1
@@ -3026,51 +3026,141 @@ force_reset:
  */
 /*----------------------------------------------------------------------------*/
 void aisFsmRunEventJoinComplete(IN struct ADAPTER *prAdapter,
-				IN struct MSG_HDR *prMsgHdr)
+                                IN struct MSG_HDR *prMsgHdr)
 {
-	struct MSG_SAA_FSM_COMP *prJoinCompMsg;
-	struct AIS_FSM_INFO *prAisFsmInfo;
-	enum ENUM_AIS_STATE eNextState;
-	struct SW_RFB *prAssocRspSwRfb;
-	struct STA_RECORD *prStaRec;
-	uint8_t ucBssIndex = 0;
+    struct MSG_SAA_FSM_COMP *prJoinCompMsg;
+    struct AIS_FSM_INFO *prAisFsmInfo;
+    enum ENUM_AIS_STATE eNextState;
+    struct SW_RFB *prAssocRspSwRfb;
+    struct STA_RECORD *prStaRec;
+    uint8_t ucBssIndex = 0;
 
-	DEBUGFUNC("aisFsmRunEventJoinComplete()");
+    /* local pointers for diagnostics */
+    struct CONNECTION_SETTINGS *prConn = NULL;
+    struct BSS_INFO *prBssInfo = NULL;
 
-	prJoinCompMsg = (struct MSG_SAA_FSM_COMP *)prMsgHdr;
-	prAssocRspSwRfb = prJoinCompMsg->prSwRfb;
-	prStaRec = prJoinCompMsg->prStaRec;
-	if (prStaRec)
-		ucBssIndex = prStaRec->ucBssIndex;
+    DEBUGFUNC("aisFsmRunEventJoinComplete()");
 
-	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+    if (!prAdapter || !prMsgHdr) {
+        DBGLOG(AIS, WARN, "aisFsmRunEventJoinComplete: null param(s)\n");
+        if (prMsgHdr)
+            cnmMemFree(prAdapter, prMsgHdr);
+        return;
+    }
 
-	eNextState = prAisFsmInfo->eCurrentState;
+    prJoinCompMsg = (struct MSG_SAA_FSM_COMP *)prMsgHdr;
+    prAssocRspSwRfb = prJoinCompMsg->prSwRfb;
+    prStaRec = prJoinCompMsg->prStaRec;
 
-	/* Check State and SEQ NUM */
-	if (prAisFsmInfo->eCurrentState == AIS_STATE_JOIN) {
-		/* Check SEQ NUM */
-		if (prJoinCompMsg->ucSeqNum == prAisFsmInfo->ucSeqNumOfReqMsg)
-			eNextState =
-			    aisFsmJoinCompleteAction(prAdapter, prMsgHdr);
+    if (prStaRec)
+        ucBssIndex = prStaRec->ucBssIndex;
+
+    prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
+    if (!prAisFsmInfo) {
+        DBGLOG(AIS, WARN, "aisFsmRunEventJoinComplete: no AIS FSM for bss %u\n",
+               ucBssIndex);
+        if (prAssocRspSwRfb)
+            nicRxReturnRFB(prAdapter, prAssocRspSwRfb);
+        cnmMemFree(prAdapter, prMsgHdr);
+        return;
+    }
+
+    eNextState = prAisFsmInfo->eCurrentState;
+
+    /* gather pointers for logging (may be NULL) */
+    prConn = aisGetConnSettings(prAdapter, ucBssIndex);
+	prBssInfo = prAdapter->aprBssInfo[ucBssIndex];
+
+    /* === security / encryption diagnostic dump === */
+    DBGLOG(AIS, INFO, "==== JOIN COMPLETE SECURITY DUMP (bss=%u) ====\n",
+           ucBssIndex);
+
+    if (prConn) {
+        DBGLOG(AIS, INFO, "[ConnSettings] AuthMode=%d EncStatus=%d ConnInit=%d SendAssoc=%d AuthDataLen=%u\n",
+               prConn->eAuthMode,
+               prConn->eEncStatus,
+               prConn->fgIsConnInitialized,
+               prConn->fgIsSendAssoc,
+               prConn->ucAuthDataLen);
+
+        if (prConn->ucAuthDataLen) {
+            /* print up to reasonable amount */
+            uint8_t i, lim = (prConn->ucAuthDataLen > 64) ? 64 : prConn->ucAuthDataLen;
+            char hexbuf[3*65];
+            hexbuf[0] = 0;
+            for (i = 0; i < lim; ++i) {
+                char tmp[4];
+                snprintf(tmp, sizeof(tmp), "%02x", prConn->aucAuthData[i]);
+                strncat(hexbuf, tmp, sizeof(hexbuf) - strlen(hexbuf) - 1);
+                if (i != lim-1 && i < 64) strncat(hexbuf, " ", sizeof(hexbuf) - strlen(hexbuf) - 1);
+            }
+            if (prConn->ucAuthDataLen > 64)
+                strncat(hexbuf, " ...", sizeof(hexbuf) - strlen(hexbuf) - 1);
+            DBGLOG(AIS, INFO, "[ConnSettings] AuthData (hex, up to 64): %s\n", hexbuf);
+        }
+    } else {
+        DBGLOG(AIS, INFO, "[ConnSettings] NULL\n");
+    }
+
+    if (prBssInfo) {
+        DBGLOG(AIS, INFO, "[BSS_INFO] u2CapInfo=0x%04x u2AssocId=%u\n",
+               prBssInfo->u2CapInfo,
+               prBssInfo->u2AssocId);
+
+        DBGLOG(AIS, INFO, "[BSS_INFO] RSN GroupCipher=0x%08x Pairwise=0x%08x AKM=0x%08x Cap=0x%04x\n",
+               prBssInfo->u4RsnSelectedGroupCipher,
+               prBssInfo->u4RsnSelectedPairwiseCipher,
+               prBssInfo->u4RsnSelectedAKMSuite,
+               prBssInfo->u2RsnSelectedCapInfo);
+    } else {
+        DBGLOG(AIS, INFO, "[BSS_INFO] NULL\n");
+    }
+
+    if (prStaRec) {
+        /* StaRec structure fields differ across tree versions; print what is safe/common */
+        DBGLOG(AIS, INFO, "[StaRec] idx=%u wlanIdx=%u AuthAlg=%u StaType=%d\n",
+               prStaRec->ucIndex,
+               prStaRec->ucWlanIndex,
+               prStaRec->ucAuthAlgNum,
+               prStaRec->eStaType);
+
+        DBGLOG(AIS, INFO, "[StaRec] MAC=%pM\n", prStaRec->aucMacAddr);
+    } else {
+        DBGLOG(AIS, INFO, "[StaRec] NULL\n");
+    }
+
+    DBGLOG(AIS, INFO, "AIS FSM: current=%d next=%d joinReqTime=%u\n",
+           prAisFsmInfo->eCurrentState,
+           eNextState,
+           (unsigned int)prAisFsmInfo->rJoinReqTime);
+
+    DBGLOG(AIS, INFO, "=============================================\n");
+
+    /* Original FSM logic preserved */
+    if (prAisFsmInfo->eCurrentState == AIS_STATE_JOIN) {
+        if (prJoinCompMsg->ucSeqNum == prAisFsmInfo->ucSeqNumOfReqMsg) {
+            eNextState = aisFsmJoinCompleteAction(prAdapter, prMsgHdr);
+        }
 #if DBG
-		else
-			DBGLOG(AIS, WARN,
-			       "SEQ NO of AIS JOIN COMP MSG is not matched.\n");
-#endif /* DBG */
-	}
-	/* Support AP Selection */
-	/* try to remove timeout blacklist item */
-	aisRemoveDisappearedBlacklist(prAdapter);
-	/* end Support AP Selection */
-	if (eNextState != prAisFsmInfo->eCurrentState)
-		aisFsmSteps(prAdapter, eNextState, ucBssIndex);
+        else {
+            DBGLOG(AIS, WARN, "SEQ NO of AIS JOIN COMP MSG is not matched.\n");
+        }
+#endif
+    }
 
-	if (prAssocRspSwRfb)
-		nicRxReturnRFB(prAdapter, prAssocRspSwRfb);
+    /* Support AP Selection: try to remove timeout blacklist item */
+    aisRemoveDisappearedBlacklist(prAdapter);
 
-	cnmMemFree(prAdapter, prMsgHdr);
-}				/* end of aisFsmRunEventJoinComplete() */
+    if (eNextState != prAisFsmInfo->eCurrentState)
+        aisFsmSteps(prAdapter, eNextState, ucBssIndex);
+
+    if (prAssocRspSwRfb)
+        nicRxReturnRFB(prAdapter, prAssocRspSwRfb);
+
+    cnmMemFree(prAdapter, prMsgHdr);
+}
+
+
 
 enum ENUM_AIS_STATE aisFsmJoinCompleteAction(IN struct ADAPTER *prAdapter,
 					     IN struct MSG_HDR *prMsgHdr)
@@ -5252,6 +5342,16 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 		//prAisBssInfo->eBandGranted = prMsgChGrant->eBand;
 		prAisBssInfo->ucPrimaryChannelGranted = prMsgChGrant->ucPrimaryChannel;
 
+		/* Populate BSSID and RSN before nicUpdateBss so firmware gets the correct AP context */
+		if (prAisFsmInfo->prTargetBssDesc) {
+			struct BSS_DESC *prBssDesc = prAisFsmInfo->prTargetBssDesc;
+			rsnPerformPolicySelection(prAdapter, prBssDesc, ucBssIndex);
+			COPY_MAC_ADDR(prAisBssInfo->aucBSSID, prBssDesc->aucBSSID);
+			prAisBssInfo->u4RsnSelectedGroupCipher = prBssDesc->u4RsnSelectedGroupCipher;
+			prAisBssInfo->u4RsnSelectedPairwiseCipher = prBssDesc->u4RsnSelectedPairwiseCipher;
+			prAisBssInfo->u4RsnSelectedAKMSuite = prBssDesc->u4RsnSelectedAKMSuite;
+			prAisBssInfo->u2CapInfo = prBssDesc->u2CapInfo;
+		}
 		/* Tell firmware what channel/band we're joining on */
 		nicUpdateBss(prAdapter, ucBssIndex);
 
@@ -5261,6 +5361,7 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 				   prAisFsmInfo->u4ChGrantedInterval -
 				   AIS_JOIN_CH_GRANT_THRESHOLD);
 
+		prAdapter->rQM.rLastTxPktDumpTime = kalGetTimeTick();
 		DBGLOG(AIS, INFO, "[AIS%d] Sovereign Grant Accepted - Moving to JOIN\n", ucBssIndex);
 
 		prAisFsmInfo->fgIsChannelGranted = TRUE;
@@ -7639,6 +7740,13 @@ void aisFsmFirePendingSAA(struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	if (!prAisFsmInfo || !prAisFsmInfo->prPendingSAAMsg)
 		return;
 
+	if (!prAisFsmInfo->fgIsChannelGranted) {
+		DBGLOG(AIS, INFO,
+		       "[AIS%d] FirePendingSAA: channel not yet granted, deferring\n",
+		       ucBssIndex);
+		return;
+	}
+
 	prMsg = (struct MSG_SAA_FSM_START *)prAisFsmInfo->prPendingSAAMsg;
 	prStaRec = prMsg->prStaRec;
 
@@ -7652,11 +7760,6 @@ void aisFsmFirePendingSAA(struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	DBGLOG(AIS, INFO,
 	       "[AIS%d] STATE_3 ACK confirmed: StaRec[%u] ucStaState=%u firing SAA\n",
 	       ucBssIndex, prStaRec->ucIndex, prStaRec->ucStaState);
-
-	/* StaRec was already activated by cnmStaRecHandleEventPkt on STATE_2 ACK.
-	 * Do NOT call qmActivateStaRec here — it deactivates+reactivates, nuking
-	 * the TX descriptor templates and causing DP_IN_FW (status=33) on auth.
-	 */
 
 	mboxSendMsg(prAdapter, MBOX_ID_0,
 		(struct MSG_HDR *)prAisFsmInfo->prPendingSAAMsg,

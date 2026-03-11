@@ -76,9 +76,9 @@
 #define RX_RING0_SIZE				1024
 #elif defined(MT7961) || defined(MT7902)
 /* Max Rx ring size */
-#define RX_RING_SIZE				512
+#define RX_RING_SIZE				1536
 /* Data Rx ring */
-#define RX_RING0_SIZE				512
+#define RX_RING0_SIZE				1536
 #else
 /* Max Rx ring size */
 #define RX_RING_SIZE				256
@@ -128,7 +128,7 @@
 #if defined(MT7922)
 #define TX_RING_SIZE				2048
 #elif defined(MT7961) || defined(MT7902)
-#define TX_RING_SIZE				512
+#define TX_RING_SIZE				2048
 #elif (CFG_SUPPORT_CONNAC3X == 1)
 #define TX_RING_SIZE				1024
 #else

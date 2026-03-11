@@ -10247,7 +10247,7 @@ void wlanUpdateTxStatistics(IN struct ADAPTER *prAdapter,
 	eAci = aucTid2ACI[prMsduInfo->ucUserPriority];
 
 	prStaRec = cnmGetStaRecByIndex(prAdapter,
-				       prMsduInfo->ucStaRecIndex);
+			       prMsduInfo->ucStaRecIndex);
 
 	if (eAci >= 0 && eAci < WMM_AC_INDEX_NUM) {
 		if (prStaRec) {
@@ -10257,7 +10257,7 @@ void wlanUpdateTxStatistics(IN struct ADAPTER *prAdapter,
 				prStaRec->arLinkStatistics[eAci].u4TxMsdu++;
 		} else {
 			prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter,
-						  prMsduInfo->ucBssIndex);
+				prMsduInfo->ucBssIndex);
 
 			if (fgTxDrop)
 				prBssInfo->arLinkStatistics[eAci].
@@ -10269,13 +10269,25 @@ void wlanUpdateTxStatistics(IN struct ADAPTER *prAdapter,
 
 #if CFG_AP_80211KVR_INTERFACE
 	prStaRec = cnmGetStaRecByAddress(prAdapter,
-				prMsduInfo->ucBssIndex,
-				prMsduInfo->aucEthDestAddr);
+			prMsduInfo->ucBssIndex,
+			prMsduInfo->aucEthDestAddr);
 	if (prStaRec && !fgTxDrop)
 		prStaRec->u8TotalTxBytes += prMsduInfo->u2FrameLength;
 #endif
 
-	/* Trigger FW stats log every 20s */
+	/* Trigger FW stats log every 20s, but not during AIS connection */
+	{
+		uint8_t i;
+		for (i = 0; i < KAL_AIS_NUM; i++) {
+			struct AIS_FSM_INFO *prAis =
+				aisGetAisFsmInfo(prAdapter, i);
+			if (prAis && (prAis->eCurrentState == AIS_STATE_JOIN ||
+				      prAis->eCurrentState == AIS_STATE_REQ_CHANNEL_JOIN ||
+				      prAis->eCurrentState == AIS_STATE_SEARCH))
+				return;
+		}
+	}
+
 	rCurTime = (OS_SYSTIME) kalGetTimeTick();
 
 	DBGLOG(INIT, LOUD, "CUR[%u] LAST[%u] TO[%u]\n", rCurTime,

@@ -1950,6 +1950,12 @@ wlanoidSetAuthMode(IN struct ADAPTER *prAdapter,
 	prConnSettings->eAuthMode = *
 			(enum ENUM_PARAM_AUTH_MODE *) pvSetBuffer;
 
+	if (prConnSettings->eAuthMode != AUTH_MODE_OPEN) {
+		DBGLOG(REQ, WARN, "[AUTH-SET] eAuthMode=%d (non-open!) bssIdx=%d\n",
+			prConnSettings->eAuthMode, ucBssIndex);
+		dump_stack();
+	}
+
 #if 1				/* DBG */
 	switch (prConnSettings->eAuthMode) {
 	case AUTH_MODE_OPEN:

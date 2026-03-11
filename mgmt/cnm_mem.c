@@ -1053,6 +1053,9 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 	kalMemCopy(&prCmdContent->aucMacAddr[0], &prStaRec->aucMacAddr[0],
 			   MAC_ADDR_LEN);
 	prCmdContent->u2AssocId = prStaRec->u2AssocId;
+	DBGLOG(REQ, WARN, "Update StaRec[%u] MAC=" MACSTR " wlanIdx=%u state=%u\n",
+		prStaRec->ucIndex, MAC2STR(prCmdContent->aucMacAddr),
+		prStaRec->ucWlanIndex, prStaRec->ucStaState);
 	prCmdContent->u2ListenInterval = prStaRec->u2ListenInterval;
 	prCmdContent->ucBssIndex = prStaRec->ucBssIndex;
 
@@ -1199,7 +1202,7 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 	prCmdContent->u2He6gBandCapInfo = prStaRec->u2He6gBandCapInfo;
 #endif
 
-	log_dbg(REQ, TRACE, "Update StaRec[%u] WIDX[%u] State[%u] Type[%u] BssIdx[%u] AID[%u]\n",
+	DBGLOG(REQ, WARN, "Update StaRec[%u] WIDX[%u] State[%u] Type[%u] BssIdx[%u] AID[%u]\n",
 			prCmdContent->ucStaIndex,
 			prCmdContent->ucWlanIndex,
 			prCmdContent->ucStaState,
@@ -1207,7 +1210,7 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 			prCmdContent->ucBssIndex,
 			prCmdContent->u2AssocId);
 
-	log_dbg(REQ, TRACE, "Update StaRec[%u] QoS[%u] UAPSD[%u]\n",
+	DBGLOG(REQ, WARN, "Update StaRec[%u] QoS[%u] UAPSD[%u]\n",
 			prCmdContent->ucStaIndex,
 			prCmdContent->ucIsQoS,
 			prCmdContent->ucIsUapsdSupported);

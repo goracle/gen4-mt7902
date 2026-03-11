@@ -133,118 +133,172 @@ struct HANDLE_IE_ENTRY rxAuthIETable[] = {
 /*----------------------------------------------------------------------------*/
 static __KAL_INLINE__ void
 authComposeAuthFrameHeaderAndFF(IN struct ADAPTER *prAdapter,
-				IN struct STA_RECORD *prStaRec,
-				IN uint8_t ucBssIndex,
-				IN uint8_t *pucBuffer,
-				IN uint8_t aucPeerMACAddress[],
-				IN uint8_t aucMACAddress[],
-				IN uint16_t u2AuthAlgNum,
-				IN uint16_t u2TransactionSeqNum,
-				IN uint16_t u2StatusCode)
+                IN struct STA_RECORD *prStaRec,
+                IN uint8_t ucBssIndex,
+                IN uint8_t *pucBuffer,
+                IN uint8_t aucPeerMACAddress[],
+                IN uint8_t aucMACAddress[],
+                IN uint16_t u2AuthAlgNum,
+                IN uint16_t u2TransactionSeqNum,
+                IN uint16_t u2StatusCode)
 {
-	struct WLAN_AUTH_FRAME *prAuthFrame;
-	uint16_t u2FrameCtrl;
+    struct WLAN_AUTH_FRAME *prAuthFrame;
+    uint16_t u2FrameCtrl;
 
-	ASSERT(pucBuffer);
-	ASSERT(aucPeerMACAddress);
-	ASSERT(aucMACAddress);
+    ASSERT(pucBuffer);
+    ASSERT(aucPeerMACAddress);
+    ASSERT(aucMACAddress);
 
-	prAuthFrame = (struct WLAN_AUTH_FRAME *)pucBuffer;
+    prAuthFrame = (struct WLAN_AUTH_FRAME *)pucBuffer;
 
-	/* ====================================================================
-	 * Compose 802.11 MAC Header
-	 * ==================================================================== */
+    /* ====================================================================
+     * Compose 802.11 MAC Header
+     * ==================================================================== */
 
-	/* Frame Control: set to Authentication frame type */
-	u2FrameCtrl = MAC_FRAME_AUTH;
+    /* Frame Control: set to Authentication frame type */
+    u2FrameCtrl = MAC_FRAME_AUTH;
 
-	/* Shared Key Auth frame 3 must be encrypted */
-	if ((u2AuthAlgNum == AUTH_ALGORITHM_NUM_SHARED_KEY) &&
-	    (u2TransactionSeqNum == AUTH_TRANSACTION_SEQ_3)) {
-		u2FrameCtrl |= MASK_FC_PROTECTED_FRAME;
-	}
+    /* Shared Key Auth frame 3 must be encrypted (protected bit). */
+    if ((u2AuthAlgNum == AUTH_ALGORITHM_NUM_SHARED_KEY) &&
+        (u2TransactionSeqNum == AUTH_TRANSACTION_SEQ_3)) {
+        u2FrameCtrl |= MASK_FC_PROTECTED_FRAME;
+    }
 
-	prAuthFrame->u2FrameCtrl = u2FrameCtrl;
-	prAuthFrame->u2DurationID = 0; /* Will be filled by hardware */
+    prAuthFrame->u2FrameCtrl = u2FrameCtrl;
+    prAuthFrame->u2DurationID = 0; /* Will be filled by hardware */
 
-	/* Address fields */
-	COPY_MAC_ADDR(prAuthFrame->aucDestAddr, aucPeerMACAddress);
-	COPY_MAC_ADDR(prAuthFrame->aucSrcAddr, aucMACAddress);
+    /* Address fields */
+    COPY_MAC_ADDR(prAuthFrame->aucDestAddr, aucPeerMACAddress);
+    COPY_MAC_ADDR(prAuthFrame->aucSrcAddr, aucMACAddress);
 
-	/* BSSID: For AP STA, use peer MAC; otherwise use our MAC */
-	if (prStaRec != NULL && IS_AP_STA(prStaRec)) {
-		COPY_MAC_ADDR(prAuthFrame->aucBSSID, aucPeerMACAddress);
-	} else {
-		COPY_MAC_ADDR(prAuthFrame->aucBSSID, aucMACAddress);
-	}
+    /* BSSID: For AP STA, use peer MAC; otherwise use our MAC */
+    if (prStaRec != NULL && IS_AP_STA(prStaRec)) {
+        COPY_MAC_ADDR(prAuthFrame->aucBSSID, aucPeerMACAddress);
+    } else {
+        COPY_MAC_ADDR(prAuthFrame->aucBSSID, aucMACAddress);
+    }
 
-	prAuthFrame->u2SeqCtrl = 0; /* Will be filled by hardware */
+    prAuthFrame->u2SeqCtrl = 0; /* Will be filled by hardware */
 
-	/* ====================================================================
-	 * Compose Authentication Frame Body - Fixed Fields
-	 * ==================================================================== */
+    /* ====================================================================
+     * Compose Authentication Frame Body - Fixed Fields
+     * ==================================================================== */
 
-	prAuthFrame->u2AuthAlgNum = u2AuthAlgNum;
+    prAuthFrame->u2AuthAlgNum = u2AuthAlgNum;
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-	/* ----------------------------------------------------------------
-	 * SUPPLICANT_SME=1: Use flexible aucAuthData[] array
-	 * Allows userspace to provide full auth frame body via ucAuthDataLen
-	 * ---------------------------------------------------------------- */
-	struct CONNECTION_SETTINGS *prConnSettings;
-	
+    /*
+     * SUPPLICANT_SME: allow userspace-provided auth body (e.g. SAE).
+     * Also emit a compact but useful diagnostic showing what driver/scan/userspace think
+     * about security so we can debug mismatch (open vs protected, cipher / AKM).
+     */
+	struct CONNECTION_SETTINGS *prConnSettings = NULL;
+	struct BSS_INFO *prBssInfo = NULL;
+	struct AIS_FSM_INFO *prAisFsmInfo = NULL;
+
 	prConnSettings = aisGetConnSettings(prAdapter, ucBssIndex);
+	prBssInfo = prAdapter->aprBssInfo[ucBssIndex];
+	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
 
-	/* Check if userspace provided custom auth data */
-	if ((prConnSettings->ucAuthDataLen > 0) &&
-	    (prConnSettings->ucAuthDataLen <= AUTH_DATA_MAX_LEN) &&
-	    prStaRec &&
-	    !IS_STA_IN_P2P(prStaRec)) {
-		/* Use userspace-provided auth frame body (e.g., for SAE) */
-		kalMemCopy(prAuthFrame->aucAuthData,
-			   prConnSettings->aucAuthData,
-			   prConnSettings->ucAuthDataLen);
 
-		DBGLOG(SAA, INFO,
-		       "Auth with custom data: TransSN=%d Status=%d Len=%d\n",
-		       prConnSettings->aucAuthData[0],
-		       prConnSettings->aucAuthData[2],
-		       prConnSettings->ucAuthDataLen);
-	} else {
-		/* Standard auth frame: manually build TransSN + StatusCode */
-		if (prConnSettings->ucAuthDataLen > AUTH_DATA_MAX_LEN) {
-			DBGLOG(SAA, ERROR,
-			       "Auth data too large (%d > %d), truncating\n",
-			       prConnSettings->ucAuthDataLen,
-			       AUTH_DATA_MAX_LEN);
-		}
+    prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
 
-		prAuthFrame->aucAuthData[0] = (uint8_t)(u2TransactionSeqNum & 0xFF);
-		prAuthFrame->aucAuthData[1] = (uint8_t)((u2TransactionSeqNum >> 8) & 0xFF);
-		prAuthFrame->aucAuthData[2] = (uint8_t)(u2StatusCode & 0xFF);
-		prAuthFrame->aucAuthData[3] = (uint8_t)((u2StatusCode >> 8) & 0xFF);
+    DBGLOG(SAA, INFO, "=== AUTH SECURITY DIAGNOSTIC ===\n");
 
-		DBGLOG(SAA, INFO,
-		       "Auth with standard fields: TransSN=%d Status=%d\n",
-		       u2TransactionSeqNum, u2StatusCode);
-	}
+    if (prConnSettings) {
+        DBGLOG(SAA, INFO,
+               "[ConnSettings] AuthMode=%d EncStatus=%d AuthDataLen=%u\n",
+               prConnSettings->eAuthMode,
+               prConnSettings->eEncStatus,
+               prConnSettings->ucAuthDataLen);
+    } else {
+        DBGLOG(SAA, INFO, "[ConnSettings] <null>\n");
+    }
+
+    if (prBssInfo) {
+        DBGLOG(SAA, INFO,
+               "[BSS] cap=0x%04x pairwise=0x%08x group=0x%08x akm=0x%08x\n",
+               prBssInfo->u2CapInfo,
+               prBssInfo->u4RsnSelectedPairwiseCipher,
+               prBssInfo->u4RsnSelectedGroupCipher,
+               prBssInfo->u4RsnSelectedAKMSuite);
+    } else {
+        DBGLOG(SAA, INFO, "[BSS] <null>\n");
+    }
+
+    if (prStaRec) {
+        DBGLOG(SAA, INFO,
+               "[StaRec] AuthAlg=%d StaType=%d WlanIdx=%d\n",
+               prStaRec->ucAuthAlgNum,
+               prStaRec->eStaType,
+               prStaRec->ucWlanIndex);
+    } else {
+        DBGLOG(SAA, INFO, "[StaRec] <null>\n");
+    }
+
+    if (prAisFsmInfo) {
+        DBGLOG(SAA, INFO,
+               "[AIS FSM] State=%d\n",
+               prAisFsmInfo->eCurrentState);
+    }
+
+    DBGLOG(SAA, INFO,
+           "[AuthFrame] Alg=%d TransSeq=%d Status=%d Protected=%d\n",
+           u2AuthAlgNum,
+           u2TransactionSeqNum,
+           u2StatusCode,
+           !!(u2FrameCtrl & MASK_FC_PROTECTED_FRAME));
+
+    DBGLOG(SAA, INFO, "===============================\n");
+
+    /* If userspace supplied a custom auth payload (SAE etc), use it */
+    if (prConnSettings &&
+        (prConnSettings->ucAuthDataLen > 0) &&
+        (prConnSettings->ucAuthDataLen <= AUTH_DATA_MAX_LEN) &&
+        prStaRec &&
+        !IS_STA_IN_P2P(prStaRec)) {
+
+        kalMemCopy(prAuthFrame->aucAuthData,
+                   prConnSettings->aucAuthData,
+                   prConnSettings->ucAuthDataLen);
+
+        DBGLOG(SAA, INFO,
+               "Auth with custom data: TransSN=%d Status=%d Len=%d\n",
+               prConnSettings->aucAuthData[0],
+               (prConnSettings->ucAuthDataLen > 2 ? prConnSettings->aucAuthData[2] : 0),
+               prConnSettings->ucAuthDataLen);
+    } else {
+        /* Build the standard fields (transaction seq + status) */
+        if (prConnSettings && prConnSettings->ucAuthDataLen > AUTH_DATA_MAX_LEN) {
+            DBGLOG(SAA, ERROR,
+                   "Auth data too large (%d > %d), truncating\n",
+                   prConnSettings->ucAuthDataLen,
+                   AUTH_DATA_MAX_LEN);
+        }
+
+        prAuthFrame->aucAuthData[0] = (uint8_t)(u2TransactionSeqNum & 0xFF);
+        prAuthFrame->aucAuthData[1] = (uint8_t)((u2TransactionSeqNum >> 8) & 0xFF);
+        prAuthFrame->aucAuthData[2] = (uint8_t)(u2StatusCode & 0xFF);
+        prAuthFrame->aucAuthData[3] = (uint8_t)((u2StatusCode >> 8) & 0xFF);
+
+        DBGLOG(SAA, INFO,
+               "Auth with standard fields: TransSN=%d Status=%d\n",
+               u2TransactionSeqNum, u2StatusCode);
+    }
 
 #else
-	/* ----------------------------------------------------------------
-	 * SUPPLICANT_SME=0: Use fixed struct fields u2AuthTransSeqNo/u2StatusCode
-	 * Simple case: kernel handles all auth logic
-	 * ---------------------------------------------------------------- */
-	prAuthFrame->u2AuthTransSeqNo = u2TransactionSeqNum;
-	prAuthFrame->u2StatusCode = u2StatusCode;
+    /*
+     * SUPPLICANT_SME == 0: kernel handles auth bodies with simple fixed fields.
+     * Keep the simple original behavior.
+     */
+    prAuthFrame->u2AuthTransSeqNo = u2TransactionSeqNum;
+    prAuthFrame->u2StatusCode = u2StatusCode;
 
-	DBGLOG(SAA, INFO,
-	       "Auth with standard fields: TransSN=%d Status=%d\n",
-	       u2TransactionSeqNum, u2StatusCode);
+    DBGLOG(SAA, INFO,
+           "Auth with standard fields: TransSN=%d Status=%d\n",
+           u2TransactionSeqNum, u2StatusCode);
 #endif
-
-} /* end of authComposeAuthFrameHeaderAndFF() */
-
-
+}
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief This function will append Challenge Text IE to the Authentication
@@ -404,6 +458,8 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
                  saaFsmRunEventTxDone,
                  MSDU_RATE_MODE_AUTO);
 
+    nicTxSetPktLifeTime(prMsduInfo, 5000);
+    nicTxSetPktRetryLimit(prMsduInfo, TX_DESC_TX_COUNT_NO_LIMIT);
     prMsduInfo->fgMgmtUseDataQ = FALSE; //use mgmt tx queue, not data queue
 
     for (i = 0; i < ARRAY_SIZE(txAuthIETable); i++) {
