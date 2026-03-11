@@ -549,6 +549,10 @@ struct STA_RECORD *bssCreateStaRecFromBssDesc(IN struct ADAPTER *prAdapter,
 		bssUpdateStaRecFromCfgAssoc(prAdapter, prBssDesc, prStaRec);
 	}
 
+	DBGLOG(BSS, WARN,
+		   "[BSS] Create StaRec type=%u BSS=%u for " MACSTR "\n",
+		   eStaType, ucBssIndex, MAC2STR(prBssDesc->aucSrcAddr));
+
 	return prStaRec;
 }
 

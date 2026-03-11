@@ -3065,110 +3065,209 @@ static uint8_t defaultSetRxRingHwAddr(
 		return u4RxPktCnt;
 	}
 
-	bool halWpdmaWriteCmd(IN struct GLUE_INFO *prGlueInfo,
-						  IN struct CMD_INFO *prCmdInfo, IN uint8_t ucTC)
-	{
-		struct GL_HIF_INFO *prHifInfo = NULL;
-		struct HIF_MEM_OPS *prMemOps;
-		struct RTMP_TX_RING *prTxRing;
-		struct RTMP_DMACB *pTxCell;
-		struct TXD_STRUCT *pTxD;
-		uint16_t u2Port = TX_RING_CMD_IDX_2;
-		uint32_t u4TotalLen;
-		void *pucSrc = NULL;
+bool halWpdmaWriteCmd(IN struct GLUE_INFO *prGlueInfo,
+                      IN struct CMD_INFO *prCmdInfo, IN uint8_t ucTC)
+{
+    struct GL_HIF_INFO *prHifInfo = NULL;
+    struct HIF_MEM_OPS *prMemOps = NULL;
+    struct RTMP_TX_RING *prTxRing = NULL;
+    struct RTMP_DMACB *pTxCell = NULL;
+    struct TXD_STRUCT *pTxD = NULL;
+    uint16_t u2Port = TX_RING_CMD_IDX_2;
+    uint32_t u4TotalLen = 0;
+    void *pucSrc = NULL;
 #if (CFG_SUPPORT_CONNAC2X == 1)
-		struct mt66xx_chip_info *prChipInfo;
-#endif /* CFG_SUPPORT_CONNAC2 == 1 */
-		unsigned long flags;
-
-		ASSERT(prGlueInfo);
-
-#if (CFG_SUPPORT_CONNAC2X == 1)
-		prChipInfo = prGlueInfo->prAdapter->chip_info;
-		if (prChipInfo->is_support_wacpu)
-			u2Port = TX_RING_WA_CMD_IDX_4;
-#endif /* CFG_SUPPORT_CONNAC2X == 1 */
-
-		prHifInfo = &prGlueInfo->rHifInfo;
-		prMemOps = &prHifInfo->rMemOps;
-		prTxRing = &prHifInfo->TxRing[u2Port];
-
-		u4TotalLen = prCmdInfo->u4TxdLen + prCmdInfo->u4TxpLen;
-		if (prMemOps->allocRuntimeMem) {
-			pucSrc = prMemOps->allocRuntimeMem(u4TotalLen);
-			if (pucSrc == NULL) {
-				DBGLOG(HAL, ERROR, "Can't alloc the mem\n");
-				return FALSE;
-			}
-		}
-
-		spin_lock_irqsave(&prTxRing->rTxDmaQLock, flags);
-
-		kalDevRegRead(prGlueInfo, prTxRing->hw_cidx_addr, &prTxRing->TxCpuIdx);
-		if (prTxRing->TxCpuIdx >= TX_RING_SIZE) {
-			DBGLOG(HAL, ERROR, "Error TxCpuIdx[%u]\n", prTxRing->TxCpuIdx);
-			if (prMemOps->freeBuf)
-				prMemOps->freeBuf(pucSrc, u4TotalLen);
-
-			spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
-			return FALSE;
-		}
-
-		pTxCell = &prTxRing->Cell[prTxRing->TxCpuIdx];
-		pTxD = (struct TXD_STRUCT *)pTxCell->AllocVa;
-		pTxCell->pPacket = (void *)prCmdInfo;
-		pTxCell->pBuffer = pucSrc;
-
-		if (prMemOps->copyCmd &&
-			!prMemOps->copyCmd(prHifInfo, pTxCell, pucSrc,
-							   prCmdInfo->pucTxd, prCmdInfo->u4TxdLen,
-							   prCmdInfo->pucTxp, prCmdInfo->u4TxpLen)) {
-			if (prMemOps->freeBuf)
-				prMemOps->freeBuf(pucSrc, u4TotalLen);
-
-			spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
-			ASSERT(0);
-			return FALSE;
-		}
-
-		pTxD->SDPtr0 = (uint64_t)pTxCell->PacketPa & DMA_LOWER_32BITS_MASK;
-#ifdef CONFIG_PHYS_ADDR_T_64BIT
-		pTxD->SDPtr0Ext = ((uint64_t)pTxCell->PacketPa >> DMA_BITS_OFFSET) &
-			DMA_HIGHER_4BITS_MASK;
-#else
-		pTxD->SDPtr0Ext = 0;
+    struct mt66xx_chip_info *prChipInfo;
 #endif
-		pTxD->SDLen0 = u4TotalLen;
-		pTxD->SDPtr1 = 0;
-		pTxD->SDLen1 = 0;
-		pTxD->LastSec0 = 1;
-		pTxD->LastSec1 = 0;
-		pTxD->Burst = 0;
-		pTxD->DMADONE = 0;
+    unsigned long flags;
+    uint32_t glo_pre = 0, glo_post = 0;
+    uint32_t hw_cidx_before = 0, hw_cidx_after = 0;
+    uint32_t reported_cidx = 0;
 
-		/* Increase TX_CTX_IDX, but write to register later. */
-		INC_RING_INDEX(prTxRing->TxCpuIdx, TX_RING_SIZE);
+    ASSERT(prGlueInfo);
+    if (!prGlueInfo || !prCmdInfo) {
+        DBGLOG(HAL, ERROR, "%s: invalid input pointers prGlueInfo=%p prCmdInfo=%p\n",
+               __func__, prGlueInfo, prCmdInfo);
+        return FALSE;
+    }
 
-		prTxRing->u4UsedCnt++;
-		{
-			uint32_t glo_pre = 0;
-			kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo_pre);
-			DBGLOG(HAL, ERROR, "[KICKRING] port=%u cidx=%u GLO_CFG=0x%08x CID=0x%02x\n",
-				   u2Port, prTxRing->TxCpuIdx, glo_pre, prCmdInfo->ucCID);
-		}
-		kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr, prTxRing->TxCpuIdx);
+#if (CFG_SUPPORT_CONNAC2X == 1)
+    prChipInfo = prGlueInfo->prAdapter->chip_info;
+    if (prChipInfo && prChipInfo->is_support_wacpu)
+        u2Port = TX_RING_WA_CMD_IDX_4;
+#endif
 
-		spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
+    prHifInfo = &prGlueInfo->rHifInfo;
+    prMemOps = &prHifInfo->rMemOps;
+    prTxRing = &prHifInfo->TxRing[u2Port];
 
-		DBGLOG(HAL, WARN,
-			   "%s: CmdInfo[0x%p], TxD[0x%p/%u] TxP[0x%p/%u] CPU idx[%u] Used[%u]\n",
-			   __func__, prCmdInfo, prCmdInfo->pucTxd, prCmdInfo->u4TxdLen,
-			   prCmdInfo->pucTxp, prCmdInfo->u4TxpLen,
-			   prTxRing->TxCpuIdx, prTxRing->u4UsedCnt);
-		//DBGLOG_MEM32(HAL, WARN, prCmdInfo->pucTxd, prCmdInfo->u4TxdLen);
+    /* total S/G length we will program into TXD */
+    u4TotalLen = prCmdInfo->u4TxdLen + prCmdInfo->u4TxpLen;
+    if (u4TotalLen == 0) {
+        DBGLOG(HAL, ERROR, "%s: zero total length (txd=%u txp=%u) CID=%u\n",
+               __func__, prCmdInfo->u4TxdLen, prCmdInfo->u4TxpLen, prCmdInfo->ucCID);
+        return FALSE;
+    }
 
-		return TRUE;
-	}
+    /* allocate a staging buffer if allocRuntimeMem is provided */
+    if (prMemOps->allocRuntimeMem) {
+        pucSrc = prMemOps->allocRuntimeMem(u4TotalLen);
+        if (pucSrc == NULL) {
+            DBGLOG(HAL, ERROR, "%s: allocRuntimeMem failed len=%u CID=%u\n",
+                   __func__, u4TotalLen, prCmdInfo->ucCID);
+            return FALSE;
+        }
+    }
+
+    /* lock the ring while inspecting/writing indices and cell */
+    spin_lock_irqsave(&prTxRing->rTxDmaQLock, flags);
+
+    /* read current CPU index (TxCpuIdx) from register to keep synced */
+    kalDevRegRead(prGlueInfo, prTxRing->hw_cidx_addr, &hw_cidx_before);
+    reported_cidx = prTxRing->TxCpuIdx;
+    DBGLOG(HAL, WARN,
+           "%s: port=%u before: hw_cidx_reg=0x%08x ring_cpu_idx=%u Used=%u CID=%u\n",
+           __func__, u2Port, hw_cidx_before, reported_cidx, prTxRing->u4UsedCnt, prCmdInfo->ucCID);
+
+    /* defensive bounds check on ring index */
+    if (prTxRing->TxCpuIdx >= TX_RING_SIZE) {
+        DBGLOG(HAL, ERROR, "%s: invalid TxCpuIdx[%u] >= TX_RING_SIZE(%u)\n",
+               __func__, prTxRing->TxCpuIdx, (uint32_t)TX_RING_SIZE);
+        if (prMemOps->freeBuf)
+            prMemOps->freeBuf(pucSrc, u4TotalLen);
+
+        spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
+        return FALSE;
+    }
+
+    pTxCell = &prTxRing->Cell[prTxRing->TxCpuIdx];
+    if (!pTxCell) {
+        DBGLOG(HAL, ERROR, "%s: pTxCell NULL for idx %u\n", __func__, prTxRing->TxCpuIdx);
+        if (prMemOps->freeBuf)
+            prMemOps->freeBuf(pucSrc, u4TotalLen);
+
+        spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
+        return FALSE;
+    }
+
+    pTxD = (struct TXD_STRUCT *)pTxCell->AllocVa;
+    if (!pTxD) {
+        DBGLOG(HAL, ERROR, "%s: pTxD NULL AllocVa=%p idx=%u\n",
+               __func__, pTxCell->AllocVa, prTxRing->TxCpuIdx);
+        if (prMemOps->freeBuf)
+            prMemOps->freeBuf(pucSrc, u4TotalLen);
+
+        spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
+        return FALSE;
+    }
+
+    /* attach metadata */
+    pTxCell->pPacket = (void *)prCmdInfo;
+    pTxCell->pBuffer = pucSrc;
+
+    /* copy the command content into staging buffer (if copyCmd is provided use it),
+       otherwise fall back to a safe memcpy (best-effort) */
+    if (prMemOps->copyCmd) {
+        if (!prMemOps->copyCmd(prHifInfo, pTxCell, pucSrc,
+                               prCmdInfo->pucTxd, prCmdInfo->u4TxdLen,
+                               prCmdInfo->pucTxp, prCmdInfo->u4TxpLen)) {
+            DBGLOG(HAL, ERROR, "%s: copyCmd failed CID=%u idx=%u\n",
+                   __func__, prCmdInfo->ucCID, prTxRing->TxCpuIdx);
+            if (prMemOps->freeBuf)
+                prMemOps->freeBuf(pucSrc, u4TotalLen);
+
+            spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
+            ASSERT(0);
+            return FALSE;
+        }
+    } else {
+        /* copyCmd missing: fallback to memcpy into single contiguous buffer */
+        uint32_t copyLen = prCmdInfo->u4TxdLen;
+        if (copyLen > 0 && prCmdInfo->pucTxd)
+            kalMemCopy(pucSrc, prCmdInfo->pucTxd, copyLen);
+        if (prCmdInfo->u4TxpLen > 0 && prCmdInfo->pucTxp)
+            kalMemCopy((uint8_t *)pucSrc + prCmdInfo->u4TxdLen,
+                       prCmdInfo->pucTxp, prCmdInfo->u4TxpLen);
+    }
+
+    /* prepare TXD */
+    pTxD->SDPtr0 = (uint64_t)pTxCell->PacketPa & DMA_LOWER_32BITS_MASK;
+#ifdef CONFIG_PHYS_ADDR_T_64BIT
+    pTxD->SDPtr0Ext = ((uint64_t)pTxCell->PacketPa >> DMA_BITS_OFFSET) &
+                      DMA_HIGHER_4BITS_MASK;
+#else
+    pTxD->SDPtr0Ext = 0;
+#endif
+    pTxD->SDLen0 = u4TotalLen;
+    pTxD->SDPtr1 = 0;
+    pTxD->SDLen1 = 0;
+    pTxD->LastSec0 = 1;
+    pTxD->LastSec1 = 0;
+    pTxD->Burst = 0;
+    pTxD->DMADONE = 0;
+
+    /* record pre-GLO_CFG for diagnostics */
+    kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo_pre);
+
+    /* Advance ring index in driver; will write back to hw register to kick */
+    INC_RING_INDEX(prTxRing->TxCpuIdx, TX_RING_SIZE);
+    prTxRing->u4UsedCnt++;
+
+    /* Diagnostic: log a short summary before the kick and dump TXD words */
+    DBGLOG(HAL, ERROR,
+           "[KICKRING] port=%u pre_hw_cidx=0x%08x ring_next_idx=%u GLO_CFG=0x%08x CID=0x%02x PacketPa=0x%llx TotLen=%u Used=%u\n",
+           u2Port, hw_cidx_before, prTxRing->TxCpuIdx, glo_pre, prCmdInfo->ucCID,
+           (unsigned long long)pTxCell->PacketPa, u4TotalLen, prTxRing->u4UsedCnt);
+
+    /* Dump first 8 dwords of TXD for descriptor sanity checking */
+    {
+        uint32_t *dw = (uint32_t *)pTxD;
+        DBGLOG(HAL, WARN, "%s: TXD dump (dwords):", __func__);
+        for (int i = 0; i < 8; i++) {
+            DBGLOG(HAL, WARN, " DW%u=0x%08x", i, dw[i]);
+        }
+        DBGLOG(HAL, WARN, "\n");
+    }
+
+    /* Write new cidx to hardware to kick the DMA */
+    kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr, prTxRing->TxCpuIdx);
+
+    /* Read back registers to verify the write and capture post-state for diagnostics */
+    kalDevRegRead(prGlueInfo, prTxRing->hw_cidx_addr, &hw_cidx_after);
+    kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo_post);
+
+    spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
+
+    /* Log the post-kick state and warn if we detect suspicious states */
+    DBGLOG(HAL, WARN,
+           "%s: post_kick port=%u hw_cidx_after=0x%08x ring_idx=%u GLO_CFG_after=0x%08x CID=0x%02x\n",
+           __func__, u2Port, hw_cidx_after, prTxRing->TxCpuIdx, glo_post, prCmdInfo->ucCID);
+
+    /* Extra sanity checks to alert quickly in the log:
+       - If hw_cidx didn't change as expected
+       - If GLO_CFG indicates DMA disabled (heuristic: zero or unchanged) */
+    if (hw_cidx_after == hw_cidx_before) {
+        DBGLOG(HAL, ERROR,
+               "%s: HW cidx didnt change after write (hw_before=0x%08x hw_after=0x%08x). Possible KICKRING failure. CID=%u\n",
+               __func__, hw_cidx_before, hw_cidx_after, prCmdInfo->ucCID);
+    }
+    if (glo_post == 0) {
+        DBGLOG(HAL, ERROR,
+               "%s: suspicious GLO_CFG==0 (pre=0x%08x post=0x%08x). Check DMA global enable/config. CID=%u\n",
+               __func__, glo_pre, glo_post, prCmdInfo->ucCID);
+    }
+
+    /* Final user-level diagnostic log (keeps parity with original output) */
+    DBGLOG(HAL, WARN,
+           "%s: CmdInfo[%p], TxD[%p/%u] TxP[%p/%u] CPU idx[%u] Used[%u]\n",
+           __func__, prCmdInfo, prCmdInfo->pucTxd, prCmdInfo->u4TxdLen,
+           prCmdInfo->pucTxp, prCmdInfo->u4TxpLen,
+           prTxRing->TxCpuIdx, prTxRing->u4UsedCnt);
+
+    return TRUE;
+}
+
+
 
 	static bool halWpdmaFillTxRing(struct GLUE_INFO *prGlueInfo,
 								   struct MSDU_TOKEN_ENTRY *prToken)

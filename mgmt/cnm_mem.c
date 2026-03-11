@@ -675,6 +675,10 @@ struct STA_RECORD *cnmStaRecAlloc(struct ADAPTER *prAdapter,
 	nicFreePendingTxMsduInfo(prAdapter, 
 							 prStaRec->ucWlanIndex, MSDU_REMOVE_BY_WLAN_INDEX);
 
+	DBGLOG(CNM, WARN,
+		   "[STAREC-ALLOC] type=%u idx=%u wlanIdx=%u\n",
+		   eStaType, prStaRec->ucIndex, prStaRec->ucWlanIndex);
+
 	return prStaRec;
 }
 

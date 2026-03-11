@@ -8189,8 +8189,9 @@ uint32_t nicUniCmdStaRecTagBasic(struct ADAPTER *ad,
 	tag->ucIsQBSS = cmd->ucIsQoS;
 	tag->u2AID = cmd->u2AssocId;
 	COPY_MAC_ADDR(tag->aucPeerMacAddr, cmd->aucMacAddr);
-	tag->u2ExtraInfo = STAREC_COMMON_EXTRAINFO_V2 |
-			   STAREC_COMMON_EXTRAINFO_NEWSTAREC;
+	tag->u2ExtraInfo = STAREC_COMMON_EXTRAINFO_V2;
+	if (cmd->ucStaState == STA_STATE_1)
+		tag->u2ExtraInfo |= STAREC_COMMON_EXTRAINFO_NEWSTAREC;
 
 	return tag->u2Length;
 }

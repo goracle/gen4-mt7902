@@ -481,6 +481,10 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
            prMsduInfo->u2FrameLength,
            prMsduInfo->prPacket);
 
+
+    DBGLOG_MEM8(SAA, WARN, ((struct WLAN_MAC_HEADER *)prMsduInfo->prPacket),
+                prMsduInfo->u2FrameLength);
+
     nicTxEnqueueMsdu(prAdapter, prMsduInfo);
 
     DBGLOG(SAA, INFO, "=== AUTH TX ENQUEUED ===\n");

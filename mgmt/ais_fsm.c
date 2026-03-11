@@ -693,6 +693,15 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 		return;
 	}
 
+	if (prStaRec) {
+		struct BSS_INFO *prBssInfo = prAdapter->aprBssInfo[ucBssIndex];
+		if (prBssInfo) {
+			prBssInfo->prStaRecOfAP = prStaRec;
+			DBGLOG(BSS, INFO, "Bind AP StaRec[%u] %p -> Bss[%u]\n",
+				   prStaRec->ucIndex, prStaRec, ucBssIndex);
+		}
+	}
+
 	prAisFsmInfo->prTargetStaRec = prStaRec;
 
 	prStaRec->fgIsReAssoc = (prAisBssInfo->eConnectionState == MEDIA_STATE_CONNECTED);
@@ -712,6 +721,9 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	prAisBssInfo->eBand = prBssDesc->eBand;
 	prAisBssInfo->ucPrimaryChannel = prBssDesc->ucChannelNum;
+
+	/* Sync RLM channel/BW params to firmware before auth */
+	rlmBssInitForAPandIbss(prAdapter, prAisBssInfo);
 
 	if (prAisFsmInfo->ucAvailableAuthTypes & (uint8_t) AUTH_TYPE_SAE)
 		prStaRec->ucAuthAlgNum = (uint8_t) AUTH_ALGORITHM_NUM_SAE;

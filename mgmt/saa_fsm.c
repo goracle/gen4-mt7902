@@ -1104,11 +1104,10 @@ DBGLOG(SAA, WARN, "[SAA-START] StaRec=%u BSS=%u priChan=%u fgIsGranted=%u\n",
 		DBGLOG(RLM, TRACE, "STA 40mAllowed=%d\n",
 		       prBssInfo->fgAssoc40mBwAllowed);
 	}
-#if (CFG_SUPPORT_SUPPLICANT_SME == 1) /* skip SAA FSM */
-	prStaRec->eAuthAssocSent = AA_SENT_NONE;
+#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 	saaSendAuthAssoc(prAdapter, prStaRec);
-#else
-	/* 4 <7> Trigger SAA FSM */
+	return;
+#else	/* 4 <7> Trigger SAA FSM */
 	if (prStaRec->ucStaState == STA_STATE_1)
 		saaFsmSteps(prAdapter, prStaRec, SAA_STATE_SEND_AUTH1,
 			    (struct SW_RFB *) NULL);

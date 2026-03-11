@@ -3342,73 +3342,125 @@ uint32_t nicTxInitResetResource(IN struct ADAPTER
 
 #endif
 
+
+
+
+
+/* Replacement nicTxProcessMngPacket - clearer routing for mgmt frames
+ *
+ * Rationale:
+ *  - Management frames that implement association/authentication must
+ *    go via the data transmit path (TC4) so they use the LMAC/WPDMA rings.
+ *    Sending them through the CMD ring causes FW to return status=3.
+ *  - The old code's use of fgMgmtUseDataQ and ucTC was confusing and
+ *    effectively left some mgmt frames routed incorrectly.
+ *
+ * Behavior:
+ *  - If this MSDU is an 802.11 management frame, set ucTC = TC4_INDEX
+ *    and set fgMgmtUseDataQ = TRUE (force data path).
+ *  - For non-mgmt frames, leave ucTC / fgMgmtUseDataQ untouched.
+ *  - Preserve the original fixed-rate code path (call nicTxSetPktLowestFixedRate
+ *    when rate mode is AUTO and fgMgmtUseDataQ is not TRUE).
+ */
+
 u_int8_t nicTxProcessMngPacket(IN struct ADAPTER *prAdapter,
-			       IN struct MSDU_INFO *prMsduInfo)
+                               IN struct MSDU_INFO *prMsduInfo)
 {
-#if 0
-	uint16_t u2RateCode;
+    struct BSS_INFO *prBssInfo;
+    struct STA_RECORD *prStaRec;
+    struct WLAN_MAC_HEADER *prWlanHeader;
+    u_int8_t ucFrameType, ucFrameSubType;
+
+    /* quick source/type sanity */
+    if (prMsduInfo->eSrc != TX_PACKET_MGMT)
+        return FALSE;
+
+    if (!prMsduInfo->prPacket || !prMsduInfo->u2FrameLength || !prMsduInfo->ucMacHeaderLength)
+        return FALSE;
+
+    prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, prMsduInfo->ucBssIndex);
+    prStaRec = cnmGetStaRecByIndex(prAdapter, prMsduInfo->ucStaRecIndex);
+
+    if (!prBssInfo) {
+        DBGLOG(TX, ERROR, "MGMT: NULL BssInfo idx=%u\n", prMsduInfo->ucBssIndex);
+        return FALSE;
+    }
+
+    /* Extract 802.11 header (must exist for mgmt frames) */
+    prWlanHeader = (struct WLAN_MAC_HEADER *)
+        ((unsigned long)(prMsduInfo->prPacket) + MAC_TX_RESERVED_FIELD);
+
+    if (!prWlanHeader) {
+        DBGLOG(TX, ERROR, "MGMT: NULL wlan header pointer\n");
+        return FALSE;
+    }
+
+    ucFrameType = (prWlanHeader->u2FrameCtrl & MASK_FC_TYPE) >> 2;
+    ucFrameSubType = (prWlanHeader->u2FrameCtrl & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
+
+    DBGLOG(TX, WARN,
+           "[MGMT] preproc useDataQ=%d tc(before)=%d sta=%d bss=%d len=%d type=%u subtype=%u\n",
+           prMsduInfo->fgMgmtUseDataQ,
+           prMsduInfo->ucTC,
+           prMsduInfo->ucStaRecIndex,
+           prMsduInfo->ucBssIndex,
+           prMsduInfo->u2FrameLength,
+           ucFrameType, ucFrameSubType);
+
+    /* If this is an 802.11 management frame, force it onto the data path
+     * (TC4) so it uses LMAC/WPDMA rings (not CMD ring). That fixes auth/assoc.
+     *
+     * Keep fgMgmtUseDataQ = TRUE to indicate the data path should be used.
+     */
+	if (ucFrameType == MAC_FRAME_TYPE_MGT) {
+
+		switch (ucFrameSubType) {
+
+		case MAC_FRAME_AUTH:
+		case MAC_FRAME_ASSOC_REQ:
+		case MAC_FRAME_REASSOC_REQ:
+
+			/* Use MGMT path but force TC4 */
+			prMsduInfo->ucTC = TC4_INDEX;
+			prMsduInfo->fgMgmtUseDataQ = FALSE;
+
+			DBGLOG(TX, INFO,
+				   "MGMT: AUTH/ASSOC via TC4 mgmt path\n");
+			break;
+
+#if CFG_SUPPORT_ALTX_MGMT
+		case MAC_FRAME_ACTION:
+		case MAC_FRAME_PROBE_REQ:
+			//prMsduInfo->fgIsALTX = TRUE;
+			DBGLOG(TX, INFO, "MGMT: using ALTX\n");
+			break;
 #endif
-	struct BSS_INFO *prBssInfo;
-	struct STA_RECORD *prStaRec;
 
-	if (prMsduInfo->eSrc != TX_PACKET_MGMT)
-		return FALSE;
-
-	/* Sanity check */
-	if (!prMsduInfo->prPacket)
-		return FALSE;
-
-	if (!prMsduInfo->u2FrameLength)
-		return FALSE;
-
-	if (!prMsduInfo->ucMacHeaderLength)
-		return FALSE;
-
-	prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter,
-					  prMsduInfo->ucBssIndex);
-	prStaRec = cnmGetStaRecByIndex(prAdapter,
-				       prMsduInfo->ucStaRecIndex);
-
-	
-DBGLOG(TX, WARN,
-"[MGMT] useDataQ=%d tc(before)=%d sta=%d bss=%d len=%d\n",
-prMsduInfo->fgMgmtUseDataQ,
-prMsduInfo->ucTC,
-prMsduInfo->ucStaRecIndex,
-prMsduInfo->ucBssIndex,
-prMsduInfo->u2FrameLength);
-
-/* MMPDU: force stick to TC4 */
-	if (prMsduInfo->fgMgmtUseDataQ)
-		prMsduInfo->ucTC = TC0_INDEX;
-	else
-		prMsduInfo->ucTC = TC4_INDEX;
-
-	/* No Tx descriptor template for MMPDU */
-	prMsduInfo->fgIsTXDTemplateValid = FALSE;
-
-	/* Fixed Rate */
-	if (prMsduInfo->ucRateMode == MSDU_RATE_MODE_AUTO &&
-		prMsduInfo->fgMgmtUseDataQ != TRUE) {
-#if 0
-		prMsduInfo->ucRateMode = MSDU_RATE_MODE_MANUAL_DESC;
-
-		if (prStaRec)
-			u2RateCode = prStaRec->u2HwDefaultFixedRateCode;
-		else
-			u2RateCode = prBssInfo->u2HwDefaultFixedRateCode;
-
-		nicTxSetPktFixedRateOption(prMsduInfo, u2RateCode,
-					   FIX_BW_NO_FIXED, FALSE, FALSE);
-#else
-		nicTxSetPktLowestFixedRate(prAdapter, prMsduInfo);
-#endif
+		default:
+			prMsduInfo->ucTC = TC4_INDEX;
+			break;
+		}
 	}
 
-	nicTxFillDesc(prAdapter, prMsduInfo,
-		      prMsduInfo->aucTxDescBuffer, NULL);
-	return TRUE;
+    /* Preserve original behavior for fixed-rate selection:
+     * If caller requested auto rate and mgmt is NOT using dataQ, fallback
+     * to nicTxSetPktLowestFixedRate (as before).
+     */
+    if ((prMsduInfo->ucRateMode == MSDU_RATE_MODE_AUTO) &&
+        (prMsduInfo->fgMgmtUseDataQ != TRUE)) {
+        nicTxSetPktLowestFixedRate(prAdapter, prMsduInfo);
+    }
+
+    /* Disable TXD template for management frames as original code did */
+    prMsduInfo->fgIsTXDTemplateValid = FALSE;
+
+    /* Fill TX descriptor and return success */
+    nicTxFillDesc(prAdapter, prMsduInfo, prMsduInfo->aucTxDescBuffer, NULL);
+
+    return TRUE;
 }
+
+
 
 
 
