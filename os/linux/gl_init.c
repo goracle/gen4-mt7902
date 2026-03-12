@@ -1751,20 +1751,22 @@ static void glTaskletResInit(struct GLUE_INFO *prGlueInfo)
 	}
 #endif
 }
+
+
+
+/* Extern declaration needed since it's defined in hal_pdma.c */
+extern void halWpdmaFreeMsduTasklet(unsigned long data);
+
 static void glTaskletResUninit(struct GLUE_INFO *prGlueInfo)
 {
 #if defined(_HIF_PCIE) || defined(_HIF_AXI)
 	if (prGlueInfo->prTxMsduRetFifoBuf) {
-		struct MSDU_INFO *prMsduInfo;
+		/* SECURE FIX: Do not blindly call nicTxFreeMsduInfoPacket, which 
+		 * corrupts the SLUB allocator if the packet is a management frame 
+		 * (not an sk_buff). Flush the FIFO safely by calling the tasklet 
+		 * handler synchronously, which checks pfTxDoneHandler. */
+		halWpdmaFreeMsduTasklet((unsigned long)prGlueInfo);
 
-		/* Return pending MSDU */
-		while (KAL_FIFO_OUT(&prGlueInfo->rTxMsduRetFifo, prMsduInfo)) {
-			if (!prMsduInfo) {
-				DBGLOG(RX, ERROR, "prMsduInfo null\n");
-				break;
-			}
-			nicTxReturnMsduInfo(prGlueInfo->prAdapter, prMsduInfo);
-		}
 		kalMemFree(prGlueInfo->prTxMsduRetFifoBuf, PHY_MEM_TYPE,
 			prGlueInfo->u4TxMsduRetFifoLen);
 		prGlueInfo->prTxMsduRetFifoBuf = NULL;
@@ -1772,6 +1774,7 @@ static void glTaskletResUninit(struct GLUE_INFO *prGlueInfo)
 	}
 #endif
 }
+
 
 static void glTaskletInit(struct GLUE_INFO *prGlueInfo)
 {
@@ -1820,16 +1823,26 @@ static void wlanFreeNetDev(void)
 
 	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
 		if (gprWdev[u4Idx] && gprWdev[u4Idx]->netdev) {
-			DBGLOG(INIT, INFO, "free_netdev wlan%d netdev start.\n",
-					u4Idx);
-			free_netdev(gprWdev[u4Idx]->netdev);
-			DBGLOG(INIT, INFO, "free_netdev wlan%d netdev end.\n",
-					u4Idx);
+			struct net_device *ndev = gprWdev[u4Idx]->netdev;
+			
+			/* SECURE FIX: unregister_netdevice() automatically frees devices 
+			 * allocated with alloc_netdev_mq() after the RCU grace period. 
+			 * Calling free_netdev() here causes a double-free SLUB panic 
+			 * if the device was ever registered. 
+			 * We only free it manually if it was never registered. */
+			if (ndev->reg_state == NETREG_UNINITIALIZED) {
+				DBGLOG(INIT, INFO, "free_netdev wlan%d netdev start.\n", u4Idx);
+				free_netdev(ndev);
+				DBGLOG(INIT, INFO, "free_netdev wlan%d netdev end.\n", u4Idx);
+			} else {
+				DBGLOG(INIT, INFO, "wlan%d netdev managed by kernel (reg_state=%d), skipping manual free\n", u4Idx, ndev->reg_state);
+			}
+			
+			/* Ensure we don't hold a dangling pointer */
+			gprWdev[u4Idx]->netdev = NULL;
 		}
 	}
 }
-
-
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief Release prDev from wlandev_array and free tasklet object related to
@@ -2179,8 +2192,7 @@ void p2pSetMulticastListWorkQueueWrapper(struct GLUE_INFO
  * \retval NETDEV_TX_BUSY - on failure, packet will be discarded by upper layer.
  */
 /*----------------------------------------------------------------------------*/
-netdev_tx_t wlanHardStartXmit(struct sk_buff *prSkb,
-		      struct net_device *prDev)
+netdev_tx_t wlanHardStartXmit(struct sk_buff *prSkb, struct net_device *prDev)
 {
 	struct NETDEV_PRIVATE_GLUE_INFO *prNetDevPrivate =
 		(struct NETDEV_PRIVATE_GLUE_INFO *) NULL;
@@ -2192,24 +2204,18 @@ netdev_tx_t wlanHardStartXmit(struct sk_buff *prSkb,
 	ASSERT(prDev);
 	ASSERT(prGlueInfo);
 
-	prNetDevPrivate = (struct NETDEV_PRIVATE_GLUE_INFO *)
-			  netdev_priv(prDev);
+	prNetDevPrivate = (struct NETDEV_PRIVATE_GLUE_INFO *) netdev_priv(prDev);
 	ASSERT(prNetDevPrivate->prGlueInfo == prGlueInfo);
 	ucBssIndex = prNetDevPrivate->ucBssIdx;
 
 #if CFG_SUPPORT_PASSPOINT
 	if (prGlueInfo->fgIsDad) {
-		/* kalPrint("[Passpoint R2] Due to ipv4_dad...TX is forbidden\n"
-		 *         );
-		 */
-		dev_kfree_skb(prSkb);
+		/* SECURE FIX: Use _any variant to prevent IRQ/atomic context panics */
+		dev_kfree_skb_any(prSkb);
 		return NETDEV_TX_OK;
 	}
 	if (prGlueInfo->fgIs6Dad) {
-		/* kalPrint("[Passpoint R2] Due to ipv6_dad...TX is forbidden\n"
-		 *          );
-		 */
-		dev_kfree_skb(prSkb);
+		dev_kfree_skb_any(prSkb);
 		return NETDEV_TX_OK;
 	}
 #endif /* CFG_SUPPORT_PASSPOINT */
@@ -2220,7 +2226,8 @@ netdev_tx_t wlanHardStartXmit(struct sk_buff *prSkb,
 		DBGLOG(INIT, WARN,
 		"u4ReadyFlag:%u, kalIsResetting():%d, dropping the packet\n",
 		prGlueInfo->u4ReadyFlag, kalIsResetting());
-		dev_kfree_skb(prSkb);
+		/* SECURE FIX: Use _any variant to prevent IRQ/atomic context panics */
+		dev_kfree_skb_any(prSkb);
 		return NETDEV_TX_OK;
 	}
 #endif
@@ -2237,18 +2244,14 @@ netdev_tx_t wlanHardStartXmit(struct sk_buff *prSkb,
 	if (kalHardStartXmit(prSkb, prDev, prGlueInfo,
 			     ucBssIndex) == WLAN_STATUS_SUCCESS) {
 		/* Successfully enqueue to Tx queue */
-		/* Successfully enqueue to Tx queue */
 #if (CFG_SUPPORT_PERMON == 1)
 		if (netif_carrier_ok(prDev))
 			kalPerMonStart(prGlueInfo);
 #endif
 	}
 
-	/* For Linux, we'll always return OK FLAG, because we'll free this skb
-	 * by ourself
-	 */
 	return NETDEV_TX_OK;
-}				/* end of wlanHardStartXmit() */
+}
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -4752,31 +4755,20 @@ void mt7902_hard_cleanup(struct GLUE_INFO *prGlueInfo, struct ADAPTER *prAdapter
     set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
 
     /*
-     * 2. Kill the tasklet.
-     *
-     * Safe to call here because:
-     * - On the probe error path: caller called disable_irq() before us,
-     *   so no new IRQ delivery can schedule the tasklet after this point.
-     * - On the remove path: nicDisableInterrupt was called before remove,
-     *   and the tasklet's own HALT check calls nicDisableInterrupt before
-     *   returning, so the hardware is already silent.
-     *
-     * We do NOT call nicDisableInterrupt here. The tasklet handles that
-     * itself when it observes GLUE_FLAG_HALT, and calling it again from
-     * here would be redundant and potentially racy with the tasklet's own
-     * nicDisableInterrupt call.
+     * 2. Kill ALL tasklets and free FIFO resources.
+     * SECURE FIX: Previously only rRxTask was killed. If rTxCompleteTask or 
+     * rTxMsduRetTask fired after this point, it would cause a Use-After-Free 
+     * panic accessing the destroyed adapter. glTaskletUninit safely kills all of them.
      */
-    tasklet_kill(&prGlueInfo->rRxTask);
+    glTaskletUninit(prGlueInfo);
 
     /* 3. Wake any waiters so they observe HALT and exit cleanly. */
     wake_up_interruptible(&prGlueInfo->waitq);
 
     /*
      * 4. Net device unregistration.
-     *
      * Guard against partial probe: prDevHandler may be allocated but not
-     * yet registered if probe failed early. unregister_netdev on an
-     * unregistered device hits BUG_ON inside the kernel.
+     * yet registered if probe failed early.
      */
     if (prGlueInfo->prDevHandler &&
         prGlueInfo->prDevHandler->reg_state == NETREG_REGISTERED) {
@@ -4785,10 +4777,7 @@ void mt7902_hard_cleanup(struct GLUE_INFO *prGlueInfo, struct ADAPTER *prAdapter
 
     /*
      * 5. Procfs cleanup.
-     *
      * pProcRoot tracks the proc directory created at probe time.
-     * proc_remove() removes it and all children recursively.
-     * Guarded so this is safe to call even if proc setup never completed.
      */
 #if WLAN_INCLUDE_PROC
     if (prGlueInfo->pProcRoot) {
@@ -4799,14 +4788,10 @@ void mt7902_hard_cleanup(struct GLUE_INFO *prGlueInfo, struct ADAPTER *prAdapter
 
     /*
      * 6. Notifier unregistration.
-     *
-     * Must come after step 4: the notifier observes net device events,
-     * so it must stay live until after unregister_netdev completes to
-     * catch our own NETDEV_UNREGISTER event.
+     * Must come after netdev unregister so we catch our own events.
      */
     unregister_netdevice_notifier(&wlan_netdev_notifier);
 }
-
 
 
 static
@@ -7186,94 +7171,105 @@ wlanOffNotifyCfg80211Disconnect(IN struct GLUE_INFO *prGlueInfo)
 /*----------------------------------------------------------------------------*/
 static void wlanRemove(void)
 {
-    struct net_device *prDev = NULL;
-    struct GLUE_INFO *prGlueInfo = NULL;
-    struct ADAPTER *prAdapter = NULL;
+	struct net_device *prDev = NULL;
+	struct GLUE_INFO *prGlueInfo = NULL;
+	struct ADAPTER *prAdapter = NULL;
 
-    DBGLOG(INIT, INFO, "Remove wlan!\n");
+	DBGLOG(INIT, INFO, "Remove wlan!\n");
 
-    if (atomic_read(&g_wlanRemoving)) {
-        DBGLOG(INIT, ERROR, "wlanRemove already in progress\n");
-        return;
-    }
-    atomic_set(&g_wlanRemoving, 1);
+	if (atomic_read(&g_wlanRemoving)) {
+		DBGLOG(INIT, ERROR, "wlanRemove already in progress\n");
+		return;
+	}
+	atomic_set(&g_wlanRemoving, 1);
 
-    if (g_NvramFsm == NVRAM_STATE_SEND_TO_FW)
-        g_NvramFsm = NVRAM_STATE_READY;
+	if (g_NvramFsm == NVRAM_STATE_SEND_TO_FW)
+		g_NvramFsm = NVRAM_STATE_READY;
 
 #if CFG_CHIP_RESET_SUPPORT
-    if (fgSimplifyResetFlow) {
-        if (wlanOffAtReset() == WLAN_STATUS_SUCCESS) {
-            atomic_set(&g_wlanRemoving, 0);
-            return;
-        }
-    }
+	if (fgSimplifyResetFlow) {
+		if (wlanOffAtReset() == WLAN_STATUS_SUCCESS) {
+			atomic_set(&g_wlanRemoving, 0);
+			return;
+		}
+	}
 #endif
 
-    /* 1. Signal halt to all paths immediately. */
-    kalSetHalted(TRUE);
-    g_u4HaltFlag = 1;
-    smp_wmb();
+	/* 1. Signal halt to all paths immediately. */
+	kalSetHalted(TRUE);
+	g_u4HaltFlag = 1;
+	smp_wmb();
 
-    if (u4WlanDevNum > 0 && u4WlanDevNum <= CFG_MAX_WLAN_DEVICES)
-        prDev = arWlanDevInfo[u4WlanDevNum - 1].prDev;
+	/* SECURE FIX: Cancel pending global workqueues before tearing down netdevs 
+	 * to prevent UAF if a networking state change triggers while unloading. */
+	cancel_delayed_work_sync(&workq);
+	cancel_delayed_work_sync(&sched_workq);
+#if CFG_REDIRECT_OID_SUPPORT
+	cancel_delayed_work_sync(&oid_workq);
+#endif
+#if (CFG_SUPPORT_SUPPLICANT_SME == 1)
+#if CFG_SUPPORT_CFG80211_QUEUE
+	cancel_delayed_work_sync(&cfg80211_workq);
+#endif
+#endif
 
-    if (!prDev) {
-        DBGLOG(INIT, ERROR, "prDev is NULL\n");
-        goto exit_removing;
-    }
+	if (u4WlanDevNum > 0 && u4WlanDevNum <= CFG_MAX_WLAN_DEVICES)
+		prDev = arWlanDevInfo[u4WlanDevNum - 1].prDev;
 
-    prGlueInfo = *((struct GLUE_INFO **)netdev_priv(prDev));
-    if (!prGlueInfo) {
-        wlanFreeNetDev();
-        goto exit_removing;
-    }
+	if (!prDev) {
+		DBGLOG(INIT, ERROR, "prDev is NULL\n");
+		goto exit_removing;
+	}
 
-    prAdapter = prGlueInfo->prAdapter;
-    prGlueInfo->u4ReadyFlag = 0;
+	prGlueInfo = *((struct GLUE_INFO **)netdev_priv(prDev));
+	if (!prGlueInfo) {
+		wlanFreeNetDev();
+		goto exit_removing;
+	}
 
-    /*
-     * 2. Disable hardware interrupts and kill bottom-halves, but do NOT
-     * release the PCI BARs yet.  Threads may still be mid-cleanup and
-     * could access hardware registers (e.g. wlanReleasePendingOid →
-     * nicTxCancelSendingCmd).  Unmapping the BARs before the threads
-     * exit would turn those accesses into MMIO use-after-iounmap faults.
-     *
-     * Correct teardown order:
-     *   1. Set HALT + silence HW (nicDisableInterrupt) — no new IRQs.
-     *   2. Kill bottom-halves (tasklet_kill, glTaskletUninit).
-     *   3. Stop all threads (wlanOffStopWlanThreads) — BARs still mapped.
-     *   4. Free IRQ and unmap BARs (glBusFreeIrq) — safe, nothing running.
-     */
-    set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
-    /* Clear pending RX/TX bits to prevent main_thread processing after HALT */
-    clear_bit(GLUE_FLAG_RX_BIT, &prGlueInfo->ulFlag);
-    smp_wmb();
-    if (prAdapter)
-        nicDisableInterrupt(prAdapter);
-    tasklet_kill(&prGlueInfo->rRxTask);
-    glTaskletUninit(prGlueInfo);
-    wlanOffStopWlanThreads(prGlueInfo);
-    glBusFreeIrq(prDev, prGlueInfo);
+	prAdapter = prGlueInfo->prAdapter;
+	prGlueInfo->u4ReadyFlag = 0;
 
-    /*
-     * 5. Now safe to unregister and destroy the netdev — IRQ is gone,
-     * no more callbacks into driver code can occur.
-     */
-    wlanNetUnregister(prDev->ieee80211_ptr);
-    wlanNetDestroy(prDev->ieee80211_ptr);
+	/*
+	 * 2. Disable hardware interrupts and kill bottom-halves, but do NOT
+	 * release the PCI BARs yet.  Threads may still be mid-cleanup and
+	 * could access hardware registers (e.g. wlanReleasePendingOid →
+	 * nicTxCancelSendingCmd).  Unmapping the BARs before the threads
+	 * exit would turn those accesses into MMIO use-after-iounmap faults.
+	 *
+	 * Correct teardown order:
+	 * 1. Set HALT + silence HW (nicDisableInterrupt) — no new IRQs.
+	 * 2. Kill bottom-halves (tasklet_kill, glTaskletUninit).
+	 * 3. Stop all threads (wlanOffStopWlanThreads) — BARs still mapped.
+	 * 4. Free IRQ and unmap BARs (glBusFreeIrq) — safe, nothing running.
+	 */
+	set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
+	/* Clear pending RX/TX bits to prevent main_thread processing after HALT */
+	clear_bit(GLUE_FLAG_RX_BIT, &prGlueInfo->ulFlag);
+	smp_wmb();
+	if (prAdapter)
+		nicDisableInterrupt(prAdapter);
+	tasklet_kill(&prGlueInfo->rRxTask);
+	glTaskletUninit(prGlueInfo);
+	wlanOffStopWlanThreads(prGlueInfo);
+	glBusFreeIrq(prDev, prGlueInfo);
 
-    wlanUnregisterInetAddrNotifier();
+	/*
+	 * 5. Now safe to unregister and destroy the netdev — IRQ is gone,
+	 * no more callbacks into driver code can occur.
+	 */
+	wlanNetUnregister(prDev->ieee80211_ptr);
+	wlanNetDestroy(prDev->ieee80211_ptr);
+
+	wlanUnregisterInetAddrNotifier();
 
 #if CFG_MET_PACKET_TRACE_SUPPORT
-    kalMetRemoveProcfs();
+	kalMetRemoveProcfs();
 #endif
 
-
 exit_removing:
-    atomic_set(&g_wlanRemoving, 0);
+	atomic_set(&g_wlanRemoving, 0);
 }
-
 
 
 static void wlanGlobalReset(void)

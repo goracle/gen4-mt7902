@@ -1213,6 +1213,20 @@ static void saa_handle_tx_failure(struct ADAPTER *prAdapter,
 		return;
 	}
 
+	/* TX_RESULT_DROPPED_IN_DRIVER means halResetMsduToken freed
+	 * this frame during SER recovery.  The DMA ring is being torn
+	 * down and re-initialized — submitting a new frame now races
+	 * halWpdmaInitRing and sends into a ring in an undefined state.
+	 * Defer via retry timer; the ring will be clean by the time it
+	 * fires. */
+	if (rTxDoneStatus == TX_RESULT_DROPPED_IN_DRIVER) {
+		DBGLOG(SAA, WARN,
+		       "[SAA-TXDONE] SER drop, deferring retry (state=%u)\n",
+		       prStaRec->ucStaState);
+		saa_start_retry_timer(prAdapter, prStaRec);
+		return;
+	}
+
 	DBGLOG(SAA, WARN,
 	       "[SAA-TXDONE] TX FAILED status=%d, retrying (sent=%d)\n",
 	       rTxDoneStatus, prStaRec->eAuthAssocSent);

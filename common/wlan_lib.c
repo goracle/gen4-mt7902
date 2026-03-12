@@ -2720,32 +2720,40 @@ void wlanClearDataQueue(IN struct ADAPTER *prAdapter)
 		QUEUE_INITIALIZE(prDataPort0);
 		QUEUE_INITIALIZE(prDataPort1);
 
-		/* <1> Move whole list of CMD_INFO to temp queue */
+		/* <1> Move whole list to temp queues */
 		KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_TX_PORT_QUE);
 		QUEUE_MOVE_ALL(prDataPort0, &prAdapter->rTxP0Queue);
 		QUEUE_MOVE_ALL(prDataPort1, &prAdapter->rTxP1Queue);
 		KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_TX_PORT_QUE);
 
-		/* <2> Release Tx resource */
-		nicTxReleaseMsduResource(prAdapter,
-			 (struct MSDU_INFO *) QUEUE_GET_HEAD(prDataPort0));
-		nicTxReleaseMsduResource(prAdapter,
-			 (struct MSDU_INFO *) QUEUE_GET_HEAD(prDataPort1));
+		/* <2> Properly iterate and free ALL packets in Port 0 */
+		while (QUEUE_IS_NOT_EMPTY(prDataPort0)) {
+			QUEUE_REMOVE_HEAD(prDataPort0, prMsduInfo, struct MSDU_INFO *);
+			if (prMsduInfo) {
+				nicTxReleaseMsduResource(prAdapter, prMsduInfo);
+				nicTxFreeMsduInfoPacket(prAdapter, prMsduInfo); /* SECURE FIX: Added missing SKB free */
+				nicTxReturnMsduInfo(prAdapter, prMsduInfo);
+			}
+		}
 
-		/* <3> Return sk buffer */
-		nicTxReturnMsduInfo(prAdapter, (struct MSDU_INFO *)
-						QUEUE_GET_HEAD(prDataPort0));
-		nicTxReturnMsduInfo(prAdapter, (struct MSDU_INFO *)
-						QUEUE_GET_HEAD(prDataPort1));
+		/* <3> Properly iterate and free ALL packets in Port 1 */
+		while (QUEUE_IS_NOT_EMPTY(prDataPort1)) {
+			QUEUE_REMOVE_HEAD(prDataPort1, prMsduInfo, struct MSDU_INFO *);
+			if (prMsduInfo) {
+				nicTxReleaseMsduResource(prAdapter, prMsduInfo);
+				nicTxFreeMsduInfoPacket(prAdapter, prMsduInfo); /* SECURE FIX: Added missing SKB free */
+				nicTxReturnMsduInfo(prAdapter, prMsduInfo);
+			}
+		}
 
 		/* <4> Clear pending MSDU info in data done queue */
 		KAL_ACQUIRE_MUTEX(prAdapter, MUTEX_TX_DATA_DONE_QUE);
 		while (QUEUE_IS_NOT_EMPTY(&prAdapter->rTxDataDoneQueue)) {
-			QUEUE_REMOVE_HEAD(&prAdapter->rTxDataDoneQueue,
-					  prMsduInfo, struct MSDU_INFO *);
-
-			nicTxFreePacket(prAdapter, prMsduInfo, FALSE);
-			nicTxReturnMsduInfo(prAdapter, prMsduInfo);
+			QUEUE_REMOVE_HEAD(&prAdapter->rTxDataDoneQueue, prMsduInfo, struct MSDU_INFO *);
+			if (prMsduInfo) {
+				nicTxFreePacket(prAdapter, prMsduInfo, FALSE);
+				nicTxReturnMsduInfo(prAdapter, prMsduInfo);
+			}
 		}
 		KAL_RELEASE_MUTEX(prAdapter, MUTEX_TX_DATA_DONE_QUE);
 #else
@@ -2762,32 +2770,32 @@ void wlanClearDataQueue(IN struct ADAPTER *prAdapter)
 			QUEUE_INITIALIZE(prDataPort[i]);
 		}
 
-		/* <1> Move whole list of CMD_INFO to temp queue */
+		/* <1> Move whole list to temp queue */
 		KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_TX_PORT_QUE);
 		for (i = 0; i < TX_PORT_NUM; i++)
 			QUEUE_MOVE_ALL(prDataPort[i], &prAdapter->rTxPQueue[i]);
 		KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_TX_PORT_QUE);
 
-		/* <2> Return sk buffer */
+		/* <2> SECURE FIX: Properly iterate through EVERY item, not just the head */
 		for (i = 0; i < TX_PORT_NUM; i++) {
-			if (!QUEUE_GET_HEAD(prDataPort[i]))
-				continue;
-			nicTxReleaseMsduResource(prAdapter, (struct MSDU_INFO *)
-						QUEUE_GET_HEAD(prDataPort[i]));
-			nicTxFreeMsduInfoPacket(prAdapter, (struct MSDU_INFO *)
-						QUEUE_GET_HEAD(prDataPort[i]));
-			nicTxReturnMsduInfo(prAdapter, (struct MSDU_INFO *)
-						QUEUE_GET_HEAD(prDataPort[i]));
+			while (QUEUE_IS_NOT_EMPTY(prDataPort[i])) {
+				QUEUE_REMOVE_HEAD(prDataPort[i], prMsduInfo, struct MSDU_INFO *);
+				if (prMsduInfo) {
+					nicTxReleaseMsduResource(prAdapter, prMsduInfo);
+					nicTxFreeMsduInfoPacket(prAdapter, prMsduInfo);
+					nicTxReturnMsduInfo(prAdapter, prMsduInfo);
+				}
+			}
 		}
 
 		/* <3> Clear pending MSDU info in data done queue */
 		KAL_ACQUIRE_MUTEX(prAdapter, MUTEX_TX_DATA_DONE_QUE);
 		while (QUEUE_IS_NOT_EMPTY(&prAdapter->rTxDataDoneQueue)) {
-			QUEUE_REMOVE_HEAD(&prAdapter->rTxDataDoneQueue,
-					  prMsduInfo, struct MSDU_INFO *);
-
-			nicTxFreePacket(prAdapter, prMsduInfo, FALSE);
-			nicTxReturnMsduInfo(prAdapter, prMsduInfo);
+			QUEUE_REMOVE_HEAD(&prAdapter->rTxDataDoneQueue, prMsduInfo, struct MSDU_INFO *);
+			if (prMsduInfo) {
+				nicTxFreePacket(prAdapter, prMsduInfo, FALSE);
+				nicTxReturnMsduInfo(prAdapter, prMsduInfo);
+			}
 		}
 		KAL_RELEASE_MUTEX(prAdapter, MUTEX_TX_DATA_DONE_QUE);
 #endif
@@ -2807,6 +2815,7 @@ void wlanClearRxToOsQueue(IN struct ADAPTER *prAdapter)
 	struct QUE rTempRxQue;
 	struct QUE *prTempRxQue = &rTempRxQue;
 	struct QUE_ENTRY *prQueueEntry = (struct QUE_ENTRY *) NULL;
+	void *pvPacket;
 
 	KAL_SPIN_LOCK_DECLARATION();
 	QUEUE_INITIALIZE(prTempRxQue);
@@ -2817,16 +2826,22 @@ void wlanClearRxToOsQueue(IN struct ADAPTER *prAdapter)
 	KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_TO_OS_QUE);
 
 	/* 4 <2> Remove all skbuf */
-	QUEUE_REMOVE_HEAD(prTempRxQue, prQueueEntry,
-			  struct QUE_ENTRY *);
+	QUEUE_REMOVE_HEAD(prTempRxQue, prQueueEntry, struct QUE_ENTRY *);
 	while (prQueueEntry) {
-		kalRxIndicateOnePkt(prAdapter->prGlueInfo,
-				(void *) GLUE_GET_PKT_DESCRIPTOR(prQueueEntry));
-		QUEUE_REMOVE_HEAD(prTempRxQue, prQueueEntry,
-				struct QUE_ENTRY *);
+		pvPacket = (void *) GLUE_GET_PKT_DESCRIPTOR(prQueueEntry);
+		if (pvPacket) {
+			/* * SECURE FIX: Do NOT indicate packets to the OS during queue clearance.
+			 * This happens during module unload or driver stop. Indicating packets
+			 * into a dead/dying netdev will cause UAF and SLUB corruption.
+			 * We must free them directly!
+			 */
+			kalPacketFree(prAdapter->prGlueInfo, pvPacket);
+		}
+		
+		QUEUE_REMOVE_HEAD(prTempRxQue, prQueueEntry, struct QUE_ENTRY *);
 	}
-
 }
+
 #endif
 
 /*----------------------------------------------------------------------------*/
@@ -13901,6 +13916,7 @@ void wlanTpeUpdate(struct GLUE_INFO *prGlueInfo, struct QUE *prSrcQue,
 	}
 
 	DBGLOG(HAL, LOUD, "ENTER wlanTpeUpdate.\n");
+	
 	/* Resource init */
 	QUEUE_INITIALIZE(prTempQue);
 	kalMemZero(auPktMap, sizeof(auPktMap));
@@ -13908,41 +13924,49 @@ void wlanTpeUpdate(struct GLUE_INFO *prGlueInfo, struct QUE *prSrcQue,
 
 	/* Queue revert */
 	while (QUEUE_IS_NOT_EMPTY(prSrcQue)) {
-		QUEUE_REMOVE_HEAD(prSrcQue, prQueueEntry,
-			  struct QUE_ENTRY *);
+		QUEUE_REMOVE_HEAD(prSrcQue, prQueueEntry, struct QUE_ENTRY *);
 		QUEUE_INSERT_HEAD(prTempQue, prQueueEntry);
 	}
 	QUEUE_MOVE_ALL(prSrcQue, prTempQue);
 
 	/* Loop all pkts in waiting-Q */
 	for (u4Cnt = 0; u4Cnt < u4PktMax; u4Cnt++) {
-		QUEUE_REMOVE_HEAD(prSrcQue, prQueueEntry,
-			  struct QUE_ENTRY *);
+		QUEUE_REMOVE_HEAD(prSrcQue, prQueueEntry, struct QUE_ENTRY *);
 		if (!prQueueEntry)
 			break;
-		prSkb = (struct sk_buff *)
-					  GLUE_GET_PKT_DESCRIPTOR(
-					  prQueueEntry);
+			
+		prSkb = (struct sk_buff *) GLUE_GET_PKT_DESCRIPTOR(prQueueEntry);
+
+		/* SECURE FIX: Prevent out-of-bounds read if SKB is too small */
+		if (!prSkb || prSkb->len < (ETHER_HEADER_LEN + IPV4_HDR_LEN + 4)) {
+			uint8_t ucBssIndex = prSkb ? GLUE_GET_PKT_BSS_IDX(prSkb) : 0;
+			uint16_t u2QueueIdx = prSkb ? skb_get_queue_mapping(prSkb) : 0;
+
+			if (prSkb) {
+				GLUE_INC_REF_CNT(prGlueInfo->ai4TxPendingFrameNumPerQueue[ucBssIndex][u2QueueIdx]);
+				GLUE_INC_REF_CNT(prGlueInfo->i4TxPendingFrameNum);
+				QUEUE_INSERT_TAIL(prSrcQue, prQueueEntry);
+				addPktCnt++;
+			}
+			continue;
+		}
+
 		pucPktHeadBuf = prSkb->data;
 		pucIpHeader = &pucPktHeadBuf[ETHER_HEADER_LEN];
 		pu4Ip = (uint32_t *)(pucIpHeader + IPV4_HDR_IP_SRC_ADDR_OFFSET);
 		pu2SPort = (uint16_t *)(pucIpHeader + IPV4_HDR_LEN);
-		pu2DPort = (uint16_t *)(pucIpHeader +
-					IPV4_HDR_LEN + 2);
+		pu2DPort = (uint16_t *)(pucIpHeader + IPV4_HDR_LEN + 2);
+		
 		/* Check if having this session ack already */
 		ucHitPkt = FALSE;
-		for (u4Cnt2 = 0; u4Cnt2 < ARRAY_SIZE(auPktMap);
-			u4Cnt2++) {
+		for (u4Cnt2 = 0; u4Cnt2 < ARRAY_SIZE(auPktMap); u4Cnt2++) {
 			if (u4PktMax < TPENHANCE_PKT_LATCH_MIN)
 				break;
 
 			prPktMap = &auPktMap[u4Cnt2];
 
 			if (prPktMap->au2SPort == 0) {
-				/*
-				 * This is a new session.
-				 * Create a new record and keep this ack.
-				 */
+				/* This is a new session. Create a new record and keep this ack. */
 				prPktMap->au2SPort = *pu2SPort;
 				prPktMap->au2DPort = *pu2DPort;
 				prPktMap->au4Ip = *pu4Ip;
@@ -13953,15 +13977,12 @@ void wlanTpeUpdate(struct GLUE_INFO *prGlueInfo, struct QUE *prSrcQue,
 			if (prPktMap->au2SPort == *pu2SPort
 				&& prPktMap->au2DPort == *pu2DPort
 				&& prPktMap->au4Ip == *pu4Ip) {
+				
 				/* A duplicated session found */
 				if (ucPktJump == prPktMap->au2Hit) {
-					/*
-					 * reset hit counter &&
-					 * keep this ack
-					 */
+					/* reset hit counter && keep this ack */
 					prPktMap->au2Hit = 0;
-					DBGLOG(HAL, LOUD,
-						"TCP Ack target Hit.\n");
+					DBGLOG(HAL, LOUD, "TCP Ack target Hit.\n");
 				} else {
 					prPktMap->au2Hit++;
 					ucHitPkt = TRUE;
@@ -13970,20 +13991,15 @@ void wlanTpeUpdate(struct GLUE_INFO *prGlueInfo, struct QUE *prSrcQue,
 			}
 		}
 
-		if (ucHitPkt)
-			dev_kfree_skb(prSkb);
-		else {
-			uint8_t ucBssIndex =
-				GLUE_GET_PKT_BSS_IDX(prSkb);
-			uint16_t u2QueueIdx =
-				skb_get_queue_mapping(prSkb);
+		if (ucHitPkt) {
+			/* SECURE FIX: Use context-safe any variant */
+			dev_kfree_skb_any(prSkb);
+		} else {
+			uint8_t ucBssIndex = GLUE_GET_PKT_BSS_IDX(prSkb);
+			uint16_t u2QueueIdx = skb_get_queue_mapping(prSkb);
 
-			GLUE_INC_REF_CNT(
-			prGlueInfo->ai4TxPendingFrameNumPerQueue
-			[ucBssIndex][u2QueueIdx]);
-
-			GLUE_INC_REF_CNT(
-			prGlueInfo->i4TxPendingFrameNum);
+			GLUE_INC_REF_CNT(prGlueInfo->ai4TxPendingFrameNumPerQueue[ucBssIndex][u2QueueIdx]);
+			GLUE_INC_REF_CNT(prGlueInfo->i4TxPendingFrameNum);
 			QUEUE_INSERT_TAIL(prSrcQue, prQueueEntry);
 			addPktCnt++;
 		}
@@ -13991,17 +14007,16 @@ void wlanTpeUpdate(struct GLUE_INFO *prGlueInfo, struct QUE *prSrcQue,
 
 	/* Queue revert */
 	while (QUEUE_IS_NOT_EMPTY(prSrcQue)) {
-		QUEUE_REMOVE_HEAD(prSrcQue, prQueueEntry,
-				struct QUE_ENTRY *);
+		QUEUE_REMOVE_HEAD(prSrcQue, prQueueEntry, struct QUE_ENTRY *);
 		QUEUE_INSERT_HEAD(prTempQue, prQueueEntry);
 	}
 	QUEUE_MOVE_ALL(prSrcQue, prTempQue);
 
-
 	if (addPktCnt != prSrcQue->u4NumElem)
-		DBGLOG(QM, ERROR, "mismatch : %d != %d\n",
-			addPktCnt, prSrcQue->u4NumElem);
+		DBGLOG(QM, ERROR, "mismatch : %d != %d\n", addPktCnt, prSrcQue->u4NumElem);
 }
+
+
 
 void wlanTpeFlush(struct GLUE_INFO *prGlueInfo)
 {

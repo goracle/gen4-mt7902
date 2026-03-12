@@ -806,6 +806,11 @@ void nicRxFillRFB(IN struct ADAPTER *prAdapter,
 {
 	struct RX_DESC_OPS_T *prRxDescOps = prAdapter->chip_info->prRxDescOps;
 
+	if (prSwRfb->pvHeader && prSwRfb->ucSecMode == CIPHER_SUITE_NONE &&
+	    prSwRfb->ucStaRecIdx == STA_REC_INDEX_NOT_FOUND) {
+		DBGLOG(RX, INFO, "[FILL-RFB] skipping re-parse, pvHeader already set\n");
+		return;
+	}
 	if (prRxDescOps->nic_rxd_fill_rfb)
 		prRxDescOps->nic_rxd_fill_rfb(prAdapter, prSwRfb);
 	else

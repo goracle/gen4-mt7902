@@ -7776,6 +7776,13 @@ void aisFsmFirePendingSAA(struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	       "[AIS%d] STATE_3 ACK confirmed: StaRec[%u] ucStaState=%u firing SAA\n",
 	       ucBssIndex, prStaRec->ucIndex, prStaRec->ucStaState);
 
+	/* Reset StaRec to STATE_1 before auth so firmware WTBL is in the
+	 * correct pre-auth state when the auth frame arrives on the data
+	 * queue.  Without this, firmware sees a data-path frame for a
+	 * wlanIdx still in STATE_2 and asserts SER ~270ms later.
+	 */
+	cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_1);
+
 	mboxSendMsg(prAdapter, MBOX_ID_0,
 		(struct MSG_HDR *)prAisFsmInfo->prPendingSAAMsg,
 		MSG_SEND_METHOD_BUF);

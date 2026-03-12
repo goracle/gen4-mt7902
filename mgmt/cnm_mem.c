@@ -907,10 +907,11 @@ void cnmStaRecChangeState(struct ADAPTER *prAdapter,
 	DBGLOG(MEM, WARN, "cnmStaRecChangeState StaRec[%u] %u->%u\n",
 	       prStaRec->ucIndex, prStaRec->ucStaState, ucNewState);
 
-	if (ucNewState == STA_STATE_1 && prStaRec->ucStaState == STA_STATE_2) {
-		prStaRec->ucStaState = ucNewState;
-		return;
-	}
+	/* STATE_2->STATE_1: fall through so cnmStaSendUpdateCmd is called
+	 * with fgNeedResp=TRUE, gating auth TX until firmware ACKs the
+	 * WTBL reset.  Silent early-return here leaves firmware in STATE_2
+	 * when the auth frame arrives, causing SER.
+	 */
 
 	if (ucNewState == STA_STATE_3) {
 		if (ucNewState != prStaRec->ucStaState) {
