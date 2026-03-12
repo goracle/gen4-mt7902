@@ -3065,209 +3065,271 @@ static uint8_t defaultSetRxRingHwAddr(
 		return u4RxPktCnt;
 	}
 
+
 bool halWpdmaWriteCmd(IN struct GLUE_INFO *prGlueInfo,
-                      IN struct CMD_INFO *prCmdInfo, IN uint8_t ucTC)
+		      IN struct CMD_INFO *prCmdInfo, IN uint8_t ucTC)
 {
-    struct GL_HIF_INFO *prHifInfo = NULL;
-    struct HIF_MEM_OPS *prMemOps = NULL;
-    struct RTMP_TX_RING *prTxRing = NULL;
-    struct RTMP_DMACB *pTxCell = NULL;
-    struct TXD_STRUCT *pTxD = NULL;
-    uint16_t u2Port = TX_RING_CMD_IDX_2;
-    uint32_t u4TotalLen = 0;
-    void *pucSrc = NULL;
+	struct GL_HIF_INFO *prHifInfo = NULL;
+	struct HIF_MEM_OPS *prMemOps = NULL;
+	struct RTMP_TX_RING *prTxRing = NULL;
+	struct RTMP_DMACB *pTxCell = NULL;
+	struct TXD_STRUCT *pTxD = NULL;
+	uint16_t u2Port = TX_RING_CMD_IDX_2;
+	uint32_t u4TotalLen = 0;
+	void *pucSrc = NULL;
 #if (CFG_SUPPORT_CONNAC2X == 1)
-    struct mt66xx_chip_info *prChipInfo;
+	struct mt66xx_chip_info *prChipInfo;
 #endif
-    unsigned long flags;
-    uint32_t glo_pre = 0, glo_post = 0;
-    uint32_t hw_cidx_before = 0, hw_cidx_after = 0;
-    uint32_t reported_cidx = 0;
+	unsigned long flags;
+	uint32_t glo_pre = 0, glo_post = 0;
+	uint32_t hw_cidx_before = 0, hw_cidx_after = 0;
 
-    ASSERT(prGlueInfo);
-    if (!prGlueInfo || !prCmdInfo) {
-        DBGLOG(HAL, ERROR, "%s: invalid input pointers prGlueInfo=%p prCmdInfo=%p\n",
-               __func__, prGlueInfo, prCmdInfo);
-        return FALSE;
-    }
+	ASSERT(prGlueInfo);
+	if (!prGlueInfo || !prCmdInfo) {
+		DBGLOG(HAL, ERROR,
+		       "%s: invalid input pointers prGlueInfo=%p prCmdInfo=%p\n",
+		       __func__, prGlueInfo, prCmdInfo);
+		return FALSE;
+	}
 
 #if (CFG_SUPPORT_CONNAC2X == 1)
-    prChipInfo = prGlueInfo->prAdapter->chip_info;
-    if (prChipInfo && prChipInfo->is_support_wacpu)
-        u2Port = TX_RING_WA_CMD_IDX_4;
+	prChipInfo = prGlueInfo->prAdapter->chip_info;
+	if (prChipInfo && prChipInfo->is_support_wacpu)
+		u2Port = TX_RING_WA_CMD_IDX_4;
 #endif
 
-    prHifInfo = &prGlueInfo->rHifInfo;
-    prMemOps = &prHifInfo->rMemOps;
-    prTxRing = &prHifInfo->TxRing[u2Port];
+	prHifInfo = &prGlueInfo->rHifInfo;
+	prMemOps = &prHifInfo->rMemOps;
+	prTxRing = &prHifInfo->TxRing[u2Port];
 
-    /* total S/G length we will program into TXD */
-    u4TotalLen = prCmdInfo->u4TxdLen + prCmdInfo->u4TxpLen;
-    if (u4TotalLen == 0) {
-        DBGLOG(HAL, ERROR, "%s: zero total length (txd=%u txp=%u) CID=%u\n",
-               __func__, prCmdInfo->u4TxdLen, prCmdInfo->u4TxpLen, prCmdInfo->ucCID);
-        return FALSE;
-    }
+	/* Validate lengths before allocating anything */
+	u4TotalLen = prCmdInfo->u4TxdLen + prCmdInfo->u4TxpLen;
+	if (u4TotalLen == 0) {
+		DBGLOG(HAL, ERROR,
+		       "%s: zero total length (txd=%u txp=%u) CID=%u\n",
+		       __func__, prCmdInfo->u4TxdLen, prCmdInfo->u4TxpLen,
+		       prCmdInfo->ucCID);
+		return FALSE;
+	}
 
-    /* allocate a staging buffer if allocRuntimeMem is provided */
-    if (prMemOps->allocRuntimeMem) {
-        pucSrc = prMemOps->allocRuntimeMem(u4TotalLen);
-        if (pucSrc == NULL) {
-            DBGLOG(HAL, ERROR, "%s: allocRuntimeMem failed len=%u CID=%u\n",
-                   __func__, u4TotalLen, prCmdInfo->ucCID);
-            return FALSE;
-        }
-    }
+	/*
+	 * Sanity check the layout we're about to hand to firmware:
+	 *   [0 .. u4TxdLen)  = firmware-side TXD metadata (built by
+	 *                       nic_txd_v2_compose — WlanIdx, rate, flags…)
+	 *   [u4TxdLen .. total) = TXP / actual frame payload
+	 *
+	 * If TxdLen is suspiciously small we're almost certainly going to
+	 * hand the firmware a descriptor with no useful metadata.
+	 */
+	if (prCmdInfo->u4TxdLen < 8) {
+		DBGLOG(HAL, ERROR,
+		       "%s: u4TxdLen=%u looks too small to hold fw TXD "
+		       "metadata — firmware will likely drop. CID=%u\n",
+		       __func__, prCmdInfo->u4TxdLen, prCmdInfo->ucCID);
+		/* Don't abort — continue so we can see what happens,
+		 * but the warning makes it obvious in the log. */
+	}
 
-    /* lock the ring while inspecting/writing indices and cell */
-    spin_lock_irqsave(&prTxRing->rTxDmaQLock, flags);
+	if (prMemOps->allocRuntimeMem) {
+		pucSrc = prMemOps->allocRuntimeMem(u4TotalLen);
+		if (pucSrc == NULL) {
+			DBGLOG(HAL, ERROR,
+			       "%s: allocRuntimeMem failed len=%u CID=%u\n",
+			       __func__, u4TotalLen, prCmdInfo->ucCID);
+			return FALSE;
+		}
+	}
 
-    /* read current CPU index (TxCpuIdx) from register to keep synced */
-    kalDevRegRead(prGlueInfo, prTxRing->hw_cidx_addr, &hw_cidx_before);
-    reported_cidx = prTxRing->TxCpuIdx;
-    DBGLOG(HAL, WARN,
-           "%s: port=%u before: hw_cidx_reg=0x%08x ring_cpu_idx=%u Used=%u CID=%u\n",
-           __func__, u2Port, hw_cidx_before, reported_cidx, prTxRing->u4UsedCnt, prCmdInfo->ucCID);
+	spin_lock_irqsave(&prTxRing->rTxDmaQLock, flags);
 
-    /* defensive bounds check on ring index */
-    if (prTxRing->TxCpuIdx >= TX_RING_SIZE) {
-        DBGLOG(HAL, ERROR, "%s: invalid TxCpuIdx[%u] >= TX_RING_SIZE(%u)\n",
-               __func__, prTxRing->TxCpuIdx, (uint32_t)TX_RING_SIZE);
-        if (prMemOps->freeBuf)
-            prMemOps->freeBuf(pucSrc, u4TotalLen);
+	kalDevRegRead(prGlueInfo, prTxRing->hw_cidx_addr, &hw_cidx_before);
+	DBGLOG(HAL, WARN,
+	       "%s: port=%u before: hw_cidx_reg=0x%08x ring_cpu_idx=%u "
+	       "Used=%u CID=%u txdLen=%u txpLen=%u total=%u\n",
+	       __func__, u2Port, hw_cidx_before, prTxRing->TxCpuIdx,
+	       prTxRing->u4UsedCnt, prCmdInfo->ucCID,
+	       prCmdInfo->u4TxdLen, prCmdInfo->u4TxpLen, u4TotalLen);
 
-        spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
-        return FALSE;
-    }
+	if (prTxRing->TxCpuIdx >= TX_RING_SIZE) {
+		DBGLOG(HAL, ERROR,
+		       "%s: invalid TxCpuIdx[%u] >= TX_RING_SIZE(%u)\n",
+		       __func__, prTxRing->TxCpuIdx, (uint32_t)TX_RING_SIZE);
+		if (prMemOps->freeBuf)
+			prMemOps->freeBuf(pucSrc, u4TotalLen);
+		spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
+		return FALSE;
+	}
 
-    pTxCell = &prTxRing->Cell[prTxRing->TxCpuIdx];
-    if (!pTxCell) {
-        DBGLOG(HAL, ERROR, "%s: pTxCell NULL for idx %u\n", __func__, prTxRing->TxCpuIdx);
-        if (prMemOps->freeBuf)
-            prMemOps->freeBuf(pucSrc, u4TotalLen);
+	pTxCell = &prTxRing->Cell[prTxRing->TxCpuIdx];
+	if (!pTxCell) {
+		DBGLOG(HAL, ERROR, "%s: pTxCell NULL for idx %u\n",
+		       __func__, prTxRing->TxCpuIdx);
+		if (prMemOps->freeBuf)
+			prMemOps->freeBuf(pucSrc, u4TotalLen);
+		spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
+		return FALSE;
+	}
 
-        spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
-        return FALSE;
-    }
+	pTxD = (struct TXD_STRUCT *)pTxCell->AllocVa;
+	if (!pTxD) {
+		DBGLOG(HAL, ERROR, "%s: pTxD NULL AllocVa=%p idx=%u\n",
+		       __func__, pTxCell->AllocVa, prTxRing->TxCpuIdx);
+		if (prMemOps->freeBuf)
+			prMemOps->freeBuf(pucSrc, u4TotalLen);
+		spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
+		return FALSE;
+	}
 
-    pTxD = (struct TXD_STRUCT *)pTxCell->AllocVa;
-    if (!pTxD) {
-        DBGLOG(HAL, ERROR, "%s: pTxD NULL AllocVa=%p idx=%u\n",
-               __func__, pTxCell->AllocVa, prTxRing->TxCpuIdx);
-        if (prMemOps->freeBuf)
-            prMemOps->freeBuf(pucSrc, u4TotalLen);
+	pTxCell->pPacket = (void *)prCmdInfo;
+	pTxCell->pBuffer = pucSrc;
 
-        spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
-        return FALSE;
-    }
+	/*
+	 * Copy firmware-TXD metadata + payload into the DMA staging buffer.
+	 * copyCmd is responsible for the layout:
+	 *   pucSrc[0..TxdLen)  <- prCmdInfo->pucTxd  (fw TXD, built by
+	 *                          nic_txd_v2_compose: WlanIdx, rate, …)
+	 *   pucSrc[TxdLen..N)  <- prCmdInfo->pucTxp  (frame payload)
+	 *
+	 * We must NOT touch pucSrc after this point — any post-copy write
+	 * here would overwrite the metadata the firmware depends on.
+	 */
+	if (prMemOps->copyCmd) {
+		if (!prMemOps->copyCmd(prHifInfo, pTxCell, pucSrc,
+				       prCmdInfo->pucTxd, prCmdInfo->u4TxdLen,
+				       prCmdInfo->pucTxp, prCmdInfo->u4TxpLen)) {
+			DBGLOG(HAL, ERROR,
+			       "%s: copyCmd failed CID=%u idx=%u\n",
+			       __func__, prCmdInfo->ucCID,
+			       prTxRing->TxCpuIdx);
+			if (prMemOps->freeBuf)
+				prMemOps->freeBuf(pucSrc, u4TotalLen);
+			spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
+			ASSERT(0);
+			return FALSE;
+		}
+	} else {
+		/* fallback: manual layout into contiguous buffer */
+		if (prCmdInfo->u4TxdLen > 0 && prCmdInfo->pucTxd)
+			kalMemCopy(pucSrc, prCmdInfo->pucTxd,
+				   prCmdInfo->u4TxdLen);
+		if (prCmdInfo->u4TxpLen > 0 && prCmdInfo->pucTxp)
+			kalMemCopy((uint8_t *)pucSrc + prCmdInfo->u4TxdLen,
+				   prCmdInfo->pucTxp, prCmdInfo->u4TxpLen);
+	}
 
-    /* attach metadata */
-    pTxCell->pPacket = (void *)prCmdInfo;
-    pTxCell->pBuffer = pucSrc;
+	/*
+	 * Dump the firmware-TXD portion of pucSrc (first u4TxdLen bytes).
+	 * This is the metadata the firmware will actually read — WlanIdx,
+	 * rate, flags, etc.  If these are all zero the firmware will drop
+	 * the frame regardless of whether DMA completes.
+	 */
+	{
+		uint32_t *fw_txd = (uint32_t *)pucSrc;
+		uint32_t dw_count = (prCmdInfo->u4TxdLen + 3) / 4;
+		uint32_t i;
 
-    /* copy the command content into staging buffer (if copyCmd is provided use it),
-       otherwise fall back to a safe memcpy (best-effort) */
-    if (prMemOps->copyCmd) {
-        if (!prMemOps->copyCmd(prHifInfo, pTxCell, pucSrc,
-                               prCmdInfo->pucTxd, prCmdInfo->u4TxdLen,
-                               prCmdInfo->pucTxp, prCmdInfo->u4TxpLen)) {
-            DBGLOG(HAL, ERROR, "%s: copyCmd failed CID=%u idx=%u\n",
-                   __func__, prCmdInfo->ucCID, prTxRing->TxCpuIdx);
-            if (prMemOps->freeBuf)
-                prMemOps->freeBuf(pucSrc, u4TotalLen);
+		if (dw_count > 8)
+			dw_count = 8; /* cap log length */
+		DBGLOG(HAL, WARN,
+		       "%s: fw-TXD content (pucSrc, first %u dwords — "
+		       "WlanIdx/rate/flags are here):",
+		       __func__, dw_count);
+		for (i = 0; i < dw_count; i++)
+			DBGLOG(HAL, WARN, " DW%u=0x%08x", i, fw_txd[i]);
+		DBGLOG(HAL, WARN, "\n");
 
-            spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
-            ASSERT(0);
-            return FALSE;
-        }
-    } else {
-        /* copyCmd missing: fallback to memcpy into single contiguous buffer */
-        uint32_t copyLen = prCmdInfo->u4TxdLen;
-        if (copyLen > 0 && prCmdInfo->pucTxd)
-            kalMemCopy(pucSrc, prCmdInfo->pucTxd, copyLen);
-        if (prCmdInfo->u4TxpLen > 0 && prCmdInfo->pucTxp)
-            kalMemCopy((uint8_t *)pucSrc + prCmdInfo->u4TxdLen,
-                       prCmdInfo->pucTxp, prCmdInfo->u4TxpLen);
-    }
+		/* Warn explicitly if the fw-TXD looks blank */
+		if (dw_count >= 2 && fw_txd[0] == 0 && fw_txd[1] == 0)
+			DBGLOG(HAL, ERROR,
+			       "%s: fw-TXD DW0/DW1 are zero after copyCmd — "
+			       "WlanIdx/rate fields probably not set. "
+			       "Firmware will likely drop this frame. CID=%u\n",
+			       __func__, prCmdInfo->ucCID);
+	}
 
-    /* prepare TXD */
-    pTxD->SDPtr0 = (uint64_t)pTxCell->PacketPa & DMA_LOWER_32BITS_MASK;
+	/*
+	 * Fill the *ring* descriptor (TXD_STRUCT / pTxD = pTxCell->AllocVa).
+	 * This is a separate allocation from pucSrc; writing here does NOT
+	 * touch the firmware-TXD metadata we just copied into pucSrc.
+	 * SDPtr0/PacketPa points the DMA engine at pucSrc.
+	 */
+	kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR,
+		      &glo_pre);
+
+	pTxD->SDPtr0 = (uint64_t)pTxCell->PacketPa & DMA_LOWER_32BITS_MASK;
 #ifdef CONFIG_PHYS_ADDR_T_64BIT
-    pTxD->SDPtr0Ext = ((uint64_t)pTxCell->PacketPa >> DMA_BITS_OFFSET) &
-                      DMA_HIGHER_4BITS_MASK;
+	pTxD->SDPtr0Ext = ((uint64_t)pTxCell->PacketPa >> DMA_BITS_OFFSET) &
+			  DMA_HIGHER_4BITS_MASK;
 #else
-    pTxD->SDPtr0Ext = 0;
+	pTxD->SDPtr0Ext = 0;
 #endif
-    pTxD->SDLen0 = u4TotalLen;
-    pTxD->SDPtr1 = 0;
-    pTxD->SDLen1 = 0;
-    pTxD->LastSec0 = 1;
-    pTxD->LastSec1 = 0;
-    pTxD->Burst = 0;
-    pTxD->DMADONE = 0;
+	pTxD->SDLen0   = u4TotalLen;
+	pTxD->SDPtr1   = 0;
+	pTxD->SDLen1   = 0;
+	pTxD->LastSec0 = 1;
+	pTxD->LastSec1 = 0;
+	pTxD->Burst    = 0;
+	pTxD->DMADONE  = 0;
 
-    /* record pre-GLO_CFG for diagnostics */
-    kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo_pre);
+	/* Dump the ring descriptor for cross-checking with fw-TXD dump above */
+	{
+		uint32_t *dw = (uint32_t *)pTxD;
+		uint32_t i;
 
-    /* Advance ring index in driver; will write back to hw register to kick */
-    INC_RING_INDEX(prTxRing->TxCpuIdx, TX_RING_SIZE);
-    prTxRing->u4UsedCnt++;
+		DBGLOG(HAL, WARN,
+		       "%s: ring-TXD (pTxD/AllocVa — DMA descriptor, "
+		       "NOT fw metadata):",
+		       __func__);
+		for (i = 0; i < 8; i++)
+			DBGLOG(HAL, WARN, " DW%u=0x%08x", i, dw[i]);
+		DBGLOG(HAL, WARN, "\n");
+	}
 
-    /* Diagnostic: log a short summary before the kick and dump TXD words */
-    DBGLOG(HAL, ERROR,
-           "[KICKRING] port=%u pre_hw_cidx=0x%08x ring_next_idx=%u GLO_CFG=0x%08x CID=0x%02x PacketPa=0x%llx TotLen=%u Used=%u\n",
-           u2Port, hw_cidx_before, prTxRing->TxCpuIdx, glo_pre, prCmdInfo->ucCID,
-           (unsigned long long)pTxCell->PacketPa, u4TotalLen, prTxRing->u4UsedCnt);
+	INC_RING_INDEX(prTxRing->TxCpuIdx, TX_RING_SIZE);
+	prTxRing->u4UsedCnt++;
 
-    /* Dump first 8 dwords of TXD for descriptor sanity checking */
-    {
-        uint32_t *dw = (uint32_t *)pTxD;
-        DBGLOG(HAL, WARN, "%s: TXD dump (dwords):", __func__);
-        for (int i = 0; i < 8; i++) {
-            DBGLOG(HAL, WARN, " DW%u=0x%08x", i, dw[i]);
-        }
-        DBGLOG(HAL, WARN, "\n");
-    }
+	DBGLOG(HAL, ERROR,
+	       "[KICKRING] port=%u pre_hw_cidx=0x%08x ring_next_idx=%u "
+	       "GLO_CFG=0x%08x CID=0x%02x PacketPa=0x%llx TotLen=%u Used=%u\n",
+	       u2Port, hw_cidx_before, prTxRing->TxCpuIdx, glo_pre,
+	       prCmdInfo->ucCID, (unsigned long long)pTxCell->PacketPa,
+	       u4TotalLen, prTxRing->u4UsedCnt);
 
-    /* Write new cidx to hardware to kick the DMA */
-    kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr, prTxRing->TxCpuIdx);
+	kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr, prTxRing->TxCpuIdx);
+	kalDevRegRead(prGlueInfo, prTxRing->hw_cidx_addr, &hw_cidx_after);
+	kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR,
+		      &glo_post);
 
-    /* Read back registers to verify the write and capture post-state for diagnostics */
-    kalDevRegRead(prGlueInfo, prTxRing->hw_cidx_addr, &hw_cidx_after);
-    kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo_post);
+	spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
 
-    spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
+	DBGLOG(HAL, WARN,
+	       "%s: post_kick port=%u hw_cidx_after=0x%08x ring_idx=%u "
+	       "GLO_CFG_after=0x%08x CID=0x%02x\n",
+	       __func__, u2Port, hw_cidx_after, prTxRing->TxCpuIdx,
+	       glo_post, prCmdInfo->ucCID);
 
-    /* Log the post-kick state and warn if we detect suspicious states */
-    DBGLOG(HAL, WARN,
-           "%s: post_kick port=%u hw_cidx_after=0x%08x ring_idx=%u GLO_CFG_after=0x%08x CID=0x%02x\n",
-           __func__, u2Port, hw_cidx_after, prTxRing->TxCpuIdx, glo_post, prCmdInfo->ucCID);
+	if (hw_cidx_after == hw_cidx_before)
+		DBGLOG(HAL, ERROR,
+		       "%s: HW cidx didn't change after write "
+		       "(hw_before=0x%08x hw_after=0x%08x). "
+		       "Possible KICKRING failure. CID=%u\n",
+		       __func__, hw_cidx_before, hw_cidx_after,
+		       prCmdInfo->ucCID);
 
-    /* Extra sanity checks to alert quickly in the log:
-       - If hw_cidx didn't change as expected
-       - If GLO_CFG indicates DMA disabled (heuristic: zero or unchanged) */
-    if (hw_cidx_after == hw_cidx_before) {
-        DBGLOG(HAL, ERROR,
-               "%s: HW cidx didnt change after write (hw_before=0x%08x hw_after=0x%08x). Possible KICKRING failure. CID=%u\n",
-               __func__, hw_cidx_before, hw_cidx_after, prCmdInfo->ucCID);
-    }
-    if (glo_post == 0) {
-        DBGLOG(HAL, ERROR,
-               "%s: suspicious GLO_CFG==0 (pre=0x%08x post=0x%08x). Check DMA global enable/config. CID=%u\n",
-               __func__, glo_pre, glo_post, prCmdInfo->ucCID);
-    }
+	if (glo_post == 0)
+		DBGLOG(HAL, ERROR,
+		       "%s: suspicious GLO_CFG==0 (pre=0x%08x post=0x%08x). "
+		       "Check DMA global enable/config. CID=%u\n",
+		       __func__, glo_pre, glo_post, prCmdInfo->ucCID);
 
-    /* Final user-level diagnostic log (keeps parity with original output) */
-    DBGLOG(HAL, WARN,
-           "%s: CmdInfo[%p], TxD[%p/%u] TxP[%p/%u] CPU idx[%u] Used[%u]\n",
-           __func__, prCmdInfo, prCmdInfo->pucTxd, prCmdInfo->u4TxdLen,
-           prCmdInfo->pucTxp, prCmdInfo->u4TxpLen,
-           prTxRing->TxCpuIdx, prTxRing->u4UsedCnt);
+	DBGLOG(HAL, WARN,
+	       "%s: CmdInfo[%p], TxD[%p/%u] TxP[%p/%u] CPU idx[%u] Used[%u]\n",
+	       __func__, prCmdInfo, prCmdInfo->pucTxd, prCmdInfo->u4TxdLen,
+	       prCmdInfo->pucTxp, prCmdInfo->u4TxpLen,
+	       prTxRing->TxCpuIdx, prTxRing->u4UsedCnt);
 
-    return TRUE;
+	return TRUE;
 }
-
-
 
 	static bool halWpdmaFillTxRing(struct GLUE_INFO *prGlueInfo,
 								   struct MSDU_TOKEN_ENTRY *prToken)

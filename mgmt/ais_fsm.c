@@ -676,6 +676,7 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	prBssDesc->fgIsConnecting = TRUE;
 	COPY_MAC_ADDR(prAisBssInfo->aucBSSID, prBssDesc->aucBSSID);
+	nicUpdateBss(prAdapter, ucBssIndex);
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 	COPY_MAC_ADDR(prConnSettings->aucBSSID, prBssDesc->aucBSSID);
@@ -4532,6 +4533,7 @@ void aisUpdateBssInfoForMergeIBSS(IN struct ADAPTER *prAdapter,
 
 		/* 4 <4.1> Setup BSSID */
 		COPY_MAC_ADDR(prAisBssInfo->aucBSSID, prBssDesc->aucBSSID);
+	nicUpdateBss(prAdapter, ucBssIndex);
 
 		/* 4 <4.2> Setup Channel, Band */
 		prAisBssInfo->ucPrimaryChannel = prBssDesc->ucChannelNum;
@@ -5359,6 +5361,7 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 			struct BSS_DESC *prBssDesc = prAisFsmInfo->prTargetBssDesc;
 			rsnPerformPolicySelection(prAdapter, prBssDesc, ucBssIndex);
 			COPY_MAC_ADDR(prAisBssInfo->aucBSSID, prBssDesc->aucBSSID);
+	nicUpdateBss(prAdapter, ucBssIndex);
 			prAisBssInfo->u4RsnSelectedGroupCipher = prBssDesc->u4RsnSelectedGroupCipher;
 			prAisBssInfo->u4RsnSelectedPairwiseCipher = prBssDesc->u4RsnSelectedPairwiseCipher;
 			prAisBssInfo->u4RsnSelectedAKMSuite = prBssDesc->u4RsnSelectedAKMSuite;

@@ -1512,11 +1512,15 @@ static const struct ieee80211_txrx_stypes
 	[NL80211_IFTYPE_STATION] = {
 		.tx = 0xffff,
 		.rx = BIT(IEEE80211_STYPE_ACTION >> 4) |
-		      BIT(IEEE80211_STYPE_PROBE_REQ >> 4)
+		      BIT(IEEE80211_STYPE_PROBE_REQ >> 4) |
+		      BIT(IEEE80211_STYPE_AUTH >> 4) |
+		      BIT(IEEE80211_STYPE_DEAUTH >> 4)
 	},
 	[NL80211_IFTYPE_AP] = {
 		.tx = 0xffff,
-		.rx = BIT(IEEE80211_STYPE_PROBE_REQ >> 4)
+		.rx = BIT(IEEE80211_STYPE_PROBE_REQ >> 4) |
+		      BIT(IEEE80211_STYPE_AUTH >> 4) |
+		      BIT(IEEE80211_STYPE_DEAUTH >> 4)
 			| BIT(IEEE80211_STYPE_ACTION >> 4)
 #if CFG_SUPPORT_SOFTAP_WPA3
 			| BIT(IEEE80211_STYPE_ASSOC_REQ >> 4) |
@@ -1540,7 +1544,9 @@ static const struct ieee80211_txrx_stypes
 	[NL80211_IFTYPE_P2P_CLIENT] = {
 		.tx = 0xffff,
 		.rx = BIT(IEEE80211_STYPE_ACTION >> 4) |
-		      BIT(IEEE80211_STYPE_PROBE_REQ >> 4)
+		      BIT(IEEE80211_STYPE_PROBE_REQ >> 4) |
+		      BIT(IEEE80211_STYPE_AUTH >> 4) |
+		      BIT(IEEE80211_STYPE_DEAUTH >> 4)
 	},
 	[NL80211_IFTYPE_P2P_GO] = {
 		.tx = 0xffff,

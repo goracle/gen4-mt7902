@@ -1958,9 +1958,8 @@ struct BSS_INFO *cnmGetBssInfoAndInit(struct ADAPTER *prAdapter,
 		return prBssInfo;
 	}
 
-	/*reserve ownMAC0 for MBSS*/
-	ucOwnMacIdx = (eNetworkType == NETWORK_TYPE_MBSS) ? 0 :
-		      1;
+	/* always start at ownMacIdx=0; MT7902 STA firmware expects primary port 0 */
+	ucOwnMacIdx = 0;
 
 	/* Find available HW set  with the order 1,2,..*/
 	do {

@@ -1876,10 +1876,8 @@ nicTxFillDesc(IN struct ADAPTER *prAdapter,
 #endif
 		DBGLOG_LIMITED(NIC, INFO, "Compose TXD by Msdu info\n");
 #if (UNIFIED_MAC_TX_FORMAT == 1)
-		if (prMsduInfo->eSrc == TX_PACKET_MGMT)
-			prMsduInfo->ucPacketFormat = TXD_PKT_FORMAT_COMMAND;
-		else
-			prMsduInfo->ucPacketFormat = prChipInfo->ucPacketFormat;
+		prMsduInfo->ucPacketFormat = prChipInfo->ucPacketFormat;
+		/* MT7902 PCIe: mgmt frames use TXD format, not COMMAND */
 #endif /* UNIFIED_MAC_TX_FORMAT == 1 */
 		nicTxComposeDesc(prAdapter, prMsduInfo, u4TxDescLength,
 				 FALSE, prTxDescBuffer);
@@ -3419,13 +3417,11 @@ u_int8_t nicTxProcessMngPacket(IN struct ADAPTER *prAdapter,
 		case MAC_FRAME_AUTH:
 		case MAC_FRAME_ASSOC_REQ:
 		case MAC_FRAME_REASSOC_REQ:
-
-			/* Use MGMT path but force TC4 */
+			/* Force to Data Queue path to ensure Data Descriptor format is used */
 			prMsduInfo->ucTC = TC4_INDEX;
-			prMsduInfo->fgMgmtUseDataQ = FALSE;
+			prMsduInfo->fgMgmtUseDataQ = TRUE; // <--- Change this to TRUE
 
-			DBGLOG(TX, INFO,
-				   "MGMT: AUTH/ASSOC via TC4 mgmt path\n");
+			DBGLOG(TX, INFO, "MGMT: AUTH/ASSOC via TC4 DATA path\n");
 			break;
 
 #if CFG_SUPPORT_ALTX_MGMT
