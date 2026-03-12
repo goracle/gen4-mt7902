@@ -5361,13 +5361,12 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 			struct BSS_DESC *prBssDesc = prAisFsmInfo->prTargetBssDesc;
 			rsnPerformPolicySelection(prAdapter, prBssDesc, ucBssIndex);
 			COPY_MAC_ADDR(prAisBssInfo->aucBSSID, prBssDesc->aucBSSID);
-	nicUpdateBss(prAdapter, ucBssIndex);
 			prAisBssInfo->u4RsnSelectedGroupCipher = prBssDesc->u4RsnSelectedGroupCipher;
 			prAisBssInfo->u4RsnSelectedPairwiseCipher = prBssDesc->u4RsnSelectedPairwiseCipher;
 			prAisBssInfo->u4RsnSelectedAKMSuite = prBssDesc->u4RsnSelectedAKMSuite;
 			prAisBssInfo->u2CapInfo = prBssDesc->u2CapInfo;
 		}
-		/* Tell firmware what channel/band we're joining on */
+		/* Tell firmware BSS context: BSSID + ciphers populated before this call */
 		nicUpdateBss(prAdapter, ucBssIndex);
 
 		/* Start join timeout timer */
@@ -7775,13 +7774,6 @@ void aisFsmFirePendingSAA(struct ADAPTER *prAdapter, uint8_t ucBssIndex)
 	DBGLOG(AIS, INFO,
 	       "[AIS%d] STATE_3 ACK confirmed: StaRec[%u] ucStaState=%u firing SAA\n",
 	       ucBssIndex, prStaRec->ucIndex, prStaRec->ucStaState);
-
-	/* Reset StaRec to STATE_1 before auth so firmware WTBL is in the
-	 * correct pre-auth state when the auth frame arrives on the data
-	 * queue.  Without this, firmware sees a data-path frame for a
-	 * wlanIdx still in STATE_2 and asserts SER ~270ms later.
-	 */
-	cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_1);
 
 	mboxSendMsg(prAdapter, MBOX_ID_0,
 		(struct MSG_HDR *)prAisFsmInfo->prPendingSAAMsg,

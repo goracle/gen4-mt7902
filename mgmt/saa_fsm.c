@@ -408,7 +408,6 @@ static uint32_t saa_perform_assoc_send(IN struct ADAPTER *prAdapter,
 	return rStatus;
 }
 
-/* Top-level refactored function */
 void saaSendAuthAssoc(IN struct ADAPTER *prAdapter,
 		      IN struct STA_RECORD *prStaRec)
 {
@@ -421,127 +420,83 @@ void saaSendAuthAssoc(IN struct ADAPTER *prAdapter,
 	struct CONNECTION_SETTINGS *prConnSettings = NULL;
 	struct P2P_CONNECTION_SETTINGS *prP2pConnSettings = NULL;
 	struct BSS_DESC *prBssDesc = NULL;
-
 	ASSERT(prAdapter);
 	ASSERT(prStaRec);
-
 	ucBssIndex = prStaRec->ucBssIndex;
-
 	DBGLOG(SAA, INFO, "DEBUG: Entering SAA for MAC " MACSTR " on BSS Index %d\n",
 	       MAC2STR(prStaRec->aucMacAddr), ucBssIndex);
 	DBGLOG(SAA, INFO, "[SAA]saaSendAuthAssoc, StaState:%d\n",
 	       prStaRec->ucStaState);
-
-DBGLOG(SAA, WARN, "[SAA-START] StaRec=%u BSS=%u priChan=%u fgIsGranted=%u\n",
-       prStaRec->ucIndex,
-       prStaRec->ucBssIndex,
-       prAdapter->prAisBssInfo[prStaRec->ucBssIndex] ?
-           prAdapter->prAisBssInfo[prStaRec->ucBssIndex]->ucPrimaryChannel : 0xFF,
-       prAdapter->prAisBssInfo[prStaRec->ucBssIndex] ?
-           prAdapter->prAisBssInfo[prStaRec->ucBssIndex]->fgIsGranted : 0xFF);
-
-
-
+	DBGLOG(SAA, WARN, "[SAA-START] StaRec=%u BSS=%u priChan=%u fgIsGranted=%u\n",
+	       prStaRec->ucIndex,
+	       prStaRec->ucBssIndex,
+	       prAdapter->prAisBssInfo[prStaRec->ucBssIndex] ?
+		   prAdapter->prAisBssInfo[prStaRec->ucBssIndex]->ucPrimaryChannel : 0xFF,
+	       prAdapter->prAisBssInfo[prStaRec->ucBssIndex] ?
+		   prAdapter->prAisBssInfo[prStaRec->ucBssIndex]->fgIsGranted : 0xFF);
 	kalMemZero(&rSsid, sizeof(rSsid));
-
-	/* Pull per-connection settings (fills rSsid, flags, channel) */
 	(void)saa_get_connection_settings(prAdapter, prStaRec, &rSsid,
-					  &fgIsSendAssoc, &fgIsP2pConn,
+					  &fgIsSendAssoc, &fgIsSendAssoc,
 					  &ucChannelNum, &prConnSettings,
 					  &prP2pConnSettings);
 
-
-
-	/* Retry limit check */
-	if (prStaRec->ucTxAuthAssocRetryCount >= prStaRec->ucTxAuthAssocRetryLimit) {
-		saa_handle_retry_limit(prAdapter, prStaRec, fgIsSendAssoc);
-		/* memory hardening: zero local SSID struct */
+	/* Gate: if we already sent this frame and are waiting for a response,
+	 * don't re-send on duplicate RX events. The retry timer will fire if
+	 * the AP truly didn't respond. Only suppress auth (eAuthAssocSent==1);
+	 * for assoc we use the same pattern but keyed on fgIsSendAssoc.
+	 */
+	if (!fgIsSendAssoc && prStaRec->eAuthAssocSent >= AA_SENT_AUTH1) {
+		DBGLOG(SAA, WARN,
+		       "[SAA-SKIP] StaRec[%u] auth already in-flight (eAuthAssocSent=%u), ignoring duplicate trigger\n",
+		       prStaRec->ucIndex, prStaRec->eAuthAssocSent);
+		kalMemZero(&rSsid, sizeof(rSsid));
+		return;
+	}
+	if (fgIsSendAssoc && prStaRec->eAuthAssocSent >= AA_SENT_ASSOC1) {
+		DBGLOG(SAA, WARN,
+		       "[SAA-SKIP] StaRec[%u] assoc already in-flight (eAuthAssocSent=%u), ignoring duplicate trigger\n",
+		       prStaRec->ucIndex, prStaRec->eAuthAssocSent);
 		kalMemZero(&rSsid, sizeof(rSsid));
 		return;
 	}
 
-	/* Gate auth TX on WTBL armed (STATE_3 FW ACK sets fgIsValid=1).
-	 * Stale mbox SAA messages fire this path before WTBL is ready —
-	 * sending auth then causes a double-MSDU race that corrupts the
-	 * mgmt packet pool and panics in cnmPktFree. Defer via retry timer
-	 * until nicUniCmdStaRecHandleEventPkt fires aisFsmFirePendingSAA
-	 * with fgIsValid=1, which cancels the timer and re-enters cleanly.
-	 */
-
+	if (prStaRec->ucTxAuthAssocRetryCount >= prStaRec->ucTxAuthAssocRetryLimit) {
+		saa_handle_retry_limit(prAdapter, prStaRec, fgIsSendAssoc);
+		kalMemZero(&rSsid, sizeof(rSsid));
+		return;
+	}
 	if (!prStaRec->fgIsValid) {
 		DBGLOG(SAA, WARN,
-			   "[SAA-GATE] StaRec[%u] fgIsValid=0 — WTBL not armed, deferring\n",
-			   prStaRec->ucIndex);
+		       "[SAA-GATE] StaRec[%u] fgIsValid=0 — WTBL not armed, deferring\n",
+		       prStaRec->ucIndex);
 		saa_start_retry_timer(prAdapter, prStaRec);
 		kalMemZero(&rSsid, sizeof(rSsid));
 		return;
 	}
-	if (prStaRec->ucStaState < STA_STATE_3) {
-		/* On the retry path (retryCount > 1) ucStaState is legitimately 2:
-		 * firmware has not ACK'd STATE_3 yet. Issuing cnmStaRecChangeState
-		 * here fires cmd-ring writes that race the in-flight retry MSDU
-		 * and NULL prPacket in halWpdmaWriteMsdu, causing a hard lock.
-		 * Only reset state on the first-send path (retryCount <= 1).
-		 */
-		if (prStaRec->ucTxAuthAssocRetryCount > 1) {
-			DBGLOG(SAA, WARN,
-				   "[SAA-GATE] StaRec[%u] retry path state=%u — skipping StaRec reset\n",
-				   prStaRec->ucIndex, prStaRec->ucStaState);
-			/* fall through to send */
-		} else {
-			DBGLOG(SAA, WARN,
-				   "[SAA-GATE] StaRec[%u] zombie state=%u fgIsValid=1 — resetting, deferring\n",
-				   prStaRec->ucIndex, prStaRec->ucStaState);
-			prStaRec->fgIsValid = FALSE;
-			prStaRec->ucStaState = STA_STATE_3;
-			cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_1);
-			saa_start_retry_timer(prAdapter, prStaRec);
-			kalMemZero(&rSsid, sizeof(rSsid));
-			return;
-		}
-	}
-
-
- prStaRec->ucTxAuthAssocRetryCount++;
- 
-
+	prStaRec->ucTxAuthAssocRetryCount++;
 	DBGLOG(SAA, WARN, "[SAA-STAREC] idx=%u bss=%u wlanIdx=%u state=%u authAssocSent=%u retryCount=%u fgIsValid=%u fgIsInUse=%u\n",
-		   prStaRec->ucIndex,
-		   prStaRec->ucBssIndex,
-		   prStaRec->ucWlanIndex,
-		   prStaRec->ucStaState,
-		   prStaRec->eAuthAssocSent,
-		   prStaRec->ucTxAuthAssocRetryCount,
-		   prStaRec->fgIsValid,
-		   prStaRec->fgIsInUse);
-
-	/* AUTH path */
+	       prStaRec->ucIndex,
+	       prStaRec->ucBssIndex,
+	       prStaRec->ucWlanIndex,
+	       prStaRec->ucStaState,
+	       prStaRec->eAuthAssocSent,
+	       prStaRec->ucTxAuthAssocRetryCount,
+	       prStaRec->fgIsValid,
+	       prStaRec->fgIsInUse);
 	if (!fgIsSendAssoc) {
-		/* Ensure StaRec is in STATE_1 in firmware; original code rationale retained:
-		 * do not call cnmStaRecChangeState here because it might skip firmware sync
-		 * depending on current state. */
-		/* Prepare & send auth frame */
-		//rStatus = saa_perform_auth_send(prAdapter, prStaRec, prConnSettings,
-		//				fgIsP2pConn, ucBssIndex);
-
-	  rStatus = saa_perform_auth_send(prAdapter, prStaRec, prConnSettings, fgIsP2pConn);
-
-	/* ASSOC path */
+		rStatus = saa_perform_auth_send(prAdapter, prStaRec,
+						prConnSettings, fgIsP2pConn);
 	} else {
 		rStatus = saa_perform_assoc_send(prAdapter, prStaRec, &rSsid,
 						 fgIsP2pConn, prConnSettings,
 						 ucChannelNum, &prBssDesc);
 	}
-
-	/* If frame couldn't be sent, start retry timer */
-	if (rStatus != WLAN_STATUS_SUCCESS) {
+	if (rStatus != WLAN_STATUS_SUCCESS)
 		saa_start_retry_timer(prAdapter, prStaRec);
-	}
-
-	/* Memory hardening: zero sensitive temporaries before return */
 	kalMemZero(&rSsid, sizeof(rSsid));
-	/* prBssDesc points into scan DB; do not free/zero it here. */
 }
+
+
 
 /* Add for support WEP when enable wpa3 */
 void saaSendAuthSeq3(IN struct ADAPTER *prAdapter,

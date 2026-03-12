@@ -156,9 +156,9 @@ static void mt7902CapInit(struct ADAPTER *prAdapter)
     asicConnac2xCapInit(prAdapter);
 
     prChipInfo = prAdapter->chip_info;
-    prChipInfo->u2RxSwPktBitMap = CONNAC3X_RX_STATUS_PKT_TYPE_SW_BITMAP;
-    prChipInfo->u2RxSwPktEvent  = CONNAC3X_RX_STATUS_PKT_TYPE_SW_EVENT;
-    prChipInfo->u2RxSwPktFrame  = CONNAC3X_RX_STATUS_PKT_TYPE_SW_FRAME;
+    prChipInfo->u2RxSwPktBitMap = CONNAC2X_RX_STATUS_PKT_TYPE_SW_BITMAP;
+    prChipInfo->u2RxSwPktEvent  = CONNAC2X_RX_STATUS_PKT_TYPE_SW_EVENT;
+    prChipInfo->u2RxSwPktFrame  = CONNAC2X_RX_STATUS_PKT_TYPE_SW_FRAME;
 }
 
 void mt7902EnableInterrupt(

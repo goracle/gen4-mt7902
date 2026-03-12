@@ -806,18 +806,42 @@ void nicRxFillRFB(IN struct ADAPTER *prAdapter,
 {
 	struct RX_DESC_OPS_T *prRxDescOps = prAdapter->chip_info->prRxDescOps;
 
-	if (prSwRfb->pvHeader && prSwRfb->ucSecMode == CIPHER_SUITE_NONE &&
-	    prSwRfb->ucStaRecIdx == STA_REC_INDEX_NOT_FOUND) {
-		DBGLOG(RX, INFO, "[FILL-RFB] skipping re-parse, pvHeader already set\n");
+	if (!prSwRfb) {
+		DBGLOG(RX, ERROR, "%s: null prSwRfb\n", __func__);
 		return;
 	}
-	if (prRxDescOps->nic_rxd_fill_rfb)
+
+	/* Let the RX descriptor implementation populate the SW_RFB. */
+	if (prRxDescOps && prRxDescOps->nic_rxd_fill_rfb) {
 		prRxDescOps->nic_rxd_fill_rfb(prAdapter, prSwRfb);
-	else
-		DBGLOG(RX, ERROR,
-			"%s:: no nic_rxd_fill_rfb??\n",
-			__func__);
+	} else {
+		DBGLOG(RX, ERROR, "%s: no nic_rxd_fill_rfb\n", __func__);
+		return;
+	}
+
+	/*
+	 * After descriptor fill, if we still lack an associated STA record
+	 * but we do have an 802.11 header, try to resolve by Addr2.
+	 */
+	if (prSwRfb->prStaRec == NULL && prSwRfb->pvHeader &&
+	    prSwRfb->u2HeaderLen >= sizeof(struct WLAN_MAC_HEADER)) {
+		struct WLAN_MAC_HEADER *hdr =
+			(struct WLAN_MAC_HEADER *)prSwRfb->pvHeader;
+		struct STA_RECORD *sta =
+			cnmGetStaRecByAddress(prAdapter, 0, hdr->aucAddr2);
+
+		if (sta) {
+			prSwRfb->prStaRec = sta;
+			prSwRfb->ucStaRecIdx = sta->ucIndex;
+			DBGLOG(RX, INFO, "[FILL-RFB] resolved StaRec idx=%u via Addr2 %pM\n",
+			       sta->ucIndex, hdr->aucAddr2);
+		} else {
+			DBGLOG(RX, INFO, "[FILL-RFB] no StaRec for Addr2 %pM\n",
+			       hdr->aucAddr2);
+		}
+	}
 }
+
 
 #if CFG_TCP_IP_CHKSUM_OFFLOAD || CFG_TCP_IP_CHKSUM_OFFLOAD_NDIS_60
 /*----------------------------------------------------------------------------*/
@@ -2381,16 +2405,23 @@ void nicRxProcessMgmtPacket(IN struct ADAPTER *prAdapter,
 #endif /* CFG_RX_PKTS_DUMP */
 
 #if CFG_SUPPORT_802_11W
-    if (prSwRfb->fgIcvErr) {
-        if (prSwRfb->ucSecMode == CIPHER_SUITE_BIP)
-            DBGLOG(RSN, INFO, "[MFP] RX with BIP ICV ERROR\n");
-        else
-            DBGLOG(RSN, INFO, "[MFP] RX with ICV ERROR\n");
-
-        nicRxReturnRFB(prAdapter, prSwRfb);
-        RX_INC_CNT(&prAdapter->rRxCtrl, RX_DROP_TOTAL_COUNT);
-        return;
-    }
+	if (prSwRfb->fgIcvErr) {
+		if (ucSubtype == WLAN_FC_STYPE_AUTH ||
+		    ucSubtype == 1 /* assoc rsp */ ||
+		    ucSubtype == 3 /* reassoc rsp */) {
+			DBGLOG(RSN, INFO,
+			       "[MFP] ICV ERROR on mgmt subtype=0x%02x secMode=0x%x, ignoring for auth/assoc\n",
+			       ucSubtype, prSwRfb->ucSecMode);
+		} else {
+			if (prSwRfb->ucSecMode == CIPHER_SUITE_BIP)
+				DBGLOG(RSN, INFO, "[MFP] RX with BIP ICV ERROR\n");
+			else
+				DBGLOG(RSN, INFO, "[MFP] RX with ICV ERROR\n");
+			nicRxReturnRFB(prAdapter, prSwRfb);
+			RX_INC_CNT(&prAdapter->rRxCtrl, RX_DROP_TOTAL_COUNT);
+			return;
+		}
+	}
 #endif /* CFG_SUPPORT_802_11W */
 
     if (prAdapter->fgTestMode == FALSE) {

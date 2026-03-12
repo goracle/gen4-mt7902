@@ -460,7 +460,7 @@ authSendAuthFrame(struct ADAPTER *prAdapter,
 
     nicTxSetPktLifeTime(prMsduInfo, 5000);
     nicTxSetPktRetryLimit(prMsduInfo, TX_DESC_TX_COUNT_NO_LIMIT);
-    prMsduInfo->fgMgmtUseDataQ = TRUE;
+    prMsduInfo->fgMgmtUseDataQ = FALSE;
 
     for (i = 0; i < ARRAY_SIZE(txAuthIETable); i++) {
         if (txAuthIETable[i].pfnAppendIE)

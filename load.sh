@@ -19,29 +19,29 @@ log "🔍 Locating ghost interfaces..."
 # This finds any interface starting with 'enp' or 'usb' that uses the usbnet stack
 GHOST_IFACE=$(ip -o link show | grep -E "enp0|usb|enx" | awk -F': ' '{print $2}' | head -n 1)
 
-if [ -n "$GHOST_IFACE" ]; then
-    log "🛑 Bringing down zombie interface: $GHOST_IFACE"
-    sudo ip link set dev "$GHOST_IFACE" down || true
-fi
+#if [ -n "$GHOST_IFACE" ]; then
+#    log "🛑 Bringing down zombie interface: $GHOST_IFACE"
+#    sudo ip link set dev "$GHOST_IFACE" down || true
+#fi
 
 # 2. The "Deep Scrub" Cleanup
 log "🗑️  Removing old module and cleaning the kitchen..."
 sudo rmmod $MODULE_NAME 2>/dev/null || true
 
 # Unload the helpers. Note: it's 'cdc_ether', not 'cdc_ethernet'
-sudo modprobe -r cdc_ether usbnet 2>/dev/null || true
+#sudo modprobe -r cdc_ether usbnet 2>/dev/null || true
 
 # Verify they are gone
-if lsmod | grep -q "usbnet"; then
-    log "⚠️  Warning: usbnet still resident. Force killing..."
-    sudo rmmod -f usbnet 2>/dev/null || true
-fi
+#if lsmod | grep -q "usbnet"; then
+#    log "⚠️  Warning: usbnet still resident. Force killing..."
+#    sudo rmmod -f usbnet 2>/dev/null || true
+#fi
 
 sleep 2
 
 # 3. Fresh Start
-log "🧼 Reloading clean helper modules..."
-sudo modprobe usbnet cdc_ether
+#log "🧼 Reloading clean helper modules..."
+#sudo modprobe usbnet cdc_ether
 sudo iw reg set US
 
 # 4. Load the Franken-Driver
