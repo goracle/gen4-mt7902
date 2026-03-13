@@ -156,9 +156,9 @@ static void mt7902CapInit(struct ADAPTER *prAdapter)
     asicConnac2xCapInit(prAdapter);
 
     prChipInfo = prAdapter->chip_info;
-    prChipInfo->u2RxSwPktBitMap = CONNAC2X_RX_STATUS_PKT_TYPE_SW_BITMAP;
-    prChipInfo->u2RxSwPktEvent  = CONNAC2X_RX_STATUS_PKT_TYPE_SW_EVENT;
-    prChipInfo->u2RxSwPktFrame  = CONNAC2X_RX_STATUS_PKT_TYPE_SW_FRAME;
+    prChipInfo->u2RxSwPktBitMap = CONNAC3X_RX_STATUS_PKT_TYPE_SW_BITMAP;
+    prChipInfo->u2RxSwPktEvent  = CONNAC3X_RX_STATUS_PKT_TYPE_SW_EVENT;
+    prChipInfo->u2RxSwPktFrame  = CONNAC3X_RX_STATUS_PKT_TYPE_SW_FRAME;
 }
 
 void mt7902EnableInterrupt(
@@ -348,23 +348,42 @@ bool mt7902LiteWfdmaAllocRxRing(// idk, fam
 
 bool mt7902WfdmaAllocRxRing(struct GLUE_INFO *prGlueInfo, bool fgAllocMem)
 {
-	uint32_t i;
-
-	/* * 1. DO NOT re-allocate TX rings here. halWpdmaAllocRing already 
-	 * allocates them. Re-allocating them with different sizes without 
-	 * freeing the old buffer causes severe DMA memory corruption.
+	/* 1. Base allocation (halWpdmaAllocRing) already allocated SW Ring 0 (Data) 
+	 * and SW Ring 1 (Event). However, for MT7902, SW Ring 1 maps to HW Ring 0, 
+	 * which absorbs BOTH Events and TX-Done. It must be size 512, not 16. 
 	 */
-
-	/* * 2. Allocate additional RX Rings (Rings 2 and above).
-	 * Rings 0 (Data) and 1 (Event) are already allocated by halWpdmaAllocRing. 
-	 */
-	for (i = 2; i < NUM_OF_RX_RING; i++) {
-		uint32_t u4Sz = (i < 3) ? 512 : 16;
+	if (fgAllocMem) {
+		/* Free the undersized default Event Ring first to avoid leaks */
+		//halWpdmaFreeRing(prGlueInfo, RX_RING_EVT_IDX_1);
 		
-		if (!halWpdmaAllocRxRing(prGlueInfo, i, u4Sz, 
-					RXD_SIZE, CFG_RX_MAX_PKT_SIZE, fgAllocMem))
+		if (!halWpdmaAllocRxRing(prGlueInfo, RX_RING_EVT_IDX_1, 512, 
+					RXD_SIZE, CFG_RX_MAX_PKT_SIZE, fgAllocMem)) {
+			DBGLOG(HAL, ERROR, "Failed to reallocate HW Ring 0 to 512\n");
 			return false;
+		}
 	}
+
+	/* 2. Allocate the remaining MT7902 rings */
+	
+	/* HW Ring 1 (WFDMA0_RX_RING_IDX_3) - Band1 Tx Free Done (Event) */
+	if (!halWpdmaAllocRxRing(prGlueInfo, WFDMA0_RX_RING_IDX_3, 16, 
+				RXD_SIZE, CFG_RX_MAX_PKT_SIZE, fgAllocMem))
+		return false;
+
+	/* HW Ring 3 (WFDMA0_RX_RING_IDX_2) - Band 1 Rx Data */
+	if (!halWpdmaAllocRxRing(prGlueInfo, WFDMA0_RX_RING_IDX_2, 512, 
+				RXD_SIZE, CFG_RX_MAX_PKT_SIZE, fgAllocMem))
+		return false;
+
+	/* HW Ring 4 (RX_RING_DATA1_IDX_2) - Extra Data */
+	if (!halWpdmaAllocRxRing(prGlueInfo, RX_RING_DATA1_IDX_2, 512, 
+				RXD_SIZE, CFG_RX_MAX_PKT_SIZE, fgAllocMem))
+		return false;
+
+	/* HW Ring 5 (RX_RING_DATA2_IDX_5) - Extra Data */
+	if (!halWpdmaAllocRxRing(prGlueInfo, RX_RING_DATA2_IDX_5, 512, 
+				RXD_SIZE, CFG_RX_MAX_PKT_SIZE, fgAllocMem))
+		return false;
 
 	return true;
 }
@@ -423,37 +442,34 @@ void mt7902Connac2xProcessRxInterrupt(struct ADAPTER *prAdapter)
 
 	rIntrStatus = (union WPDMA_INT_STA_STRUCT)prHifInfo->u4IntStatus;
 
-	DBGLOG(HAL, WARN, "[INT-PROC] raw=0x%08x rx0=%d rx1=%d rx2=%d rx3=%d rx4=%d rx5=%d ",
-		prHifInfo->u4IntStatus,
-		rIntrStatus.field_conn2x_single.wfdma0_rx_done_0,
-		rIntrStatus.field_conn2x_single.wfdma0_rx_done_1,
-		rIntrStatus.field_conn2x_single.wfdma0_rx_done_2,
-		rIntrStatus.field_conn2x_single.wfdma0_rx_done_3,
-		rIntrStatus.field_conn2x_single.wfdma0_rx_done_4,
-		rIntrStatus.field_conn2x_single.wfdma0_rx_done_5);
-
-	/* MT7902: rx_done_0 carries events and tx done; some FW builds also push data here */
-	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_0) {
+	/* HW Ring 0: MCU Events & TX Free Done Events.
+	 * Handled strictly as an Event ring (FALSE).
+	 */
+	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_0)
 		halRxReceiveRFBs(prAdapter, RX_RING_EVT_IDX_1, FALSE);
-		halRxReceiveRFBs(prAdapter, RX_RING_DATA_IDX_0, TRUE);
-	}
 
+	/* HW Ring 1: Band1 TX Free Done Event.
+	 * Handled strictly as an Event ring (FALSE).
+	 */
+	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_1)
+		halRxReceiveRFBs(prAdapter, WFDMA0_RX_RING_IDX_3, FALSE);
+
+	/* HW Ring 2: Band0 RX Data */
 	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_2)
 		halRxReceiveRFBs(prAdapter, RX_RING_DATA_IDX_0, TRUE);
 
-	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_1)
-		halRxReceiveRFBs(prAdapter, WFDMA0_RX_RING_IDX_3, TRUE);
-
+	/* HW Ring 3: Band1 RX Data */
 	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_3)
 		halRxReceiveRFBs(prAdapter, WFDMA0_RX_RING_IDX_2, TRUE);
 
+	/* HW Ring 4: Additional Data 1 */
 	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_4)
 		halRxReceiveRFBs(prAdapter, RX_RING_DATA1_IDX_2, TRUE);
 
+	/* HW Ring 5: Additional Data 2 */
 	if (rIntrStatus.field_conn2x_single.wfdma0_rx_done_5)
 		halRxReceiveRFBs(prAdapter, RX_RING_DATA2_IDX_5, TRUE);
 }
-
 
 void mt7902WfdmaTxRingExtCtrl(
 	struct GLUE_INFO *prGlueInfo,

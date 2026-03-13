@@ -3293,6 +3293,13 @@ bool halWpdmaWriteCmd(IN struct GLUE_INFO *prGlueInfo,
 		   prCmdInfo->pucTxp, prCmdInfo->u4TxpLen,
 		   prTxRing->TxCpuIdx, prTxRing->u4UsedCnt);
 
+	if (prCmdInfo->pucTxp &&
+		!IS_ALIGNED((unsigned long)prCmdInfo->pucTxp, 4)) {
+		DBGLOG(HAL, ERROR,
+			   "UNALIGNED PTR TxP=%p\n",
+			   prCmdInfo->pucTxp);
+	}
+
 	return TRUE;
 }
 

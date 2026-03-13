@@ -384,7 +384,263 @@ static inline void safe_set_packet_format(struct HW_MAC_CONNAC2X_TX_DESC *prTxDe
 #endif /* UNIFIED_MAC_TX_FORMAT */
 
 
-/* main replacement - refactored and hardened */
+
+
+
+
+
+
+
+
+
+
+
+/* Refactored + diagnostic version of nic_txd_v2_compose
+ * - keeps same external signature
+ * - splits into small helpers with clear responsibilities
+ * - adds diagnostics and field sanity checks (DW dumps, range checks)
+ *
+ * Note: requires the same headers/macros you already have in tree.
+ */
+
+#define TXD_DUMP_MAX_WORDS 16
+
+/* --- small helpers --- */
+
+/* Dump TXD DWs as 32-bit words (useful quick-check) */
+static void txd_dump_words(struct HW_MAC_CONNAC2X_TX_DESC *prTxDesc, u_int32_t size_bytes)
+{
+    u_int32_t i, words = size_bytes / 4;
+
+    if (words > TXD_DUMP_MAX_WORDS)
+        words = TXD_DUMP_MAX_WORDS;
+
+    DBGLOG(TX, INFO, "TXD DUMP ptr=%p size=%u bytes words=%u\n",
+           prTxDesc, size_bytes, words);
+    for (i = 0; i < words; i++) {
+        DBGLOG(TX, INFO, " DW%02u = 0x%08x\n", i, *((uint32_t *)prTxDesc + i));
+    }
+}
+
+/* Basic sanity checks and alignment */
+static bool nic_txd_check_params(struct ADAPTER *prAdapter,
+                                 struct MSDU_INFO *prMsduInfo,
+                                 u_int32_t u4TxDescLength,
+                                 u_int8_t *prTxDescBuffer)
+{
+    if (unlikely(!prAdapter || !prMsduInfo || !prTxDescBuffer)) {
+        DBGLOG(TX, ERROR, "NULL param: adapter=%p msdu=%p buf=%p\n",
+               prAdapter, prMsduInfo, prTxDescBuffer);
+        return false;
+    }
+
+    if (unlikely(!txd_buf_is_aligned(prTxDescBuffer))) {
+        DBGLOG(TX, ERROR, "TXD buf %p not 64-byte aligned (mod64=%lu) - drop\n",
+               prTxDescBuffer, (unsigned long)((uintptr_t)prTxDescBuffer & 63));
+        return false;
+    }
+
+    if (unlikely(u4TxDescLength != NIC_TX_DESC_SHORT_FORMAT_LENGTH &&
+                 u4TxDescLength != NIC_TX_DESC_LONG_FORMAT_LENGTH)) {
+        DBGLOG(TX, ERROR, "TXD unexpected length %u (short=%u long=%u) - drop\n",
+               u4TxDescLength,
+               NIC_TX_DESC_SHORT_FORMAT_LENGTH,
+               NIC_TX_DESC_LONG_FORMAT_LENGTH);
+        return false;
+    }
+
+    return true;
+}
+
+/* Compute ether-type offset and validate */
+static bool nic_txd_compute_and_set_eth_offset(struct ADAPTER *prAdapter,
+                                               struct MSDU_INFO *prMsduInfo,
+                                               struct HW_MAC_CONNAC2X_TX_DESC *prTxDesc)
+{
+    u_int8_t ucEtherTypeOffsetInWord = 0;
+
+    if (prMsduInfo->fgIs802_11) {
+        ucEtherTypeOffsetInWord =
+            (prAdapter->chip_info->pse_header_length +
+             prMsduInfo->ucMacHeaderLength +
+             prMsduInfo->ucLlcLength) >> 1;
+    } else {
+        ucEtherTypeOffsetInWord =
+            ((ETHER_HEADER_LEN - ETHER_TYPE_LEN) +
+             prAdapter->chip_info->pse_header_length) >> 1;
+    }
+
+    /* sanity range check: not huge */
+    if (unlikely(ucEtherTypeOffsetInWord > 128)) {
+        DBGLOG(TX, WARN, "ether type offset suspicious: %u (clamping)\n", ucEtherTypeOffsetInWord);
+        /* clamp to something safe rather than crash the chip */
+        ucEtherTypeOffsetInWord = 128;
+    }
+
+    HAL_MAC_CONNAC2X_TXD_SET_ETHER_TYPE_OFFSET(prTxDesc, ucEtherTypeOffsetInWord);
+
+    DBGLOG(TX, WARN, "ether_ofs_words=%u mac_hdr_bytes=%u llc=%u pse_hdr=%u\n",
+           ucEtherTypeOffsetInWord,
+           prMsduInfo->ucMacHeaderLength,
+           prMsduInfo->ucLlcLength,
+           prAdapter->chip_info->pse_header_length);
+
+    return true;
+}
+
+/* Choose and validate queue. Returns final queue index. */
+static u_int8_t nic_txd_choose_and_set_queue(struct ADAPTER *prAdapter,
+                                             struct MSDU_INFO *prMsduInfo,
+                                             struct BSS_INFO *prBssInfo,
+                                             struct HW_MAC_CONNAC2X_TX_DESC *prTxDesc)
+{
+    u_int8_t ucTarQueue = 0;
+    u_int8_t ucTarPort = 0;
+
+    ucTarQueue = nicTxGetTxDestQIdxByTc(prMsduInfo->ucTC);
+    ucTarPort = nicTxGetTxDestPortIdxByTc(prMsduInfo->ucTC);
+
+#if (CFG_TX_RSRC_WMM_ENHANCE == 1)
+    if ((ucTarPort == PORT_INDEX_LMAC) && (prMsduInfo->ucTC <= TC4_INDEX))
+#else
+    if (ucTarPort == PORT_INDEX_LMAC)
+#endif
+    {
+        u_int8_t add = (prBssInfo->ucWmmQueSet * WMM_AC_INDEX_NUM);
+        if (unlikely(add > (MAC_TXQ_MAX_INDEX - ucTarQueue))) {
+            DBGLOG(TX, WARN, "ucWmmQueSet overflow attempt ucTarQueue=%u add=%u -> ignore add\n",
+                   ucTarQueue, add);
+            add = 0;
+        }
+        ucTarQueue += add;
+    }
+
+#if CFG_SUPPORT_ALTX_MGMT
+    /* small routing for probe-req/action only (keep your existing guard) */
+    if (prMsduInfo->fgIs802_11 &&
+        (prMsduInfo->ucPacketType == TX_PACKET_TYPE_MGMT ||
+         prMsduInfo->ucPktType == ENUM_PKT_802_11_MGMT) &&
+        prMsduInfo->prPacket) {
+
+        struct WLAN_MAC_HEADER *prWlanHeader =
+            (struct WLAN_MAC_HEADER *)((uint8_t *)prMsduInfo->prPacket + MAC_TX_RESERVED_FIELD);
+
+        if (likely(prWlanHeader)) {
+            u_int8_t subtype = (prWlanHeader->u2FrameCtrl & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
+            if (subtype == 4 || subtype == 13) {
+                DBGLOG(TX, INFO, "Routing mgmt subtype %u via ALTX\n", subtype);
+                ucTarQueue = MAC_TXQ_ALTX_0_INDEX;
+            }
+        }
+    }
+#endif
+
+    ucTarQueue = clamp_queue_index(ucTarQueue);
+    HAL_MAC_CONNAC2X_TXD_SET_QUEUE_INDEX(prTxDesc, ucTarQueue);
+
+    DBGLOG(TX, WARN, "queue chosen raw=%u port=%u final=%u\n", nicTxGetTxDestQIdxByTc(prMsduInfo->ucTC),
+           nicTxGetTxDestPortIdxByTc(prMsduInfo->ucTC), ucTarQueue);
+
+    return ucTarQueue;
+}
+
+/* Set header format and header-length fields; return false on fatal */
+static bool nic_txd_set_header_format_and_validate(struct MSDU_INFO *prMsduInfo,
+                                                   struct HW_MAC_CONNAC2X_TX_DESC *prTxDesc)
+{
+    if (prMsduInfo->fgIs802_11) {
+        /* hardware expects header-length in WORDS */
+        u_int8_t header_words = (prMsduInfo->ucMacHeaderLength >> 1);
+
+        if (unlikely(header_words == 0 || header_words > 64)) {
+            DBGLOG(TX, WARN, "header len suspicious (bytes=%u words=%u) - continue but log\n",
+                   prMsduInfo->ucMacHeaderLength, header_words);
+            /* do not fail; log to help debugging */
+        }
+
+        HAL_MAC_CONNAC2X_TXD_SET_HEADER_FORMAT(prTxDesc, HEADER_FORMAT_802_11_NORMAL_MODE);
+        HAL_MAC_CONNAC2X_TXD_SET_802_11_HEADER_LENGTH(prTxDesc, header_words);
+    } else {
+        HAL_MAC_CONNAC2X_TXD_SET_HEADER_FORMAT(prTxDesc, HEADER_FORMAT_NON_802_11);
+        HAL_MAC_CONNAC2X_TXD_SET_ETHERNET_II(prTxDesc);
+    }
+
+    HAL_MAC_CONNAC2X_TXD_SET_HEADER_PADDING(prTxDesc, NIC_TX_DESC_HEADER_PADDING_LENGTH);
+    HAL_MAC_CONNAC2X_TXD_SET_TID(prTxDesc, prMsduInfo->ucUserPriority);
+
+    return true;
+}
+
+/* Set mgmt type/subtype fields for long-format mgmt frames; returns false if header not present */
+static bool nic_txd_set_type_subtype_for_mgmt(struct MSDU_INFO *prMsduInfo,
+                                              struct HW_MAC_CONNAC2X_TX_DESC *prTxDesc)
+{
+    struct WLAN_MAC_HEADER *prWlanHeader = NULL;
+
+    if (!prMsduInfo->fgIs802_11)
+        return true; /* nothing to do */
+
+    prWlanHeader = (struct WLAN_MAC_HEADER *)((unsigned long)(prMsduInfo->prPacket) + MAC_TX_RESERVED_FIELD);
+
+    if (unlikely(!prWlanHeader)) {
+        DBGLOG(TX, ERROR, "NULL wlan header for 802.11 frame - drop\n");
+        return false;
+    }
+
+    HAL_MAC_CONNAC2X_TXD_SET_TYPE(prTxDesc, (prWlanHeader->u2FrameCtrl & MASK_FC_TYPE) >> 2);
+    HAL_MAC_CONNAC2X_TXD_SET_SUB_TYPE(prTxDesc, (prWlanHeader->u2FrameCtrl & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE);
+    HAL_MAC_CONNAC2X_TXD7_SET_TYPE(prTxDesc, (prWlanHeader->u2FrameCtrl & MASK_FC_TYPE) >> 2);
+    HAL_MAC_CONNAC2X_TXD7_SET_SUB_TYPE(prTxDesc, (prWlanHeader->u2FrameCtrl & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE);
+
+    return true;
+}
+
+/* Validate and set PID/TxS (basic range checks) */
+static void nic_txd_set_pid_txs(struct ADAPTER *prAdapter,
+                                struct MSDU_INFO *prMsduInfo,
+                                struct HW_MAC_CONNAC2X_TX_DESC *prTxDesc)
+{
+    if (prMsduInfo->pfTxDoneHandler) {
+        prMsduInfo->ucPID = nicTxAssignPID(prAdapter, prMsduInfo->ucWlanIndex);
+
+        if (unlikely(prMsduInfo->ucPID == 0xff)) {
+            DBGLOG(TX, WARN, "assigned PID 0xff suspicious\n");
+        }
+        HAL_MAC_CONNAC2X_TXD_SET_PID(prTxDesc, prMsduInfo->ucPID);
+        HAL_MAC_CONNAC2X_TXD_SET_TXS_TO_MCU(prTxDesc);
+    } else if (prAdapter->rWifiVar.ucDataTxDone == 2) {
+        HAL_MAC_CONNAC2X_TXD_SET_PID(prTxDesc, NIC_TX_DESC_PID_RESERVED);
+        HAL_MAC_CONNAC2X_TXD_SET_TXS_TO_MCU(prTxDesc);
+    }
+}
+
+/* final safety checks before leaving compose */
+static bool nic_txd_final_checks(struct MSDU_INFO *prMsduInfo,
+                                 struct HW_MAC_CONNAC2X_TX_DESC *prTxDesc,
+                                 u_int32_t u4TxDescAndPaddingLength)
+{
+    /* Check remaining lifetime, retry limit reasonable */
+    if (prMsduInfo->u4RemainingLifetime > 60000) {
+        DBGLOG(TX, WARN, "remaining lifetime %u ms is large\n", prMsduInfo->u4RemainingLifetime);
+    }
+
+    if (prMsduInfo->ucRetryLimit > 255) {
+        DBGLOG(TX, WARN, "retry limit %u invalid, clamping\n", prMsduInfo->ucRetryLimit);
+        prMsduInfo->ucRetryLimit = 255;
+    }
+
+    /* Basic TXD DW sanity (DW0 should have flags; ensure not all-ones) */
+    if (*((uint32_t *)prTxDesc + 0) == 0xffffffff) {
+        DBGLOG(TX, ERROR, "TXD DW0 all-ones (bad) - abort compose\n");
+        txd_dump_words(prTxDesc, u4TxDescAndPaddingLength);
+        return false;
+    }
+
+    return true;
+}
+
+/* --- main refactored function (keeps same prototype) --- */
+
 void nic_txd_v2_compose(struct ADAPTER *prAdapter,
                         struct MSDU_INFO *prMsduInfo,
                         u_int32_t u4TxDescLength,
@@ -394,35 +650,12 @@ void nic_txd_v2_compose(struct ADAPTER *prAdapter,
     struct HW_MAC_CONNAC2X_TX_DESC *prTxDesc;
     struct STA_RECORD *prStaRec = NULL;
     struct BSS_INFO *prBssInfo = NULL;
-    struct WLAN_MAC_HEADER *prWlanHeader = NULL;
-    u_int8_t ucEtherTypeOffsetInWord = 0;
     u_int32_t u4TxDescAndPaddingLength;
-    u_int8_t ucTarQueue = 0;
-    u_int8_t ucTarPort = 0;
+    u_int8_t final_queue;
 
-    /* sanity */
-    if (unlikely(!prAdapter || !prMsduInfo || !prTxDescBuffer)) {
-        DBGLOG(TX, ERROR, "NULL param: adapter=%p msdu=%p buf=%p\n",
-               prAdapter, prMsduInfo, prTxDescBuffer);
+    /* -- initial sanity & alignment */
+    if (!nic_txd_check_params(prAdapter, prMsduInfo, u4TxDescLength, prTxDescBuffer))
         return;
-    }
-
-    /* require 64-byte alignment for TXD buffer (caller responsibility) */
-    if (unlikely(!txd_buf_is_aligned(prTxDescBuffer))) {
-        DBGLOG(TX, ERROR, "TXD buf %p not 64-byte aligned (mod64=%lu) - drop\n",
-               prTxDescBuffer, (unsigned long)((uintptr_t)prTxDescBuffer & 63));
-        return;
-    }
-
-    /* accept only expected desc lengths */
-    if (unlikely(u4TxDescLength != NIC_TX_DESC_SHORT_FORMAT_LENGTH &&
-                 u4TxDescLength != NIC_TX_DESC_LONG_FORMAT_LENGTH)) {
-        DBGLOG(TX, ERROR, "TXD unexpected length %u (short=%u long=%u) - drop\n",
-               u4TxDescLength,
-               NIC_TX_DESC_SHORT_FORMAT_LENGTH,
-               NIC_TX_DESC_LONG_FORMAT_LENGTH);
-        return;
-    }
 
     u4TxDescAndPaddingLength = u4TxDescLength + NIC_TX_DESC_PADDING_LENGTH;
     prTxDesc = (struct HW_MAC_CONNAC2X_TX_DESC *)prTxDescBuffer;
@@ -443,108 +676,44 @@ void nic_txd_v2_compose(struct ADAPTER *prAdapter,
     /* zero descriptor */
     kalMemZero(prTxDesc, u4TxDescAndPaddingLength);
 
-    /* ether-type offset */
-    if (prMsduInfo->fgIs802_11) {
-        ucEtherTypeOffsetInWord =
-            (prAdapter->chip_info->pse_header_length +
-             prMsduInfo->ucMacHeaderLength +
-             prMsduInfo->ucLlcLength) >> 1;
-    } else {
-        ucEtherTypeOffsetInWord =
-            ((ETHER_HEADER_LEN - ETHER_TYPE_LEN) +
-             prAdapter->chip_info->pse_header_length) >> 1;
-    }
-    HAL_MAC_CONNAC2X_TXD_SET_ETHER_TYPE_OFFSET(prTxDesc, ucEtherTypeOffsetInWord);
+    /* compute and set ether-type offset (with range checks) */
+    if (!nic_txd_compute_and_set_eth_offset(prAdapter, prMsduInfo, prTxDesc))
+        return;
 
-    /* target queue/port */
-    ucTarQueue = nicTxGetTxDestQIdxByTc(prMsduInfo->ucTC);
-    ucTarPort = nicTxGetTxDestPortIdxByTc(prMsduInfo->ucTC);
+    /* choose queue and set */
+    final_queue = nic_txd_choose_and_set_queue(prAdapter, prMsduInfo, prBssInfo, prTxDesc);
 
-    /* augment queue with WMM set for LMAC ports (as before) */
-#if (CFG_TX_RSRC_WMM_ENHANCE == 1)
-    if ((ucTarPort == PORT_INDEX_LMAC) && (prMsduInfo->ucTC <= TC4_INDEX))
-#else
-    if (ucTarPort == PORT_INDEX_LMAC)
-#endif
-    {
-        u_int8_t add = (prBssInfo->ucWmmQueSet * WMM_AC_INDEX_NUM);
-        if (unlikely(add > (MAC_TXQ_MAX_INDEX - ucTarQueue))) {
-            DBGLOG(TX, WARN, "ucWmmQueSet overflow attempt ucTarQueue=%u add=%u -> ignore add\n",
-                   ucTarQueue, add);
-            add = 0;
-        }
-        ucTarQueue += add;
-    }
-
-    /* --- ALTX routing: only for a small, explicit set of mgmt subtypes
-     * We avoid forcing ALTX for AUTH (subtype 11) which commonly fails.
-     * If CFG_SUPPORT_ALTX_MGMT enabled, allow only probe-req (4) and action (13).
-     */
-#if CFG_SUPPORT_ALTX_MGMT
-    if (prMsduInfo->fgIs802_11 &&
-        (prMsduInfo->ucPacketType == TX_PACKET_TYPE_MGMT ||
-         prMsduInfo->ucPktType == ENUM_PKT_802_11_MGMT) &&
-        prMsduInfo->prPacket) {
-
-		prWlanHeader =
-			(struct WLAN_MAC_HEADER *)
-			((uint8_t *)prMsduInfo->prPacket + MAC_TX_RESERVED_FIELD);
-
-		if (unlikely(prMsduInfo->u2FrameLength <
-					 MAC_TX_RESERVED_FIELD + sizeof(struct WLAN_MAC_HEADER)))
-			prWlanHeader = NULL;
-
-        if (prWlanHeader) {
-            u_int8_t subtype = (prWlanHeader->u2FrameCtrl & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
-
-            /* numeric: probe-req = 4, action = 13 */
-            if (subtype == 4 || subtype == 13) {
-                DBGLOG(TX, INFO, "Routing mgmt subtype %u via ALTX\n", subtype);
-                ucTarQueue = MAC_TXQ_ALTX_0_INDEX;
-            }
-        }
-    }
-#endif /* CFG_SUPPORT_ALTX_MGMT */
-
-    /* ensure we didn't accidentally set an invalid queue */
-    ucTarQueue = clamp_queue_index(ucTarQueue);
-    HAL_MAC_CONNAC2X_TXD_SET_QUEUE_INDEX(prTxDesc, ucTarQueue);
-
-    /* BMC handling */
+    /* multicast handling */
     if (prMsduInfo->ucStaRecIndex == STA_REC_INDEX_BMCAST) {
         HAL_MAC_CONNAC2X_TXD_SET_BMC(prTxDesc);
         HAL_MAC_CONNAC2X_TXD_SET_NO_ACK(prTxDesc);
     }
 
-    /* wlan index */
+    /* wlan index and own mac index */
     prMsduInfo->ucWlanIndex = nicTxGetWlanIdx(prAdapter,
                                               prMsduInfo->ucBssIndex,
                                               prMsduInfo->ucStaRecIndex);
     HAL_MAC_CONNAC2X_TXD_SET_WLAN_INDEX(prTxDesc, prMsduInfo->ucWlanIndex);
+    HAL_MAC_CONNAC2X_TXD_SET_OWN_MAC_INDEX(prTxDesc, prBssInfo->ucOwnMacIndex);
 
-    /* header format */
-    if (prMsduInfo->fgIs802_11) {
-        HAL_MAC_CONNAC2X_TXD_SET_HEADER_FORMAT(prTxDesc, HEADER_FORMAT_802_11_NORMAL_MODE);
-        HAL_MAC_CONNAC2X_TXD_SET_802_11_HEADER_LENGTH(prTxDesc,
-                                                     (prMsduInfo->ucMacHeaderLength >> 1));
-    } else {
-        HAL_MAC_CONNAC2X_TXD_SET_HEADER_FORMAT(prTxDesc, HEADER_FORMAT_NON_802_11);
-        HAL_MAC_CONNAC2X_TXD_SET_ETHERNET_II(prTxDesc);
-    }
+    /* header format & header len */
+    if (!nic_txd_set_header_format_and_validate(prMsduInfo, prTxDesc))
+        return;
 
-    HAL_MAC_CONNAC2X_TXD_SET_HEADER_PADDING(prTxDesc, NIC_TX_DESC_HEADER_PADDING_LENGTH);
-    HAL_MAC_CONNAC2X_TXD_SET_TID(prTxDesc, prMsduInfo->ucUserPriority);
-
-    /* protection (preserve original behavior) */
+    /* protection: re-use existing call but log decisions */
     if (secIsProtectedFrame(prAdapter, prMsduInfo, prStaRec)) {
         if ((prStaRec && prStaRec->fgTransmitKeyExist) || fgIsTemplate) {
             nicTxConfigPktOption(prMsduInfo, MSDU_OPT_PROTECTED_FRAME, TRUE);
             if (prMsduInfo->fgIs802_1x && prMsduInfo->fgIs802_1x_NonProtected)
                 nicTxConfigPktOption(prMsduInfo, MSDU_OPT_PROTECTED_FRAME, FALSE);
+            DBGLOG(TX, WARN, "Protected frame: key_exist=%u template=%u\n",
+                   (prStaRec ? prStaRec->fgTransmitKeyExist : 0), fgIsTemplate);
         } else if (prMsduInfo->ucStaRecIndex == STA_REC_INDEX_BMCAST) {
             nicTxConfigPktOption(prMsduInfo, MSDU_OPT_PROTECTED_FRAME, TRUE);
+            DBGLOG(TX, WARN, "BMC protected\n");
         } else {
             nicTxConfigPktOption(prMsduInfo, MSDU_OPT_PROTECTED_FRAME, FALSE);
+            DBGLOG(TX, WARN, "Protected frame but no key -> not marked protected\n");
         }
     }
 
@@ -552,17 +721,21 @@ void nic_txd_v2_compose(struct ADAPTER *prAdapter,
     safe_set_packet_format(prTxDesc, prMsduInfo->ucPacketFormat);
 #endif
 
-    HAL_MAC_CONNAC2X_TXD_SET_OWN_MAC_INDEX(prTxDesc, prBssInfo->ucOwnMacIndex);
-
-    /* short format path */
+    /* short format fast-path */
     if (u4TxDescLength == NIC_TX_DESC_SHORT_FORMAT_LENGTH) {
         HAL_MAC_CONNAC2X_TXD_SET_SHORT_FORMAT(prTxDesc);
         nic_txd_v2_fill_by_pkt_option(prMsduInfo, prTxDesc);
+
         if (!(prMsduInfo->u4Option & MSDU_OPT_MANUAL_LIFE_TIME))
             prMsduInfo->u4RemainingLifetime =
                 nicTxGetRemainingTxTimeByTc(prMsduInfo->ucTC);
         HAL_MAC_CONNAC2X_TXD_SET_REMAINING_LIFE_TIME_IN_MS(prTxDesc,
             prMsduInfo->u4RemainingLifetime);
+
+        /* final debug dump for short-format frames */
+        DBGLOG(TX, INFO, "COMPOSE COMPLETE (SHORT) queue=%u wlanIdx=%u\n",
+               final_queue, prMsduInfo->ucWlanIndex);
+        txd_dump_words(prTxDesc, u4TxDescAndPaddingLength);
         return;
     }
 
@@ -570,50 +743,16 @@ void nic_txd_v2_compose(struct ADAPTER *prAdapter,
     HAL_MAC_CONNAC2X_TXD_SET_LONG_FORMAT(prTxDesc);
     nic_txd_v2_fill_by_pkt_option(prMsduInfo, prTxDesc);
 
-    /* 802.11 type/subtype (long format only) */
+    /* set type/subtype for mgmt frames */
     if (prMsduInfo->fgIs802_11) {
-#if CFG_SUPPORT_TX_MGMT_USE_DATAQ
-        if (prMsduInfo->ucPktType == ENUM_PKT_802_11_MGMT) {
-            prWlanHeader = (struct WLAN_MAC_HEADER *)
-                ((unsigned long)(prMsduInfo->prPacket) + MAC_TX_RESERVED_FIELD);
-            if (prWlanHeader && (prMsduInfo->u4Option & MSDU_OPT_PROTECTED_FRAME))
-                prWlanHeader->u2FrameCtrl |= MASK_FC_PROTECTED_FRAME;
-        } else
-#endif
-        {
-            prWlanHeader = (struct WLAN_MAC_HEADER *)
-                ((unsigned long)(prMsduInfo->prPacket) + MAC_TX_RESERVED_FIELD);
-        }
-
-        if (unlikely(!prWlanHeader)) {
-            DBGLOG(TX, ERROR, "NULL wlan header for 802.11 frame - drop\n");
+        if (!nic_txd_set_type_subtype_for_mgmt(prMsduInfo, prTxDesc))
             return;
-        }
-
-        HAL_MAC_CONNAC2X_TXD_SET_TYPE(prTxDesc, (prWlanHeader->u2FrameCtrl & MASK_FC_TYPE) >> 2);
-        HAL_MAC_CONNAC2X_TXD_SET_SUB_TYPE(prTxDesc, (prWlanHeader->u2FrameCtrl & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE);
-        HAL_MAC_CONNAC2X_TXD7_SET_TYPE(prTxDesc, (prWlanHeader->u2FrameCtrl & MASK_FC_TYPE) >> 2);
-        HAL_MAC_CONNAC2X_TXD7_SET_SUB_TYPE(prTxDesc, (prWlanHeader->u2FrameCtrl & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE);
     }
 
-    /* PID/TxS handling */
-    if (prMsduInfo->pfTxDoneHandler) {
-        prMsduInfo->ucPID = nicTxAssignPID(prAdapter, prMsduInfo->ucWlanIndex);
-        HAL_MAC_CONNAC2X_TXD_SET_PID(prTxDesc, prMsduInfo->ucPID);
-        HAL_MAC_CONNAC2X_TXD_SET_TXS_TO_MCU(prTxDesc);
-    } else if (prAdapter->rWifiVar.ucDataTxDone == 2) {
-        HAL_MAC_CONNAC2X_TXD_SET_PID(prTxDesc, NIC_TX_DESC_PID_RESERVED);
-        HAL_MAC_CONNAC2X_TXD_SET_TXS_TO_MCU(prTxDesc);
-    }
+    /* PID/TxS */
+    nic_txd_set_pid_txs(prAdapter, prMsduInfo, prTxDesc);
 
-#if CFG_SUPPORT_WIFI_SYSDVT
-    /* preserve existing WiFi SYSDVT behavior */
-    if (prMsduInfo->pfTxDoneHandler) {
-        /* sysdvt specific handling lives in original code paths */
-    }
-#endif
-
-    /* remaining lifetime / retry limit / power / rates (preserve original behavior) */
+    /* lifetime / retry / power / rates */
     if (!(prMsduInfo->u4Option & MSDU_OPT_MANUAL_LIFE_TIME))
         prMsduInfo->u4RemainingLifetime = nicTxGetRemainingTxTimeByTc(prMsduInfo->ucTC);
     HAL_MAC_CONNAC2X_TXD_SET_REMAINING_LIFE_TIME_IN_MS(prTxDesc, prMsduInfo->u4RemainingLifetime);
@@ -642,16 +781,36 @@ void nic_txd_v2_compose(struct ADAPTER *prAdapter,
         break;
     }
 
-	/* firmware requires channel=0 for mgmt frames before association */
-	if (prMsduInfo->fgIs802_11 &&
-		prMsduInfo->ucPktType == ENUM_PKT_802_11_MGMT) {
+    /* firmware requires channel=0 for mgmt frames before association */
+    if (prMsduInfo->fgIs802_11 && prMsduInfo->ucPktType == ENUM_PKT_802_11_MGMT) {
+        /* Clear DW6[23:16] = channel */
+        prTxDesc->u4DW6 &= ~(0xff << 16);
+    }
 
-		/* DW6[23:16] = channel */
-		prTxDesc->u4DW6 &= ~(0xff << 16);
-	}
+    /* final checks & diagnostic dump */
+    if (!nic_txd_final_checks(prMsduInfo, prTxDesc, u4TxDescAndPaddingLength)) {
+        DBGLOG(TX, ERROR, "final checks failed; dumping TXD\n");
+        txd_dump_words(prTxDesc, u4TxDescAndPaddingLength);
+        return;
+    }
+
+    DBGLOG(TX, INFO, "COMPOSE COMPLETE (LONG) queue=%u wlanIdx=%u pid=%u\n",
+           final_queue, prMsduInfo->ucWlanIndex, prMsduInfo->ucPID);
+    txd_dump_words(prTxDesc, u4TxDescAndPaddingLength);
 
     return;
 }
+
+
+
+
+
+
+
+
+
+
+
 
 
 

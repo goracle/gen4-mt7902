@@ -215,6 +215,13 @@ void nic_rxd_v2_fill_rfb(
 	u4HeaderOffset = (uint32_t) (
 		HAL_MAC_CONNAC2X_RX_STATUS_GET_HEADER_OFFSET(prRxStatus));
 
+	/* MT7902: firmware sets a 2-byte alignment pad in header_offset
+	 * for non-translated (raw 802.11) frames. This is only valid when
+	 * header translation is active; for raw frames it misaligns the
+	 * 802.11 header. Force to zero. */
+	if (!HAL_MAC_CONNAC2X_RX_STATUS_IS_HEADER_TRAN(prRxStatus))
+		u4HeaderOffset = 0;
+
 	u2RxStatusOffset = prChipInfo->rxd_size;
 	prSwRfb->ucGroupVLD =
 		(uint8_t) HAL_MAC_CONNAC2X_RX_STATUS_GET_GROUP_VLD(prRxStatus);
@@ -252,6 +259,25 @@ void nic_rxd_v2_fill_rfb(
 	prSwRfb->u2RxStatusOffst = u2RxStatusOffset;
 	prSwRfb->pvHeader = (uint8_t *) prRxStatus +
 		u2RxStatusOffset + u4HeaderOffset;
+
+
+	print_hex_dump(KERN_WARNING, "RXDMA: ",
+				   DUMP_PREFIX_OFFSET, 16, 1,
+				   prRxStatus, 128, false);
+
+	print_hex_dump(KERN_WARNING, "HDR: ",
+				   DUMP_PREFIX_OFFSET, 16, 1,
+				   prSwRfb->pvHeader, 64, false);
+
+	DBGLOG(RX, WARN,
+		   "RXDBG rxd_size=%u grpVLD=0x%x rxStatusOff=%u hdrOff=%u pktLen=%u\n",
+		   prChipInfo->rxd_size,
+		   prSwRfb->ucGroupVLD,
+		   u2RxStatusOffset,
+		   u4HeaderOffset,
+		   u4PktLen);
+
+
 	prSwRfb->u2RxByteCount = u4PktLen;
 	prSwRfb->u2PacketLen = (uint16_t) (u4PktLen -
 		(u2RxStatusOffset + u4HeaderOffset));
