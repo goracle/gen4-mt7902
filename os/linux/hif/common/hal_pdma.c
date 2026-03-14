@@ -2783,18 +2783,6 @@ void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo)
 	if (prBusInfo->pdmaSetup)
 		prBusInfo->pdmaSetup(prGlueInfo, TRUE);
 
-	//{
-	// 		uint32_t glo = 0;
-	// 		kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-	// 		DBGLOG(HAL, ERROR, "[INIT] GLO_CFG after pdmaSetup(TRUE)=0x%08x\n", glo);
-	// 		if (glo == 0) {
-	// 			uint32_t dummy = 0xdeadbeef;
-	// 			kalDevRegWrite(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, dummy);
-	// 			kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-	// 			DBGLOG(HAL, ERROR, "[INIT] GLO_CFG write-readback=0x%08x\n", glo);
-	// 		}
-	//}
-
 	if (prBusInfo->wfdmaManualPrefetch)
 		prBusInfo->wfdmaManualPrefetch(prGlueInfo);
 
@@ -3130,9 +3118,7 @@ uint32_t halWpdmaGetRxDmaDoneCnt(IN struct GLUE_INFO *prGlueInfo,
 	kalDevRegRead(prGlueInfo, prRxRing->hw_cnt_addr, &u4MaxCnt);
 	u4MaxCnt &= MT_RING_CNT_MASK;
 
-	DBGLOG(HAL, WARN,
-	       "[RXCNT-DBG] P[%u] hw_cnt_addr=0x%08x raw_cnt=0x%08x ring_size=%u\n",
-	       ucRingNum, prRxRing->hw_cnt_addr, u4MaxCnt, prRxRing->u4RingSize);
+	//DBGLOG(HAL, WARN, "[RXCNT-DBG] P[%u] hw_cnt_addr=0x%08x raw_cnt=0x%08x ring_size=%u\n", ucRingNum, prRxRing->hw_cnt_addr, u4MaxCnt, prRxRing->u4RingSize);
 
 	if (u4MaxCnt == 0 || u4MaxCnt > RX_RING_SIZE)
 		return 0;
@@ -3141,8 +3127,8 @@ uint32_t halWpdmaGetRxDmaDoneCnt(IN struct GLUE_INFO *prGlueInfo,
 	kalDevRegRead(prGlueInfo, prRxRing->hw_didx_addr, &u4DmaIdx);
 	u4DmaIdx &= MT_RING_DIDX_MASK;
 
-	DBGLOG(HAL, WARN, "[RXCNT-DBG] P[%u] CpuIdx=%u DmaIdx=%u MaxCnt=%u\n",
-	       ucRingNum, u4CpuIdx, u4DmaIdx, u4MaxCnt);
+	//DBGLOG(HAL, WARN, "[RXCNT-DBG] P[%u] CpuIdx=%u DmaIdx=%u MaxCnt=%u\n",
+	//      ucRingNum, u4CpuIdx, u4DmaIdx, u4MaxCnt);
 
 	/* Ring empty: DIDX == (CIDX+1) % size */
 	uint32_t u4NextCpu = (u4CpuIdx + 1) % u4MaxCnt;
