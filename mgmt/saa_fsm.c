@@ -282,6 +282,23 @@ static uint32_t saa_perform_auth_send(
 #endif
 	}
 
+
+
+{
+    uint32_t ext = 0;
+    HAL_MCR_RD(prAdapter, 0x7c024600, &ext);
+    DBGLOG(HAL, WARN, "[AUTH-GATE] TX_RING0_EXT_CTRL=0x%08x\n", ext);
+    if (ext != 0x01000004) {
+        DBGLOG(HAL, ERROR, "[AUTH-GATE] EXT_CTRL not in cut-through mode, re-arming\n");
+        HAL_MCR_WR(prAdapter, 0x7c024600, 0x01000004);
+        HAL_MCR_RD(prAdapter, 0x7c024600, &ext);
+        DBGLOG(HAL, WARN, "[AUTH-GATE] TX_RING0_EXT_CTRL after re-arm=0x%08x\n", ext);
+    }
+}
+
+
+
+
 #if !CFG_SUPPORT_AAA
 	rStatus = authSendAuthFrame(prAdapter,
 								prStaRec,

@@ -1516,6 +1516,9 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 #endif
 #endif
 			prAdapter->fgIsFwDownloaded = TRUE;
+			struct BUS_INFO *prBusInfo = prAdapter->chip_info->bus_info;
+			struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
+			prBusInfo->wfdmaManualPrefetch(prGlueInfo);
 
 			/* Re-arm WFDMA after FW boot resets GLO_CFG */
 			if (prAdapter->chip_info->asicWfdmaReInit) {

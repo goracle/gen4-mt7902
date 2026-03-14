@@ -564,12 +564,16 @@ void mt7902Connac2xWfdmaManualPrefetch(
 	/* Read GLO_CFG first and skip if DMA is already enabled.
 	 * Avoid touching prefetch/EXT_CTRL while WFDMA is live. */
 	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
+
+
+	/*
 	if (val & BIT(0)) {
 		DBGLOG(HAL, WARN,
 		       "DMA already enabled (GLO_CFG=0x%08x), skipping prefetch\n",
 		       val);
 		return;
 	}
+	*/
 
 	/* Program WFDMA EXT_CTRL registers (prefetch offsets / enables).
 	 * These writes are expected to clear bit15; re-arm it after all writes. */
@@ -584,6 +588,11 @@ void mt7902Connac2xWfdmaManualPrefetch(
 
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR,
 		0x01000004);
+	{
+		uint32_t _v = 0;
+		HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR, &_v);
+		DBGLOG(HAL, ERROR, "[PREFETCH-VERIFY] TX_RING0_EXT_CTRL after init write=0x%08x\n", _v);
+	}
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING1_EXT_CTRL_ADDR,
 		0x01400004);
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING2_EXT_CTRL_ADDR,
