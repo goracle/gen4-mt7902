@@ -8368,33 +8368,29 @@ void nicUniCmdStaRecHandleEventPkt(IN struct ADAPTER *prAdapter,
 {
     struct UNI_CMD_STAREC *uni_cmd = (struct UNI_CMD_STAREC *)GET_UNI_CMD_DATA(prCmdInfo);
     struct UNI_EVENT_CMD_RESULT *evt = (struct UNI_EVENT_CMD_RESULT *)pucEventBuf;
-
-    DBGLOG(NIC, WARN, "[STAREC-CB] ucCID=0x%x UNI_CMD_ID_STAREC_INFO=0x%x status=%d wlanidx=%d\n",
+    DBGLOG(NIC, WARN, "[STAREC-CB] ucCID=0x%x UNI_CMD_ID_STAREC_INFO=0x%x status=%d wlanidx=%d\\n",
            evt->u2CID, UNI_CMD_ID_STAREC_INFO, evt->u4Status, uni_cmd->ucWlanIdxL);
-
     if (evt->u2CID != UNI_CMD_ID_STAREC_INFO || evt->u4Status != 0)
         return;
-
     struct STA_RECORD *prStaRec = cnmGetStaRecByIndex(prAdapter,
                                   secGetStaIdxByWlanIdx(prAdapter, uni_cmd->ucWlanIdxL));
     if (!prStaRec)
         return;
-
     switch (prStaRec->ucStaState) {
     case STA_STATE_1:
-        DBGLOG(NIC, INFO, "StaRec[%u] FW ACK state=1 (UNI), advancing to STATE_2\n",
+        /* STATE_1 ACK = WTBL allocated, firmware ready for auth. Fire SAA now. */
+        DBGLOG(NIC, INFO, "StaRec[%u] FW ACK state=1 (UNI) — firing SAA\\n",
                prStaRec->ucIndex);
-        cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_2);
+        aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
         break;
-
     case STA_STATE_2:
-        DBGLOG(CNM, INFO, "StaRec[%u] FW ACK state=2 (UNI) — sending STATE_3 cmd\n",
+        /* STATE_2 ACK = post-auth association state confirmed. No-op here. */
+        DBGLOG(NIC, INFO, "StaRec[%u] FW ACK state=2 (UNI) — no-op\\n",
                prStaRec->ucIndex);
-        cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_3);
         break;
-
     case STA_STATE_3:
-        DBGLOG(CNM, INFO, "StaRec[%u] FW ACK state=3 (UNI) — activating TX path\n",
+        /* STATE_3 ACK = keys installed, activate data TX path. */
+        DBGLOG(NIC, INFO, "StaRec[%u] FW ACK state=3 (UNI) — activating TX path\\n",
                prStaRec->ucIndex);
         if (!prStaRec->fgIsTxAllowed) {
             qmActivateStaRec(prAdapter, prStaRec);
@@ -8404,11 +8400,9 @@ void nicUniCmdStaRecHandleEventPkt(IN struct ADAPTER *prAdapter,
             secPrivacySeekForEntry(prAdapter, prStaRec);
             cnmDumpStaRec(prAdapter, prStaRec->ucIndex);
         }
-        aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
         break;
-
     default:
-        DBGLOG(NIC, INFO, "StaRec[%u] FW ACK state=%u (UNI, no-op)\n",
+        DBGLOG(NIC, INFO, "StaRec[%u] FW ACK state=%u (UNI, no-op)\\n",
                prStaRec->ucIndex, prStaRec->ucStaState);
         break;
     }

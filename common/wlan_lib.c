@@ -2225,6 +2225,12 @@ uint32_t wlanSendCommand(IN struct ADAPTER *prAdapter,
 
     } while (FALSE);
 
+
+	DBGLOG(INIT, INFO,
+		   "SEND CMD seq=%u cid=0x%x ptr=%p\n",
+		   prCmdInfo->ucCmdSeqNum, prCmdInfo->ucCID, prCmdInfo);
+
+
     return rStatus;
 } /* end of wlanSendCommand */
 #if CFG_SUPPORT_MULTITHREAD

@@ -671,6 +671,8 @@ struct STA_RECORD *cnmStaRecAlloc(struct ADAPTER *prAdapter,
 		return NULL;
 	}
 
+	prStaRec->fgIsValid = TRUE;
+
 	/* 6. Cleanup stale packets from this slot's previous life */
 	nicFreePendingTxMsduInfo(prAdapter, 
 							 prStaRec->ucWlanIndex, MSDU_REMOVE_BY_WLAN_INDEX);
@@ -1049,6 +1051,14 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 
 		return;
 	}
+
+	DBGLOG(REQ, WARN,
+		   "STA_UPDATE: idx=%d wlanIdx=%d type=%d state=%d bss=%d\n",
+		   prStaRec->ucIndex,
+		   prStaRec->ucWlanIndex,
+		   prStaRec->eStaType,
+		   prStaRec->ucStaState,
+		   prStaRec->ucBssIndex);
 
 	/* Reset command buffer */
 	kalMemZero(prCmdContent, sizeof(struct CMD_UPDATE_STA_RECORD));

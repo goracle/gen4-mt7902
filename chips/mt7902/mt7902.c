@@ -156,9 +156,9 @@ static void mt7902CapInit(struct ADAPTER *prAdapter)
     asicConnac2xCapInit(prAdapter);
 
     prChipInfo = prAdapter->chip_info;
-    prChipInfo->u2RxSwPktBitMap = CONNAC3X_RX_STATUS_PKT_TYPE_SW_BITMAP;
-    prChipInfo->u2RxSwPktEvent  = CONNAC3X_RX_STATUS_PKT_TYPE_SW_EVENT;
-    prChipInfo->u2RxSwPktFrame  = CONNAC3X_RX_STATUS_PKT_TYPE_SW_FRAME;
+    prChipInfo->u2RxSwPktBitMap = CONNAC2X_RX_STATUS_PKT_TYPE_SW_BITMAP;
+    prChipInfo->u2RxSwPktEvent  = CONNAC2X_RX_STATUS_PKT_TYPE_SW_EVENT;
+    prChipInfo->u2RxSwPktFrame  = CONNAC2X_RX_STATUS_PKT_TYPE_SW_FRAME;
 }
 
 void mt7902EnableInterrupt(
@@ -561,6 +561,18 @@ void mt7902Connac2xWfdmaManualPrefetch(
 	struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
 	u_int32_t val = 0;
 
+	/* Read GLO_CFG first and skip if DMA is already enabled.
+	 * Avoid touching prefetch/EXT_CTRL while WFDMA is live. */
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
+	if (val & BIT(0)) {
+		DBGLOG(HAL, WARN,
+		       "DMA already enabled (GLO_CFG=0x%08x), skipping prefetch\n",
+		       val);
+		return;
+	}
+
+	/* Program WFDMA EXT_CTRL registers (prefetch offsets / enables).
+	 * These writes are expected to clear bit15; re-arm it after all writes. */
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING0_EXT_CTRL_ADDR,
 		0x00000004);
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING1_EXT_CTRL_ADDR,
@@ -589,20 +601,17 @@ void mt7902Connac2xWfdmaManualPrefetch(
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING16_EXT_CTRL_ADDR,
 		0x03000004);
 
-	/* reset dma idx */
-	HAL_MCR_WR(prAdapter,
-		WF_WFDMA_HOST_DMA0_WPDMA_RST_DTX_PTR_ADDR, 0xFFFFFFFF);
-
-	/* Re-arm chain_en after EXT_CTRL writes (mirrors mt76 ordering:
-	 * prefetch runs before the final GLO_CFG set that includes chain_en).
-	 * EXT_CTRL writes clear bit 15; set it last so it sticks. */
+	/* Re-arm chain_en after EXT_CTRL writes (mirrors mt76 ordering):
+	 * EXT_CTRL writes clear bit15; set it last so it sticks. */
 	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
 	val |= BIT(15); /* CSR_DISP_BASE_PTR_CHAIN_EN */
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, val);
 
+	/* Read-back to ensure the write is posted and to log the final state. */
 	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
-	DBGLOG(HAL, ERROR, "[PREFETCH] GLO_CFG after wfdmaManualPrefetch=0x%08x (bit15=%d)\n",
-		val, !!(val & BIT(15)));
+	DBGLOG(HAL, ERROR,
+	       "[PREFETCH] GLO_CFG after wfdmaManualPrefetch=0x%08x (bit15=%d)\n",
+	       val, !!(val & BIT(15)));
 }
 
 
@@ -1643,19 +1652,19 @@ struct TX_DESC_OPS_T mt7902TxDescOps = {
 };
 
 struct RX_DESC_OPS_T mt7902RxDescOps = {
-	.nic_rxd_get_rx_byte_count = nic_rxd_v3_get_rx_byte_count,
-	.nic_rxd_get_pkt_type = nic_rxd_v3_get_packet_type,
-	.nic_rxd_get_wlan_idx = nic_rxd_v3_get_wlan_idx,
-	.nic_rxd_get_sec_mode = nic_rxd_v3_get_sec_mode,
-	.nic_rxd_get_sw_class_error_bit = nic_rxd_v3_get_sw_class_error_bit,
-	.nic_rxd_get_ch_num = nic_rxd_v3_get_ch_num,
-	.nic_rxd_get_rf_band = nic_rxd_v3_get_rf_band,
-	.nic_rxd_get_tcl = nic_rxd_v3_get_tcl,
-	.nic_rxd_get_ofld = nic_rxd_v3_get_ofld,
-	.nic_rxd_get_HdrTrans = nic_rxd_v3_get_HdrTrans,
-	.nic_rxd_fill_rfb = nic_rxd_v3_fill_rfb,
-	.nic_rxd_sanity_check = nic_rxd_v3_sanity_check,
-	.nic_rxd_check_wakeup_reason = nic_rxd_v3_check_wakeup_reason,
+	.nic_rxd_get_rx_byte_count = nic_rxd_v2_get_rx_byte_count,
+	.nic_rxd_get_pkt_type = nic_rxd_v2_get_packet_type,
+	.nic_rxd_get_wlan_idx = nic_rxd_v2_get_wlan_idx,
+	.nic_rxd_get_sec_mode = nic_rxd_v2_get_sec_mode,
+	.nic_rxd_get_sw_class_error_bit = nic_rxd_v2_get_sw_class_error_bit,
+	.nic_rxd_get_ch_num = nic_rxd_v2_get_ch_num,
+	.nic_rxd_get_rf_band = nic_rxd_v2_get_rf_band,
+	.nic_rxd_get_tcl = nic_rxd_v2_get_tcl,
+	.nic_rxd_get_ofld = nic_rxd_v2_get_ofld,
+	.nic_rxd_get_HdrTrans = nic_rxd_v2_get_HdrTrans,
+	.nic_rxd_fill_rfb = nic_rxd_v2_fill_rfb,
+	.nic_rxd_sanity_check = nic_rxd_v2_sanity_check,
+	.nic_rxd_check_wakeup_reason = nic_rxd_v2_check_wakeup_reason,
 	
 };
 

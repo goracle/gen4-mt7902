@@ -1748,6 +1748,7 @@ static void nicUniEventCmdResult(struct ADAPTER *prAdapter,
 	struct CMD_INFO *prCmdInfo;
 
 	prCmdInfo = nicGetPendingCmdInfo(prAdapter, prEvent->ucSeqNum);
+
 	if (!prCmdInfo) {
         //print_hex_dump(KERN_WARNING,
 		//              "UNI_CMD_RESULT_RAW: ",

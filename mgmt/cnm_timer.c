@@ -498,9 +498,13 @@ void cnmTimerDoTimeOutCheck(IN struct ADAPTER *prAdapter)
 
 		prTimer = LINK_ENTRY(prLinkEntry, struct TIMER, rLinkEntry);
 		ASSERT(prTimer);
-		if (prLinkEntry->prNext == NULL)
-			log_dbg(CNM, WARN, "timer was re-inited, func %p\n",
-				prTimer->pfMgmtTimeOutFunc);
+
+		if (prLinkEntry->prNext == NULL) {
+			log_dbg(CNM, WARN, "timer was re-inited, prev func %pS\n", pfMgmtTimeOutFunc);
+			/* Force remove the corrupted entry so we don't hit it again */
+			LINK_REMOVE_KNOWN_ENTRY(prTimerList, prLinkEntry);
+			break;
+		}
 
 		/* Check if this entry is timeout. */
 		if (!TIME_BEFORE(rCurSysTime, prTimer->rExpiredSysTime)) {

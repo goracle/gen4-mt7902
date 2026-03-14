@@ -468,38 +468,7 @@ DBGLOG(SAA, WARN, "[SAA-START] StaRec=%u BSS=%u priChan=%u fgIsGranted=%u\n",
 	 * with fgIsValid=1, which cancels the timer and re-enters cleanly.
 	 */
 
-	if (!prStaRec->fgIsValid) {
-		DBGLOG(SAA, WARN,
-			   "[SAA-GATE] StaRec[%u] fgIsValid=0 — WTBL not armed, deferring\n",
-			   prStaRec->ucIndex);
-		saa_start_retry_timer(prAdapter, prStaRec);
-		kalMemZero(&rSsid, sizeof(rSsid));
-		return;
-	}
-	if (prStaRec->ucStaState < STA_STATE_3) {
-		/* On the retry path (retryCount > 1) ucStaState is legitimately 2:
-		 * firmware has not ACK'd STATE_3 yet. Issuing cnmStaRecChangeState
-		 * here fires cmd-ring writes that race the in-flight retry MSDU
-		 * and NULL prPacket in halWpdmaWriteMsdu, causing a hard lock.
-		 * Only reset state on the first-send path (retryCount <= 1).
-		 */
-		if (prStaRec->ucTxAuthAssocRetryCount > 1) {
-			DBGLOG(SAA, WARN,
-				   "[SAA-GATE] StaRec[%u] retry path state=%u — skipping StaRec reset\n",
-				   prStaRec->ucIndex, prStaRec->ucStaState);
-			/* fall through to send */
-		} else {
-			DBGLOG(SAA, WARN,
-				   "[SAA-GATE] StaRec[%u] zombie state=%u fgIsValid=1 — resetting, deferring\n",
-				   prStaRec->ucIndex, prStaRec->ucStaState);
-			prStaRec->fgIsValid = FALSE;
-			prStaRec->ucStaState = STA_STATE_3;
-			cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_1);
-			saa_start_retry_timer(prAdapter, prStaRec);
-			kalMemZero(&rSsid, sizeof(rSsid));
-			return;
-		}
-	}
+	/* STATE_1 ACK fires SAA directly; fgIsValid/state checks removed. */
 
 
  prStaRec->ucTxAuthAssocRetryCount++;
@@ -1289,6 +1258,15 @@ saaFsmRunEventTxDone(IN struct ADAPTER *prAdapter,
 		       prMsduInfo->ucStaRecIndex);
 		return WLAN_STATUS_INVALID_PACKET;
 	}
+
+	/* FIX START: Stop timer on SER Reset to prevent kernel spin */
+    if (rTxDoneStatus == TX_RESULT_DROPPED_IN_DRIVER || rTxDoneStatus == 32) {
+        DBGLOG(SAA, WARN, "[SAA-TXDONE] SER Reset detected. Cleaning up timer.\n");
+        cnmTimerStopTimer(prAdapter, &prStaRec->rTxReqDoneOrRxRespTimer);
+        /* Optionally trigger a re-auth or let the AIS FSM handle it */
+        return WLAN_STATUS_SUCCESS;
+    }
+    /* FIX END */
 
 	if (prStaRec->ucBssIndex >= MAX_BSSID_NUM) {
 		DBGLOG(SAA, ERROR, "[SAA-TXDONE] bad ucBssIndex=%u\n",

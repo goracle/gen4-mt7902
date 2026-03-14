@@ -4207,6 +4207,14 @@ DBGLOG(INIT, TRACE, "DIAG: kalProcessTxReq -> wlanProcessMboxMessage START\n");
  */
 /*----------------------------------------------------------------------------*/
 
+/* inline helper — true if we should bail on hw ops */
+static inline bool halted(struct GLUE_INFO *prGlueInfo)
+{
+	return (prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
+		kalIsResetting() ||
+		kthread_should_stop();
+}
+
 int hif_thread(void *data)
 {
 	struct net_device *dev = data;
@@ -4542,15 +4550,119 @@ int rx_thread(void *data)
  */
 /*----------------------------------------------------------------------------*/
 
+static void main_thread_handle_flags(struct GLUE_INFO *prGlueInfo,
+				     u_int8_t *fgNeedHwAccess)
+{
+#if CFG_ENABLE_WIFI_DIRECT
+	if (test_and_clear_bit(GLUE_FLAG_SUB_MOD_MULTICAST_BIT, &prGlueInfo->ulFlag))
+		p2pSetMulticastListWorkQueueWrapper(prGlueInfo);
+
+	if (test_and_clear_bit(GLUE_FLAG_FRAME_FILTER_BIT, &prGlueInfo->ulFlag)
+	    && prGlueInfo->prP2PDevInfo)
+		p2pFuncUpdateMgmtFrameRegister(prGlueInfo->prAdapter,
+			prGlueInfo->prP2PDevInfo->u4OsMgmtFrameFilter);
+#endif
+
+	if (test_and_clear_bit(GLUE_FLAG_FRAME_FILTER_AIS_BIT, &prGlueInfo->ulFlag)) {
+		uint32_t i;
+
+		for (i = 0; i < KAL_AIS_NUM; i++) {
+			struct AIS_FSM_INFO *prAisFsmInfo =
+				aisGetAisFsmInfo(prGlueInfo->prAdapter, i);
+
+			if (prAisFsmInfo)
+				prAisFsmInfo->u4AisPacketFilter =
+					prGlueInfo->u4OsMgmtFrameFilter;
+		}
+	}
+
+#if CFG_SUPPORT_NAN
+	if (test_and_clear_bit(GLUE_FLAG_NAN_MULTICAST_BIT, &prGlueInfo->ulFlag))
+		nanSetMulticastListWorkQueueWrapper(prGlueInfo);
+#endif
+
+#if !CFG_SUPPORT_MULTITHREAD
+	if (test_and_clear_bit(GLUE_FLAG_INT_BIT, &prGlueInfo->ulFlag)) {
+		if (!*fgNeedHwAccess) {
+			*fgNeedHwAccess = TRUE;
+			wlanAcquirePowerControl(prGlueInfo->prAdapter);
+		}
+		prGlueInfo->prAdapter->fgIsIntEnable = FALSE;
+		if (!halted(prGlueInfo)) {
+			prGlueInfo->TaskIsrCnt++;
+			wlanIST(prGlueInfo->prAdapter);
+		}
+	}
+
+	if (test_and_clear_bit(GLUE_FLAG_HIF_PRT_HIF_DBG_INFO_BIT, &prGlueInfo->ulFlag))
+		halPrintHifDbgInfo(prGlueInfo->prAdapter);
+
+	if (test_and_clear_bit(GLUE_FLAG_UPDATE_WMM_QUOTA, &prGlueInfo->ulFlag))
+		halUpdateTxMaxQuota(prGlueInfo->prAdapter);
+#endif
+
+	if (test_and_clear_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag)) {
+		struct GL_IO_REQ *prIoReq = &prGlueInfo->OidEntry;
+		uint32_t rStatus;
+
+		if (halted(prGlueInfo)) {
+			prIoReq->rStatus = WLAN_STATUS_FAILURE;
+			if (!completion_done(&prGlueInfo->rPendComp))
+				complete(&prGlueInfo->rPendComp);
+		} else {
+			if (prIoReq->fgRead == FALSE)
+				rStatus = wlanSetInformation(prIoReq->prAdapter,
+						prIoReq->pfnOidHandler,
+						prIoReq->pvInfoBuf,
+						prIoReq->u4InfoBufLen,
+						prIoReq->pu4QryInfoLen);
+			else
+				rStatus = wlanQueryInformation(prIoReq->prAdapter,
+						prIoReq->pfnOidHandler,
+						prIoReq->pvInfoBuf,
+						prIoReq->u4InfoBufLen,
+						prIoReq->pu4QryInfoLen);
+
+			prIoReq->rStatus = rStatus;
+
+			if (rStatus != WLAN_STATUS_PENDING) {
+				if (!completion_done(&prGlueInfo->rPendComp))
+					complete(&prGlueInfo->rPendComp);
+				else
+					DBGLOG(INIT, WARN, "SKIP multiple OID complete!\n");
+			} else {
+				wlanoidTimeoutCheck(prGlueInfo->prAdapter,
+						    prIoReq->pfnOidHandler);
+			}
+		}
+	}
+
+	if (test_and_clear_bit(GLUE_FLAG_TXREQ_BIT, &prGlueInfo->ulFlag) &&
+	    !halted(prGlueInfo))
+		kalProcessTxReq(prGlueInfo, fgNeedHwAccess);
+
+#if CFG_SUPPORT_MULTITHREAD
+	if (test_and_clear_bit(GLUE_FLAG_TX_CMD_DONE_BIT, &prGlueInfo->ulFlag) &&
+	    !halted(prGlueInfo))
+		wlanTxCmdDoneMthread(prGlueInfo->prAdapter);
+#endif
+
+	if (test_and_clear_bit(GLUE_FLAG_RX_BIT, &prGlueInfo->ulFlag) &&
+	    !halted(prGlueInfo))
+		nicRxProcessRFBs(prGlueInfo->prAdapter);
+
+	if (test_and_clear_bit(GLUE_FLAG_TIMEOUT_BIT, &prGlueInfo->ulFlag) &&
+	    !halted(prGlueInfo))
+		wlanTimerTimeoutCheck(prGlueInfo->prAdapter);
+}
+
+
 int main_thread(void *data)
 {
 	struct net_device *dev = data;
-	struct GLUE_INFO *prGlueInfo = *((struct GLUE_INFO **)
-					 netdev_priv(dev));
-	struct GL_IO_REQ *prIoReq = NULL;
-	int ret = 0;
+	struct GLUE_INFO *prGlueInfo = *((struct GLUE_INFO **)netdev_priv(dev));
 	u_int8_t fgNeedHwAccess = FALSE;
-	u_int8_t uResult;
+	int ret = 0;
 #if CFG_ENABLE_WAKE_LOCK
 	KAL_WAKE_LOCK_T *prTxThreadWakeLock;
 #endif
@@ -4566,8 +4678,7 @@ int main_thread(void *data)
 	kalSetThreadSchPolicyPriority(prGlueInfo);
 
 #if CFG_ENABLE_WAKE_LOCK
-	KAL_WAKE_LOCK_INIT(prGlueInfo->prAdapter,
-			   prTxThreadWakeLock, "WLAN main_thread");
+	KAL_WAKE_LOCK_INIT(prGlueInfo->prAdapter, prTxThreadWakeLock, "WLAN main_thread");
 	KAL_WAKE_LOCK(prGlueInfo->prAdapter, prTxThreadWakeLock);
 #endif
 
@@ -4578,358 +4689,101 @@ int main_thread(void *data)
 #ifdef UT_TEST_MODE
 		testThreadBegin(prGlueInfo->prAdapter);
 #endif
-
-#if CFG_ENABLE_WIFI_DIRECT
-		/*run p2p multicast list work. */
-		if (test_and_clear_bit(GLUE_FLAG_SUB_MOD_MULTICAST_BIT,
-				       &prGlueInfo->ulFlag))
-			p2pSetMulticastListWorkQueueWrapper(prGlueInfo);
-#endif
-
-		if (prGlueInfo->ulFlag & GLUE_FLAG_HALT
-			|| kalIsResetting()
-			) {
-			DBGLOG(INIT, INFO, "%s should stop now...\n",
-			       KAL_GET_CURRENT_THREAD_NAME());
+		if (halted(prGlueInfo))
 			break;
-		}
 
-		/* Unlock wakelock if main_thread going to idle */
+		/* go idle if nothing pending */
 		if (!(prGlueInfo->ulFlag & GLUE_FLAG_MAIN_PROCESS))
-			KAL_WAKE_UNLOCK(prGlueInfo->prAdapter,
-					prTxThreadWakeLock);
+			KAL_WAKE_UNLOCK(prGlueInfo->prAdapter, prTxThreadWakeLock);
 
-		/*
-		 * sleep on waitqueue if no events occurred. Event contain
-		 * (1) GLUE_FLAG_INT (2) GLUE_FLAG_OID (3) GLUE_FLAG_TXREQ
-		 * (4) GLUE_FLAG_HALT
-		 */
 		do {
 			ret = wait_event_interruptible(prGlueInfo->waitq,
 				kthread_should_stop() ||
-				((prGlueInfo->ulFlag & GLUE_FLAG_MAIN_PROCESS) != 0) ||
+				(prGlueInfo->ulFlag & GLUE_FLAG_MAIN_PROCESS) ||
 				(prGlueInfo->ulFlag & GLUE_FLAG_HALT));
 		} while (ret != 0 && !kthread_should_stop());
+
 		if (kthread_should_stop())
 			break;
-		DBGLOG(INIT, INFO,
-		       "main_thread: woke ulFlag=0x%lx ret=%d should_stop=%d\n",
-		       prGlueInfo->ulFlag, ret, kthread_should_stop());
+
+		DBGLOG(INIT, INFO, "main_thread: woke ulFlag=0x%lx ret=%d\n",
+		       prGlueInfo->ulFlag, ret);
+
 #if CFG_ENABLE_WAKE_LOCK
-		if (!KAL_WAKE_LOCK_ACTIVE(prGlueInfo->prAdapter,
-					  prTxThreadWakeLock))
-			KAL_WAKE_LOCK(prGlueInfo->prAdapter,
-				      prTxThreadWakeLock);
+		if (!KAL_WAKE_LOCK_ACTIVE(prGlueInfo->prAdapter, prTxThreadWakeLock))
+			KAL_WAKE_LOCK(prGlueInfo->prAdapter, prTxThreadWakeLock);
 #endif
 
-#if CFG_ENABLE_WIFI_DIRECT
-		/*run p2p multicast list work. */
-		if (test_and_clear_bit(GLUE_FLAG_SUB_MOD_MULTICAST_BIT,
-				       &prGlueInfo->ulFlag))
-			p2pSetMulticastListWorkQueueWrapper(prGlueInfo);
-
-		if (test_and_clear_bit(GLUE_FLAG_FRAME_FILTER_BIT,
-				       &prGlueInfo->ulFlag)
-			&& prGlueInfo->prP2PDevInfo) {
-			/* P2p info will be null after p2p removed. */
-			p2pFuncUpdateMgmtFrameRegister(prGlueInfo->prAdapter,
-			       prGlueInfo->prP2PDevInfo->u4OsMgmtFrameFilter);
-		}
-#endif
-		if (test_and_clear_bit(GLUE_FLAG_FRAME_FILTER_AIS_BIT,
-				       &prGlueInfo->ulFlag)) {
-			uint32_t i;
-
-			for (i = 0; i < KAL_AIS_NUM; i++) {
-				struct AIS_FSM_INFO *prAisFsmInfo =
-					(struct AIS_FSM_INFO *)NULL;
-
-				prAisFsmInfo =
-					aisGetAisFsmInfo(prGlueInfo->prAdapter,
-					i);
-
-				if (!prAisFsmInfo)
-					continue;
-
-				prAisFsmInfo->u4AisPacketFilter =
-					prGlueInfo->u4OsMgmtFrameFilter;
-			}
-		}
-
-#if CFG_SUPPORT_NAN
-		if (test_and_clear_bit(GLUE_FLAG_NAN_MULTICAST_BIT,
-				       &prGlueInfo->ulFlag))
-			nanSetMulticastListWorkQueueWrapper(prGlueInfo);
-#endif
-
-		if (prGlueInfo->ulFlag & GLUE_FLAG_HALT
-			|| kalIsResetting()
-			) {
-			DBGLOG(INIT, INFO, "%s should stop now...\n",
-			       KAL_GET_CURRENT_THREAD_NAME());
+		if (halted(prGlueInfo))
 			break;
-		}
 
 		fgNeedHwAccess = FALSE;
 
 #if CFG_SUPPORT_SDIO_READ_WRITE_PATTERN
 		if (prGlueInfo->fgEnSdioTestPattern == TRUE) {
-			if (fgNeedHwAccess == FALSE) {
+			if (!fgNeedHwAccess) {
 				fgNeedHwAccess = TRUE;
-
 				wlanAcquirePowerControl(prGlueInfo->prAdapter);
 			}
-
-			if (prGlueInfo->fgIsSdioTestInitialized == FALSE) {
-				/* enable PRBS mode */
-				uResult = kalDevRegWrite(prGlueInfo, MCR_WTMCR,
-					       0x00080002);
-				if (uResult == FALSE)
-					DBGLOG(INIT, ERROR,
-						"enable PRBS failed!\n");
+			if (!prGlueInfo->fgIsSdioTestInitialized) {
+				if (!kalDevRegWrite(prGlueInfo, MCR_WTMCR, 0x00080002))
+					DBGLOG(INIT, ERROR, "enable PRBS failed!\n");
 				prGlueInfo->fgIsSdioTestInitialized = TRUE;
 			}
-
-			if (prGlueInfo->fgSdioReadWriteMode == TRUE) {
-				/* read test */
+			if (prGlueInfo->fgSdioReadWriteMode)
 				kalDevPortRead(prGlueInfo, MCR_WTMDR, 256,
-				       prGlueInfo->aucSdioTestBuffer,
-				       sizeof(prGlueInfo->aucSdioTestBuffer));
-			} else {
-				/* write test */
+					prGlueInfo->aucSdioTestBuffer,
+					sizeof(prGlueInfo->aucSdioTestBuffer));
+			else
 				kalDevPortWrite(prGlueInfo, MCR_WTMDR, 172,
 					prGlueInfo->aucSdioTestBuffer,
 					sizeof(prGlueInfo->aucSdioTestBuffer));
-			}
 		}
 #endif
-#if CFG_SUPPORT_MULTITHREAD
-#else
-		/* Handle Interrupt */
-		if (test_and_clear_bit(GLUE_FLAG_INT_BIT,
-				       &prGlueInfo->ulFlag)) {
 
-			if (fgNeedHwAccess == FALSE) {
-				fgNeedHwAccess = TRUE;
-
-				wlanAcquirePowerControl(prGlueInfo->prAdapter);
-			}
-
-			/* the Wi-Fi interrupt is already disabled in mmc
-			 * thread, so we set the flag only to enable the
-			 * interrupt later
-			 */
-			prGlueInfo->prAdapter->fgIsIntEnable = FALSE;
-			/* wlanISR(prGlueInfo->prAdapter, TRUE); */
-
-			if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
-					kalIsResetting() || kthread_should_stop()) {
-				/* Should stop now... skip pending interrupt */
-				DBGLOG(INIT, INFO,
-					"ignore pending interrupt\n");
-			} else {
-				prGlueInfo->TaskIsrCnt++;
-				wlanIST(prGlueInfo->prAdapter);
-			}
-		}
-		/* Read chip status when chip no response */
-		if (test_and_clear_bit(GLUE_FLAG_HIF_PRT_HIF_DBG_INFO_BIT,
-				       &prGlueInfo->ulFlag))
-			halPrintHifDbgInfo(prGlueInfo->prAdapter);
-
-		if (test_and_clear_bit(GLUE_FLAG_UPDATE_WMM_QUOTA,
-					&prGlueInfo->ulFlag))
-			halUpdateTxMaxQuota(prGlueInfo->prAdapter);
-#endif
-		/* transfer ioctl to OID request */
 #ifdef UT_TEST_MODE
 		testProcessOid(prGlueInfo->prAdapter);
-#endif
-		do {
-			if (test_and_clear_bit(GLUE_FLAG_OID_BIT,
-					       &prGlueInfo->ulFlag)) {
-				/* get current prIoReq */
-				prIoReq = &(prGlueInfo->OidEntry);
-
-				/*
-				 * HALT guard for OID dispatch.
-				 *
-				 * Without this, a pending OID (e.g. scan-start,
-				 * connect) dispatched to wlanSetInformation /
-				 * wlanQueryInformation can call
-				 * wlanSendCommandPacket(), which waits
-				 * indefinitely on rPendComp for a firmware ACK.
-				 * If HALT is set the firmware is either halted or
-				 * unreachable, so that ACK never arrives.
-				 * main_thread then never reaches the loop-top
-				 * HALT check, never breaks, and never calls
-				 * complete(&rHaltComp) — hanging rmmod forever.
-				 *
-				 * Fix: under HALT, skip the OID handler entirely,
-				 * fail the request immediately, and unblock any
-				 * ioctl caller waiting on rPendComp.
-				 */
-				if ((prGlueInfo->ulFlag & GLUE_FLAG_HALT) ||
-				    kalIsResetting() || kthread_should_stop()) {
-					DBGLOG(INIT, INFO,
-					       "OID skipped under HALT, failing immediately\n");
-					prIoReq->rStatus = WLAN_STATUS_FAILURE;
-					if (!completion_done(&prGlueInfo->rPendComp))
-						complete(&prGlueInfo->rPendComp);
-					break;
-				}
-
-				if (prIoReq->fgRead == FALSE) {
-					prIoReq->rStatus = wlanSetInformation(
-							prIoReq->prAdapter,
-							prIoReq->pfnOidHandler,
-							prIoReq->pvInfoBuf,
-							prIoReq->u4InfoBufLen,
-							prIoReq->pu4QryInfoLen);
-				} else {
-					prIoReq->rStatus = wlanQueryInformation(
-							prIoReq->prAdapter,
-							prIoReq->pfnOidHandler,
-							prIoReq->pvInfoBuf,
-							prIoReq->u4InfoBufLen,
-							prIoReq->pu4QryInfoLen);
-				}
-
-				if (prIoReq->rStatus != WLAN_STATUS_PENDING) {
-					/* complete ONLY if there are waiters */
-					if (!completion_done(
-						&prGlueInfo->rPendComp))
-						complete(
-							&prGlueInfo->rPendComp);
-					else
-						DBGLOG(INIT, WARN,
-							"SKIP multiple OID complete!\n"
-						       );
-				} else {
-					wlanoidTimeoutCheck(
-							prGlueInfo->prAdapter,
-							prIoReq->pfnOidHandler);
-				}
-			}
-
-		} while (FALSE);
-
-		/*
-		 *
-		 * if TX request, clear the TXREQ flag. TXREQ set by
-		 * kalSetEvent/GlueSetEvent
-		 * indicates the following requests occur
-		 *
-		 */
-
-#ifdef UT_TEST_MODE
 		testProcessTxReq(prGlueInfo->prAdapter);
-#endif
-
-		if (test_and_clear_bit(GLUE_FLAG_TXREQ_BIT,
-				       &prGlueInfo->ulFlag)) {
-			/*
-			 * Guard against HALT: glBusFreeIrq() may already have
-			 * released PCI regions before we reach here.  Without
-			 * this check main_thread drives into nicTxCmd() /
-			 * wlanProcessCommandQueue() against a dead BAR and hangs
-			 * indefinitely (or blocks on MUTEX_TX_CMD_CLEAR held by
-			 * hif_thread in the same dead PCI path).  This matches
-			 * the existing guards on nicRxProcessRFBs and
-			 * wlanTimerTimeoutCheck.
-			 */
-			if (!(prGlueInfo->ulFlag & GLUE_FLAG_HALT) &&
-					!kalIsResetting() &&
-					!kthread_should_stop())
-				kalProcessTxReq(prGlueInfo, &fgNeedHwAccess);
-		}
-
-#if CFG_SUPPORT_MULTITHREAD
-		/* Process RX */
-#ifdef UT_TEST_MODE
 		testProcessRFBs(prGlueInfo->prAdapter);
-#endif
-		if (test_and_clear_bit(GLUE_FLAG_TX_CMD_DONE_BIT,
-				       &prGlueInfo->ulFlag)) {
-			/* Same HALT guard as above — wlanTxCmdDoneMthread also
-			 * touches hardware and holds MUTEX_TX_CMD_CLEAR. */
-			if (!(prGlueInfo->ulFlag & GLUE_FLAG_HALT) &&
-					!kalIsResetting() &&
-					!kthread_should_stop())
-				wlanTxCmdDoneMthread(prGlueInfo->prAdapter);
-		}
-#endif
-		if (test_and_clear_bit(GLUE_FLAG_RX_BIT,
-					   &prGlueInfo->ulFlag)) {
-			if (!(prGlueInfo->ulFlag & GLUE_FLAG_HALT) &&
-					!kalIsResetting() && !kthread_should_stop())
-				nicRxProcessRFBs(prGlueInfo->prAdapter);
-		}
-
-
-		/* Process RX, In linux, we don't need to free sk_buff by
-		 * ourself
-		 */
-
-		/* In linux, we don't need to free sk_buff by ourself */
-
-		/* In linux, we don't do reset */
-#if CFG_SUPPORT_MULTITHREAD
-#else
-		if (fgNeedHwAccess == TRUE)
-			wlanReleasePowerControl(prGlueInfo->prAdapter);
-#endif
-		/* handle cnmTimer time out */
-#ifdef UT_TEST_MODE
 		testTimeoutCheck(prGlueInfo->prAdapter);
 #endif
-		if (test_and_clear_bit(GLUE_FLAG_TIMEOUT_BIT,
-				       &prGlueInfo->ulFlag))
-			if (!(prGlueInfo->ulFlag & GLUE_FLAG_HALT))
-				wlanTimerTimeoutCheck(prGlueInfo->prAdapter);
+
+		main_thread_handle_flags(prGlueInfo, &fgNeedHwAccess);
+
+#if !CFG_SUPPORT_MULTITHREAD
+		if (fgNeedHwAccess)
+			wlanReleasePowerControl(prGlueInfo->prAdapter);
+#endif
+
 #if CFG_SUPPORT_SDIO_READ_WRITE_PATTERN
-		if (prGlueInfo->fgEnSdioTestPattern == TRUE)
+		if (prGlueInfo->fgEnSdioTestPattern)
 			kalSetEvent(prGlueInfo);
 #endif
+
 #ifdef UT_TEST_MODE
 		testThreadEnd(prGlueInfo->prAdapter);
 #endif
 	}
 
-#if 0
-	if (fgNeedHwAccess == TRUE)
-		wlanReleasePowerControl(prGlueInfo->prAdapter);
-#endif
+	pr_warn("[wlan] main_thread: exited loop ulFlag=0x%lx\n", prGlueInfo->ulFlag);
 
-	pr_warn("[wlan] main_thread: exited loop, starting cleanup"
-		" ulFlag=0x%lx\n", prGlueInfo->ulFlag);
-
-	/* flush the pending TX packets */
 	pr_warn("[wlan] main_thread: flushing pending TX (cnt=%d)\n",
 		GLUE_GET_REF_CNT(prGlueInfo->i4TxPendingFrameNum));
 	if (GLUE_GET_REF_CNT(prGlueInfo->i4TxPendingFrameNum) > 0)
 		kalFlushPendingTxPackets(prGlueInfo);
-	pr_warn("[wlan] main_thread: kalFlushPendingTxPackets done\n");
 
-	/* flush pending security frames */
 	pr_warn("[wlan] main_thread: clearing security frames (cnt=%d)\n",
 		GLUE_GET_REF_CNT(prGlueInfo->i4TxPendingSecurityFrameNum));
-	if (GLUE_GET_REF_CNT(
-		    prGlueInfo->i4TxPendingSecurityFrameNum) > 0)
+	if (GLUE_GET_REF_CNT(prGlueInfo->i4TxPendingSecurityFrameNum) > 0)
 		kalClearSecurityFrames(prGlueInfo);
-	pr_warn("[wlan] main_thread: kalClearSecurityFrames done\n");
 
-	/* remove pending oid */
 	pr_warn("[wlan] main_thread: calling wlanReleasePendingOid\n");
 	wlanReleasePendingOid(prGlueInfo->prAdapter, 1);
-	pr_warn("[wlan] main_thread: wlanReleasePendingOid done\n");
 
 #if CFG_ENABLE_WAKE_LOCK
-	if (KAL_WAKE_LOCK_ACTIVE(prGlueInfo->prAdapter,
-				 prTxThreadWakeLock))
+	if (KAL_WAKE_LOCK_ACTIVE(prGlueInfo->prAdapter, prTxThreadWakeLock))
 		KAL_WAKE_UNLOCK(prGlueInfo->prAdapter, prTxThreadWakeLock);
-	KAL_WAKE_LOCK_DESTROY(prGlueInfo->prAdapter,
-			      prTxThreadWakeLock);
+	KAL_WAKE_LOCK_DESTROY(prGlueInfo->prAdapter, prTxThreadWakeLock);
 #endif
 
 	DBGLOG(INIT, TRACE, "%s:%u stopped!\n",
@@ -4942,10 +4796,6 @@ int main_thread(void *data)
 	}
 #endif
 
-	/* Signal wlanOffStopWlanThreads that cleanup is complete, then park
-	 * until kthread_stop() unblocks us.  See hif_thread for rationale.
-	 * Nothing after complete() may touch prGlueInfo except the parking
-	 * loop itself (which only calls kthread_should_stop / schedule). */
 	pr_warn("[wlan] main_thread: signaling rHaltComp\n");
 	complete(&prGlueInfo->rHaltComp);
 
@@ -4954,8 +4804,8 @@ int main_thread(void *data)
 		schedule();
 	}
 	return 0;
-
 }
+
 
 /*----------------------------------------------------------------------------*/
 /*!

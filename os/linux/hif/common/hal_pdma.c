@@ -1284,6 +1284,7 @@ static void halResetMsduToken(IN struct ADAPTER *prAdapter)
 
 
 			if (local_prMsduInfo) {
+
 				if (local_prMsduInfo->pfTxDoneHandler)
 					local_prMsduInfo->pfTxDoneHandler(prAdapter, local_prMsduInfo, TX_RESULT_DROPPED_IN_DRIVER);
 
@@ -1887,8 +1888,9 @@ static void hal_rx_process_event_rfbs(struct ADAPTER *prAdapter, struct QUE *prR
 		       prSwRfb->pucRecvBuff[0], prSwRfb->pucRecvBuff[1],
 		       prSwRfb->pucRecvBuff[2], prSwRfb->pucRecvBuff[3]);
 
-		if (ucRawPktType == RX_PKT_TYPE_SW_DEFINED) {
-			prSwRfb->ucPacketType = RX_PKT_TYPE_SW_DEFINED;
+		if (ucRawPktType == RX_PKT_TYPE_SW_DEFINED ||
+		    ucRawPktType == RX_PKT_TYPE_MSDU_REPORT) {
+			prSwRfb->ucPacketType = ucRawPktType;
 			nicRxProcessPacketType(prAdapter, prSwRfb);
 		} else {
 			/*
@@ -3116,35 +3118,43 @@ void halWpdmaProcessDataDmaDone(IN struct GLUE_INFO *prGlueInfo,
 
 
 uint32_t halWpdmaGetRxDmaDoneCnt(IN struct GLUE_INFO *prGlueInfo,
-								 IN uint8_t ucRingNum)
+				  IN uint8_t ucRingNum)
 {
 	struct RTMP_RX_RING *prRxRing;
 	struct GL_HIF_INFO *prHifInfo;
-	uint32_t u4MaxCnt = 0, u4CpuIdx = 0, u4DmaIdx = 0, u4RxPktCnt;
-	u4MaxCnt &= MT_RING_CNT_MASK;
-	u4CpuIdx &= MT_RING_CIDX_MASK;
-	u4DmaIdx &= MT_RING_DIDX_MASK;
+	uint32_t u4MaxCnt = 0, u4CpuIdx = 0, u4DmaIdx = 0;
+
 	prHifInfo = &prGlueInfo->rHifInfo;
 	prRxRing = &prHifInfo->RxRing[ucRingNum];
+
 	kalDevRegRead(prGlueInfo, prRxRing->hw_cnt_addr, &u4MaxCnt);
-	DBGLOG(HAL, WARN, "[RXCNT-DBG] P[%u] hw_cnt_addr=0x%08x raw_cnt=0x%08x ring_size=%u\n",
-		ucRingNum, prRxRing->hw_cnt_addr, u4MaxCnt, prRxRing->u4RingSize);
+	u4MaxCnt &= MT_RING_CNT_MASK;
+
+	DBGLOG(HAL, WARN,
+	       "[RXCNT-DBG] P[%u] hw_cnt_addr=0x%08x raw_cnt=0x%08x ring_size=%u\n",
+	       ucRingNum, prRxRing->hw_cnt_addr, u4MaxCnt, prRxRing->u4RingSize);
+
 	if (u4MaxCnt == 0 || u4MaxCnt > RX_RING_SIZE)
 		return 0;
-	u4CpuIdx = prRxRing->RxCpuIdx;
+
+	u4CpuIdx = prRxRing->RxCpuIdx & MT_RING_CIDX_MASK;
 	kalDevRegRead(prGlueInfo, prRxRing->hw_didx_addr, &u4DmaIdx);
+	u4DmaIdx &= MT_RING_DIDX_MASK;
+
 	DBGLOG(HAL, WARN, "[RXCNT-DBG] P[%u] CpuIdx=%u DmaIdx=%u MaxCnt=%u\n",
-		ucRingNum, u4CpuIdx, u4DmaIdx, u4MaxCnt);
-	/* Ring empty when DIDX == (CIDX+1) % size (init state or drained) */
+	       ucRingNum, u4CpuIdx, u4DmaIdx, u4MaxCnt);
+
+	/* Ring empty: DIDX == (CIDX+1) % size */
 	uint32_t u4NextCpu = (u4CpuIdx + 1) % u4MaxCnt;
 	if (u4NextCpu == u4DmaIdx)
-		u4RxPktCnt = 0;
-	else if (u4CpuIdx >= u4DmaIdx)
-		u4RxPktCnt = u4MaxCnt + u4DmaIdx - u4CpuIdx - 1;
+		return 0;
+
+	if (u4CpuIdx >= u4DmaIdx)
+		return u4MaxCnt + u4DmaIdx - u4CpuIdx - 1;
 	else
-		u4RxPktCnt = u4DmaIdx - u4CpuIdx - 1;
-	return u4RxPktCnt;
+		return u4DmaIdx - u4CpuIdx - 1;
 }
+
 
 
 bool halWpdmaWriteCmd(IN struct GLUE_INFO *prGlueInfo,
@@ -3404,11 +3414,12 @@ static bool halWpdmaFillTxRing(struct GLUE_INFO *prGlueInfo,
 	prTxRing->u4UsedCnt++;
 
 	kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr, prTxRing->TxCpuIdx);
-	//{
-	//     uint32_t glo = 0;
-	//     kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-	//     DBGLOG(HAL, ERROR, "[FILLRING] GLO_CFG=0x%08x\n", glo);
-	//}
+	{
+		uint32_t glo = 0;
+		kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+		DBGLOG(HAL, ERROR, "[FILLRING] post-doorbell GLO_CFG=0x%08x port=%u cpuidx=%u\n",
+			glo, u2Port, prTxRing->TxCpuIdx);
+	}
 
 
 	spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
