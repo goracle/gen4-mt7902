@@ -442,46 +442,105 @@ u_int8_t asicConnac2xWfdmaIsNeedReInit(
 void asicConnac2xWfdmaReInit(
 	struct ADAPTER *prAdapter)
 {
-	u_int8_t fgResult;
+	u_int8_t fgResult = 0;
 	struct mt66xx_chip_info *prChipInfo = NULL;
+	struct GLUE_INFO *prGlueInfo = NULL;
 	uint32_t u4Val = 0;
+	bool reinit_done = false;
 
-	prChipInfo = prAdapter->chip_info;
+	if (!prAdapter) {
+		DBGLOG(INIT, ERROR, "%s: null prAdapter\n", __func__);
+		return;
+	}
 
+	prChipInfo  = prAdapter->chip_info;
+	prGlueInfo  = prAdapter->prGlueInfo;
+
+	/* Defensive read of dummy CR to detect deep-sleep vs cold-boot paths. */
 	asicConnac2xWfdmaDummyCrRead(prAdapter, &fgResult);
 	DBGLOG(INIT, ERROR, "[REINIT] DummyCrRead fgResult=%d\n", fgResult);
 
 #if defined(_HIF_PCIE) || defined(_HIF_AXI)
-	/* On PCIe, FW boot always resets GLO_CFG. Re-enable DMA unconditionally.
-	 * If fgResult is TRUE (deep sleep path), do the full ring reinit.
-	 * Either way, re-arm tx/rx DMA + chain_en after FW clears GLO_CFG. */
+	/*
+	 * On PCIe/AXI we expect the FW to clear/reset GLO_CFG during boot.
+	 * Re-enable DMA. If the simple re-enable path doesn't restore GLO_CFG,
+	 * fall back to the full ring re-init.
+	 */
 	if (fgResult) {
 		DBGLOG(INIT, ERROR, "[REINIT] deep sleep path: full halWpdmaInitRing\n");
-		halWpdmaInitRing(prAdapter->prGlueInfo);
+		halWpdmaInitRing(prGlueInfo);
+		reinit_done = true;
 	} else {
-		/* Cold boot path: FW reset GLO_CFG, re-enable DMA engine */
-		HAL_MCR_RD(prAdapter,
-			WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &u4Val);
+		/* Cold boot path: snapshot GLO_CFG, attempt to re-enable via pdma config */
+		HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &u4Val);
 		DBGLOG(INIT, ERROR, "[REINIT] cold boot GLO_CFG before re-enable=0x%08x\n", u4Val);
-		asicConnac2xWpdmaConfig(prAdapter->prGlueInfo, TRUE);
-		HAL_MCR_RD(prAdapter,
-			WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &u4Val);
+
+		/* Attempt the normal config enable which should set tx/rx and chain_en */
+		asicConnac2xWpdmaConfig(prGlueInfo, TRUE);
+
+		/* Ensure PCI write posting ordering before read-back */
+		wmb();
+
+		/* Read back and confirm */
+		HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &u4Val);
 		DBGLOG(INIT, ERROR, "[REINIT] cold boot GLO_CFG after re-enable=0x%08x\n", u4Val);
+
+		/*
+		 * If GLO_CFG is still zero (or looks invalid), try the more heavyweight
+		 * recovery: re-allocate/init rings and then re-check.
+		 */
+		if (u4Val == 0x00000000 || u4Val == 0xffffffff) {
+			DBGLOG(INIT, ERROR,
+			       "[REINIT] GLO_CFG invalid after pdmaSetup (0x%08x). Trying halWpdmaInitRing fallback\n",
+			       u4Val);
+
+			/* Full re-init of ring structures and CSRs */
+			halWpdmaInitRing(prGlueInfo);
+
+			/* ordering then re-read */
+			wmb();
+			HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &u4Val);
+			DBGLOG(INIT, ERROR, "[REINIT] cold boot GLO_CFG after fallback=0x%08x\n", u4Val);
+
+			/* Mark reinit success if we see non-zero non-0xffffffff value */
+			if (u4Val != 0x00000000 && u4Val != 0xffffffff)
+				reinit_done = true;
+		} else {
+			/* Normal path succeeded */
+			reinit_done = true;
+		}
 	}
-	nicEnableInterrupt(prAdapter);
+
+	/* Only enable interrupts once we've attempted to bring DMA back */
+	if (reinit_done) {
+		nicEnableInterrupt(prAdapter);
+	} else {
+		DBGLOG(INIT, ERROR, "%s: DMA reinit failed, enabling interrupts anyway\n", __func__);
+		nicEnableInterrupt(prAdapter);
+	}
+
+	/* Tell FW/adapter we've finished the re-init flow */
 	asicConnac2xWfdmaDummyCrWrite(prAdapter);
+
 #else
+	/* USB path: follow existing behavior but defend against NULL chip_info */
 	if (fgResult) {
-		if (prChipInfo->is_support_asic_lp && prChipInfo->asicUsbInit)
-			prChipInfo->asicUsbInit(prAdapter, prChipInfo);
-		if (prChipInfo->is_support_wacpu)
-			asicConnac2xEnableUsbCmdTxRing(prAdapter, CONNAC2X_USB_CMDPKT2WA);
+		DBGLOG(INIT, ERROR, "[REINIT] USB deep-sleep recovery path\n");
+		if (prChipInfo) {
+			if (prChipInfo->is_support_asic_lp && prChipInfo->asicUsbInit)
+				prChipInfo->asicUsbInit(prAdapter, prChipInfo);
+			if (prChipInfo->is_support_wacpu)
+				asicConnac2xEnableUsbCmdTxRing(prAdapter, CONNAC2X_USB_CMDPKT2WA);
+		} else {
+			DBGLOG(INIT, WARN, "%s: prChipInfo NULL on USB path\n", __func__);
+		}
 		nicEnableInterrupt(prAdapter);
 		asicConnac2xWfdmaDummyCrWrite(prAdapter);
+	} else {
+		DBGLOG(INIT, INFO, "%s: USB cold-boot path: no reinit action (fgResult=0)\n", __func__);
 	}
 #endif
 }
-
 
 
 void asicConnac2xFillCmdTxd(
@@ -656,16 +715,41 @@ void asicConnac2xWpdmaConfig(
 		HAL_MCR_RD(prAdapter, u4DmaCfgCr, &GloCfg[idx].word);
 	}
 
+	/* new: refresh before write + debug */
 	if (enable) {
 		for (idx = 0; idx < CONNAC2X_WFDMA_COUNT; idx++) {
 			if (!chip_info->is_support_wfdma1 && idx)
 				break;
-			u4DmaCfgCr =
-				asicConnac2xWfdmaCfgAddrGet(prGlueInfo, idx);
+
+			u4DmaCfgCr = asicConnac2xWfdmaCfgAddrGet(prGlueInfo, idx);
+
+			/* Re-read current register to avoid writing a stale (possibly zeroed) snapshot */
+			HAL_MCR_RD(prAdapter, u4DmaCfgCr, &GloCfg[idx].word);
+
+			DBGLOG(INIT, INFO, "%s: idx=%u GLO_CFG before set=0x%08x\n",
+				   __func__, idx, GloCfg[idx].word);
+
 			GloCfg[idx].field_conn2x.tx_dma_en = 1;
 			GloCfg[idx].field_conn2x.rx_dma_en = 1;
 			GloCfg[idx].field_conn2x.csr_disp_base_ptr_chain_en = 1;
+
+			DBGLOG(INIT, INFO, "%s: idx=%u GLO_CFG about to write=0x%08x\n",
+				   __func__, idx, GloCfg[idx].word);
+
 			HAL_MCR_WR(prAdapter, u4DmaCfgCr, GloCfg[idx].word);
+
+			/* read-back confirm (helps with PCIe posting ordering) */
+			HAL_MCR_RD(prAdapter, u4DmaCfgCr, &GloCfg[idx].word);
+			DBGLOG(INIT, INFO, "%s: idx=%u GLO_CFG after write=0x%08x\n",
+				   __func__, idx, GloCfg[idx].word);
+
+			/* defensive check for bus-dead */
+			if (GloCfg[idx].word == 0xffffffff) {
+				DBGLOG(INIT, ERROR, "%s: idx=%u GLO_CFG=0xffffffff (bus dead?)\n",
+					   __func__, idx);
+				/* don't attempt further writes — caller can decide to abort if desired */
+				break;
+			}
 		}
 	}
 }

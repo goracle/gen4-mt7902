@@ -555,72 +555,60 @@ void mt7902WfdmaRxRingExtCtrl(
 }
 
 
-void mt7902Connac2xWfdmaManualPrefetch(
-	struct GLUE_INFO *prGlueInfo)
+void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 {
-	struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
-	u_int32_t val = 0;
+    struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
+    u_int32_t val = 0;
+    uint32_t _v = 0;
 
-	/* Read GLO_CFG first and skip if DMA is already enabled.
-	 * Avoid touching prefetch/EXT_CTRL while WFDMA is live. */
-	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
+    /* Read GLO_CFG first (skip only if DMA already enabled was previously used) */
+    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
 
+    /* Program WFDMA EXT_CTRL registers (prefetch offsets / enables).
+     * These writes are expected to clear bit15; set it last so it sticks.
+     */
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING0_EXT_CTRL_ADDR, 0x00000004);
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING1_EXT_CTRL_ADDR, 0x00400004);
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING2_EXT_CTRL_ADDR, 0x00800004);
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING3_EXT_CTRL_ADDR, 0x00c00004);
 
-	/*
-	if (val & BIT(0)) {
-		DBGLOG(HAL, WARN,
-		       "DMA already enabled (GLO_CFG=0x%08x), skipping prefetch\n",
-		       val);
-		return;
-	}
-	*/
+    /* Change Ring 0 (Data/Mgmt) */
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR, 0x81000004);
 
-	/* Program WFDMA EXT_CTRL registers (prefetch offsets / enables).
-	 * These writes are expected to clear bit15; re-arm it after all writes. */
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING0_EXT_CTRL_ADDR,
-		0x00000004);
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING1_EXT_CTRL_ADDR,
-		0x00400004);
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING2_EXT_CTRL_ADDR,
-		0x00800004);
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING3_EXT_CTRL_ADDR,
-		0x00c00004);
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING1_EXT_CTRL_ADDR, 0x01400004);
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING2_EXT_CTRL_ADDR, 0x01800004);
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING3_EXT_CTRL_ADDR, 0x01c00004);
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING4_EXT_CTRL_ADDR, 0x02000004);
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING5_EXT_CTRL_ADDR, 0x02400004);
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING6_EXT_CTRL_ADDR, 0x02800004);
 
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR,
-		0x01000004);
-	{
-		uint32_t _v = 0;
-		HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR, &_v);
-		DBGLOG(HAL, ERROR, "[PREFETCH-VERIFY] TX_RING0_EXT_CTRL after init write=0x%08x\n", _v);
-	}
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING1_EXT_CTRL_ADDR,
-		0x01400004);
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING2_EXT_CTRL_ADDR,
-		0x01800004);
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING3_EXT_CTRL_ADDR,
-		0x01c00004);
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING4_EXT_CTRL_ADDR,
-		0x02000004);
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING5_EXT_CTRL_ADDR,
-		0x02400004);
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING6_EXT_CTRL_ADDR,
-		0x02800004);
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING15_EXT_CTRL_ADDR,
-		0x02c00004);
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING16_EXT_CTRL_ADDR,
-		0x03000004);
+    /* Change Ring 15 (MCU/Command) */
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING15_EXT_CTRL_ADDR, 0x82c00004);
 
-	/* Re-arm chain_en after EXT_CTRL writes (mirrors mt76 ordering):
-	 * EXT_CTRL writes clear bit15; set it last so it sticks. */
-	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
-	val |= BIT(15); /* CSR_DISP_BASE_PTR_CHAIN_EN */
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, val);
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING16_EXT_CTRL_ADDR, 0x03000004);
 
-	/* Read-back to ensure the write is posted and to log the final state. */
-	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
-	DBGLOG(HAL, ERROR,
-	       "[PREFETCH] GLO_CFG after wfdmaManualPrefetch=0x%08x (bit15=%d)\n",
-	       val, !!(val & BIT(15)));
+    /*
+     * --- Critical ordering fix ---
+     * Ensure the last EXT_CTRL write is posted before we re-arm chain_en (bit15).
+     * A read-back of the last EXT_CTRL/MMIO register forces PCI/MMIO posting.
+     * Also use wmb() to order CPU writes.
+     */
+    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING16_EXT_CTRL_ADDR, &_v);
+    /* Optional logging of the read-back */
+    DBGLOG(HAL, ERROR, "[PREFETCH-VERIFY] TX_RING16_EXT_CTRL after init write=0x%08x\n", _v);
+
+    /* Ensure write ordering from CPU side */
+    wmb();
+
+    /* Re-arm chain_en after EXT_CTRL writes (mirrors mt76 ordering) */
+    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
+    val |= BIT(15); /* CSR_DISP_BASE_PTR_CHAIN_EN */
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, val);
+
+    /* Read-back to ensure the write is posted and to log final state. */
+    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &val);
+    DBGLOG(HAL, ERROR, "[PREFETCH] GLO_CFG after wfdmaManualPrefetch=0x%08x (bit15=%d)\n",
+           val, !!(val & BIT(15)));
 }
 
 

@@ -802,46 +802,148 @@ void nicRxUninitialize(IN struct ADAPTER *prAdapter)
  */
 /*----------------------------------------------------------------------------*/
 void nicRxFillRFB(IN struct ADAPTER *prAdapter,
-		  IN OUT struct SW_RFB *prSwRfb)
+                  IN OUT struct SW_RFB *prSwRfb)
 {
-	struct RX_DESC_OPS_T *prRxDescOps = prAdapter->chip_info->prRxDescOps;
+    struct RX_DESC_OPS_T *prRxDescOps = NULL;
+    struct WLAN_MAC_HEADER *hdr = NULL;
+    struct STA_RECORD *sta = NULL;
+    size_t hexdump_len = 0;
+    unsigned char *p = NULL;
+    int i;
 
-	if (!prSwRfb) {
-		DBGLOG(RX, ERROR, "%s: null prSwRfb\n", __func__);
-		return;
-	}
+    if (!prAdapter) {
+        DBGLOG(RX, ERROR, "%s: null prAdapter\n", __func__);
+        return;
+    }
 
-	/* Let the RX descriptor implementation populate the SW_RFB. */
-	if (prRxDescOps && prRxDescOps->nic_rxd_fill_rfb) {
-		prRxDescOps->nic_rxd_fill_rfb(prAdapter, prSwRfb);
-	} else {
-		DBGLOG(RX, ERROR, "%s: no nic_rxd_fill_rfb\n", __func__);
-		return;
-	}
+    if (!prSwRfb) {
+        DBGLOG(RX, ERROR, "%s: null prSwRfb\n", __func__);
+        return;
+    }
 
-	/*
-	 * After descriptor fill, if we still lack an associated STA record
-	 * but we do have an 802.11 header, try to resolve by Addr2.
-	 */
-	if (prSwRfb->prStaRec == NULL && prSwRfb->pvHeader &&
-	    prSwRfb->u2HeaderLen >= sizeof(struct WLAN_MAC_HEADER)) {
-		struct WLAN_MAC_HEADER *hdr =
-			(struct WLAN_MAC_HEADER *)prSwRfb->pvHeader;
-		struct STA_RECORD *sta =
-			cnmGetStaRecByAddress(prAdapter, 0, hdr->aucAddr2);
+    prRxDescOps = prAdapter->chip_info ?
+                  prAdapter->chip_info->prRxDescOps : NULL;
 
-		if (sta) {
-			prSwRfb->prStaRec = sta;
-			prSwRfb->ucStaRecIdx = sta->ucIndex;
-			DBGLOG(RX, INFO, "[FILL-RFB] resolved StaRec idx=%u via Addr2 %pM\n",
-			       sta->ucIndex, hdr->aucAddr2);
-		} else {
-			DBGLOG(RX, INFO, "[FILL-RFB] no StaRec for Addr2 %pM\n",
-			       hdr->aucAddr2);
-		}
-	}
+    /* Let the RX descriptor implementation populate the SW_RFB. */
+    if (prRxDescOps && prRxDescOps->nic_rxd_fill_rfb) {
+        prRxDescOps->nic_rxd_fill_rfb(prAdapter, prSwRfb);
+    } else {
+        DBGLOG(RX, ERROR, "%s: no nic_rxd_fill_rfb\n", __func__);
+        return;
+    }
+
+    /*
+     * Defensive sanity checks after descriptor fill.
+     * If pvHeader is NULL or header length is zero, don't dereference.
+     */
+    if (!prSwRfb->pvHeader || prSwRfb->u2HeaderLen == 0) {
+        DBGLOG(RX, ERROR,
+               "%s: header too short (%u bytes). pvHeader=%p pktLen=%u hdrLen=%u wlanIdx=%u staIdx=%u\n",
+               __func__,
+               prSwRfb->u2HeaderLen,
+               prSwRfb->pvHeader,
+               prSwRfb->u2PacketLen,
+               prSwRfb->u2HeaderLen,
+               prSwRfb->ucWlanIdx,
+               prSwRfb->ucStaRecIdx);
+
+        /* hex-dump a small prefix if we have at least some packet length */
+        hexdump_len = prSwRfb->u2PacketLen ? min_t(size_t, prSwRfb->u2PacketLen, 32) : 0;
+        if (prSwRfb->pvHeader && hexdump_len) {
+            p = (unsigned char *)prSwRfb->pvHeader;
+            {
+                char buf[128];
+                int pos = 0;
+                int lim = (int)hexdump_len;
+                pos = 0;
+                for (i = 0; i < lim && pos < (int)sizeof(buf) - 4; i++)
+                    pos += snprintf(buf + pos, sizeof(buf) - pos, "%02x ", p[i]);
+                DBGLOG(RX, ERROR, "%s: first %zu bytes: %s\n", __func__, hexdump_len, buf);
+            }
+        }
+        return;
+    }
+
+    /*
+     * After descriptor fill, if we still lack an associated STA record
+     * but we do have a full 802.11 header, try to resolve by Addr2.
+     */
+    if (prSwRfb->prStaRec == NULL &&
+        prSwRfb->pvHeader &&
+        prSwRfb->u2HeaderLen >= sizeof(struct WLAN_MAC_HEADER)) {
+
+        hdr = (struct WLAN_MAC_HEADER *)prSwRfb->pvHeader;
+
+        /* quick sanity: detect obviously invalid Addr2 (all zeros) */
+        if (!memcmp(hdr->aucAddr2, "\x00\x00\x00\x00\x00\x00", 6)) {
+            DBGLOG(RX, INFO,
+                   "[FILL-RFB] Addr2 all-zero (likely parsing offset issue) pvHeader=%p hdrLen=%u pktLen=%u wlanIdx=%u staIdx=%u\n",
+                   prSwRfb->pvHeader,
+                   prSwRfb->u2HeaderLen,
+                   prSwRfb->u2PacketLen,
+                   prSwRfb->ucWlanIdx,
+                   prSwRfb->ucStaRecIdx);
+
+            /*
+             * Heuristic: scan the header buffer for a plausible non-zero 6-byte
+             * sequence (possible mis-parsed MAC). This is only a diagnostic,
+             * don't mutate state on the basis of a heuristic.
+             */
+            p = (unsigned char *)prSwRfb->pvHeader;
+            for (i = 0; i + 6 <= (int)prSwRfb->u2HeaderLen; i++) {
+                if (!(p[i] == 0 && p[i + 1] == 0 && p[i + 2] == 0 &&
+                      p[i + 3] == 0 && p[i + 4] == 0 && p[i + 5] == 0)) {
+                    DBGLOG(RX, INFO,
+                           "%s: heuristic found non-zero 6-byte sequence at hdr offset %d: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                           __func__, i,
+                           p[i], p[i + 1], p[i + 2], p[i + 3], p[i + 4], p[i + 5]);
+                    break;
+                }
+            }
+            return;
+        }
+
+        /* Normal path: try to resolve STA by Addr2 */
+        sta = cnmGetStaRecByAddress(prAdapter, 0, hdr->aucAddr2);
+
+        if (sta) {
+            prSwRfb->prStaRec = sta;
+            prSwRfb->ucStaRecIdx = sta->ucIndex;
+            DBGLOG(RX, INFO,
+                   "[FILL-RFB] resolved StaRec idx=%u via Addr2 %pM (pvHeader=%p hdrLen=%u pktLen=%u)\n",
+                   sta->ucIndex, hdr->aucAddr2, prSwRfb->pvHeader,
+                   prSwRfb->u2HeaderLen, prSwRfb->u2PacketLen);
+        } else {
+            DBGLOG(RX, INFO,
+                   "[FILL-RFB] no StaRec for Addr2 %pM (pvHeader=%p hdrLen=%u pktLen=%u wlanIdx=%u staIdx=%u) — leaving prStaRec NULL\n",
+                   hdr->aucAddr2, prSwRfb->pvHeader,
+                   prSwRfb->u2HeaderLen, prSwRfb->u2PacketLen,
+                   prSwRfb->ucWlanIdx, prSwRfb->ucStaRecIdx);
+
+            /* Defensive: print a short hexdump of the header to help debugging */
+            hexdump_len = min_t(size_t, prSwRfb->u2HeaderLen, 32);
+            p = (unsigned char *)prSwRfb->pvHeader;
+            if (hexdump_len) {
+                char buf[128];
+                int pos = 0;
+                int lim = (int)hexdump_len;
+                pos = 0;
+                for (i = 0; i < lim && pos < (int)sizeof(buf) - 4; i++)
+                    pos += snprintf(buf + pos, sizeof(buf) - pos, "%02x ", p[i]);
+                DBGLOG(RX, INFO, "%s: header bytes: %s\n", __func__, buf);
+            }
+        }
+    } else if (prSwRfb->prStaRec == NULL && prSwRfb->pvHeader) {
+        /* We have pvHeader but header length is unexpectedly short */
+        DBGLOG(RX, WARN,
+               "%s: pvHeader present but header length %u < %zu; pvHeader=%p pktLen=%u wlanIdx=%u staIdx=%u\n",
+               __func__, prSwRfb->u2HeaderLen, sizeof(struct WLAN_MAC_HEADER),
+               prSwRfb->pvHeader, prSwRfb->u2PacketLen,
+               prSwRfb->ucWlanIdx, prSwRfb->ucStaRecIdx);
+    }
+
+    /* leave prSwRfb->prStaRec as-is (NULL if unresolved). */
 }
-
 
 #if CFG_TCP_IP_CHKSUM_OFFLOAD || CFG_TCP_IP_CHKSUM_OFFLOAD_NDIS_60
 /*----------------------------------------------------------------------------*/

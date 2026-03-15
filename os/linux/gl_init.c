@@ -101,6 +101,10 @@
 
 #include "mgmt/rlm_domain.h"
 
+#ifdef MT7902
+#include "chips/coda/mt7902/wf_wfdma_host_dma0.h"
+#endif
+
 /*******************************************************************************
  *                              C O N S T A N T S
  *******************************************************************************
@@ -5750,6 +5754,7 @@ static int32_t wlanPowerOnInit(void)
 		*/
 		/* nicpmSetFWOwn(prAdapter, FALSE); */
 
+		halWpdmaFreeRing(prGlueInfo);
 		glBusFreeIrq(prWdev->netdev,
 			*((struct GLUE_INFO **)netdev_priv(prWdev->netdev)));
 
@@ -5778,7 +5783,7 @@ static int32_t wlanPowerOnInit(void)
 		* to be conti...
 		*/
 		/* nicpmSetFWOwn(prAdapter, FALSE); */
-
+		halWpdmaFreeRing(prGlueInfo);
 		glBusFreeIrq(prWdev->netdev,
 			*((struct GLUE_INFO **)netdev_priv(prWdev->netdev)));
 
@@ -5810,6 +5815,7 @@ static int32_t wlanPowerOnInit(void)
 		* to be conti...
 		*/
 		/* nicpmSetFWOwn(prAdapter, FALSE); */
+		halWpdmaFreeRing(prGlueInfo);
 
 		glBusFreeIrq(prWdev->netdev,
 			*((struct GLUE_INFO **)netdev_priv(prWdev->netdev)));
@@ -6276,6 +6282,7 @@ int32_t wlanOffAtReset(void)
 	nicDisableInterrupt(prAdapter);
 	tasklet_kill(&prGlueInfo->rRxTask);
 	wlanOffStopWlanThreads(prGlueInfo);
+	halWpdmaFreeRing(prGlueInfo);
 	glBusFreeIrq(prDev, prGlueInfo);
 	if (HAL_IS_TX_DIRECT(prAdapter)) {
 		if (prAdapter->fgTxDirectInited) {
@@ -6735,6 +6742,106 @@ static int wlanProbe_BusInit(void *pvData)
     return 0;
 }
 
+
+/* place near other mt79xx helpers */
+static int mt79xx_wfdma_early_init(struct ADAPTER *prAdapter)
+{
+    struct GLUE_INFO      *prGlueInfo;
+    struct GL_HIF_INFO    *prHifInfo;
+    struct BUS_INFO       *prBusInfo;
+    struct mt66xx_chip_info *chip;
+    uint32_t               glo;
+    uint32_t               tx16;
+    int                    rc = 0;
+
+    if (!prAdapter) {
+        DBGLOG(INIT, ERROR, "%s: null prAdapter\n", __func__);
+        return -EINVAL;
+    }
+
+    prGlueInfo = prAdapter->prGlueInfo;
+    if (!prGlueInfo) {
+        DBGLOG(INIT, ERROR, "%s: null prGlueInfo\n", __func__);
+        return -EINVAL;
+    }
+
+    chip = prAdapter->chip_info;
+    if (!chip) {
+        DBGLOG(INIT, ERROR, "%s: missing chip_info\n", __func__);
+        return -ENOTSUPP;
+    }
+
+    prHifInfo = &prGlueInfo->rHifInfo;
+    prBusInfo = chip->bus_info;
+    if (!prBusInfo) {
+        DBGLOG(INIT, ERROR, "%s: missing bus_info\n", __func__);
+        return -ENOTSUPP;
+    }
+
+    /*
+     * Diagnostic: read GLO_CFG before touching anything so logs show initial state
+     */
+    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+    DBGLOG(INIT, INFO, "%s: EARLY GLO_CFG pre-init = 0x%08x\n", __func__, glo);
+
+    /*
+     * Allocate ring structures and initialize them.
+     * halWpdmaAllocRing/halWpdmaInitRing are the canonical helpers used elsewhere,
+     * so using them here keeps order and semantics consistent.
+     *
+     * We pass 'true' to halWpdmaAllocRing to request the usual runtime allocations.
+     */
+    if (!halWpdmaAllocRing(prGlueInfo, true)) {
+        DBGLOG(INIT, ERROR, "%s: halWpdmaAllocRing failed\n", __func__);
+        return -ENOMEM;
+    }
+
+    /*
+     * Initialize ring CSRs + GLO config.  halWpdmaInitRing will:
+     *  - call bus_info->pdmaSetup(..., FALSE)
+     *  - program TX/RX base/size/index CSRs
+     *  - call bus_info->pdmaSetup(..., TRUE) (finalize / enable master bits)
+     *  - optionally perform manual prefetch
+     *
+     * This mirrors the normal path and ensures registers are consistent for FW.
+     */
+    halWpdmaInitRing(prGlueInfo);
+
+    /*
+     * Strong ordering: ensure CPU writes are posted before we read-back registers.
+     * As mt drivers do: read-back + wmb ordering is important on PCIe.
+     */
+    wmb();
+
+    /* Read final GLO_CFG and key EXT_CTRL to confirm the state */
+    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING16_EXT_CTRL_ADDR, &tx16);
+
+    DBGLOG(INIT, INFO, "%s: EARLY GLO_CFG post-init = 0x%08x (bit15=%d)\n",
+           __func__, glo, !!(glo & BIT(15)));
+    DBGLOG(INIT, INFO, "%s: TX_RING16_EXT_CTRL post-init = 0x%08x\n",
+           __func__, tx16);
+
+    /*
+     * Basic sanity: if GLO_CFG is 0xffffffff the bus is dead.
+     * If GLO_CFG == 0x0 it's suspicious (DMA disabled); caller can decide.
+     */
+    if (glo == 0xffffffff) {
+        DBGLOG(INIT, ERROR, "%s: GLO_CFG=0xffffffff - bus dead after early init\n", __func__);
+        rc = -EIO;
+        goto out;
+    }
+
+    if (glo == 0x00000000) {
+        DBGLOG(INIT, WARN, "%s: GLO_CFG == 0x0 after early init (DMA master bits not set)\n",
+               __func__);
+        /* still allow caller to proceed; later reinit may set bits */
+    }
+
+out:
+    return rc;
+}
+
 /* ------------------------------------------------------------------ */
 /* wlanProbe_AdapterBringup                                             */
 /* Cold-boots MCU, sets IRQ, starts adapter.                           */
@@ -6752,6 +6859,17 @@ static int wlanProbe_AdapterBringup(struct GLUE_INFO *prGlueInfo,
                "wlanProbe: WFSYS cold boot failed - MCU unresponsive\n");
         return -EIO;
     }
+
+    /* Early WFDMA setup so FW can use DMA rings during FWDL / mailbox */
+    ret = mt79xx_wfdma_early_init(prAdapter);
+    if (ret) {
+        DBGLOG(INIT, ERROR, "wlanProbe: mt79xx_wfdma_early_init failed: %d\n", ret);
+        return ret; /* choose propagation you prefer (or try fallback) */
+    }
+
+	uint32_t glo;
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+	DBGLOG(INIT, INFO, "EARLY WFDMA GLO_CFG=0x%08x\n", glo);
 
     ret = glBusSetIrq(prWdev->netdev, NULL, prGlueInfo);
     if (ret != WLAN_STATUS_SUCCESS) {
@@ -6907,8 +7025,10 @@ static void wlanProbe_Cleanup(enum ENUM_PROBE_FAIL_REASON eFailReason,
          */
         if (prGlueInfo)
             mt7902_hard_cleanup(prGlueInfo, prAdapter);
-        if (prWdev && prWdev->netdev)
+        if (prWdev && prWdev->netdev){
+			halWpdmaFreeRing(prGlueInfo);
             glBusFreeIrq(prWdev->netdev, prGlueInfo);
+		}
         kal_fallthrough;
 
     case BUS_SET_IRQ_FAIL:
@@ -7247,13 +7367,14 @@ static void wlanRemove(void)
 	/* Clear pending RX/TX bits to prevent main_thread processing after HALT */
 	clear_bit(GLUE_FLAG_RX_BIT, &prGlueInfo->ulFlag);
 	smp_wmb();
-	if (prAdapter)
+	if (prAdapter){
 		nicDisableInterrupt(prAdapter);
-	tasklet_kill(&prGlueInfo->rRxTask);
-	glTaskletUninit(prGlueInfo);
-	wlanOffStopWlanThreads(prGlueInfo);
-	glBusFreeIrq(prDev, prGlueInfo);
-
+		tasklet_kill(&prGlueInfo->rRxTask);
+		glTaskletUninit(prGlueInfo);
+		wlanOffStopWlanThreads(prGlueInfo);
+		halWpdmaFreeRing(prGlueInfo);
+		glBusFreeIrq(prDev, prGlueInfo);
+	}
 	/*
 	 * 5. Now safe to unregister and destroy the netdev — IRQ is gone,
 	 * no more callbacks into driver code can occur.

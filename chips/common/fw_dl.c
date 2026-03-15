@@ -1592,204 +1592,231 @@ static char *wlanInitEventStatusCodeToStr(uint8_t ucStatus)
  *         WLAN_STATUS_FAILURE
  */
 /*----------------------------------------------------------------------------*/
-uint32_t wlanConfigWifiFuncStatus(IN struct ADAPTER
-				  *prAdapter, IN uint8_t ucCmdSeqNum)
+uint32_t wlanConfigWifiFuncStatus(IN struct ADAPTER *prAdapter,
+								  IN uint8_t ucCmdSeqNum)
 {
 	struct mt66xx_chip_info *prChipInfo;
-	uint8_t *aucBuffer;
+	uint8_t *aucBuffer = NULL;
 	uint32_t u4EventSize;
 	struct INIT_WIFI_EVENT *prInitEvent;
 	struct INIT_EVENT_CMD_RESULT *prEventCmdResult;
 	uint32_t u4RxPktLength;
-	uint32_t u4Status;
+	uint32_t u4Status = WLAN_STATUS_FAILURE;
 	uint8_t ucPortIdx = IMG_DL_STATUS_PORT_IDX;
 
-	ASSERT(prAdapter);
-	prChipInfo = prAdapter->chip_info;
+    ASSERT(prAdapter);
+    prChipInfo = prAdapter->chip_info;
+    if (!prChipInfo) {
+        DBGLOG(INIT, ERROR, "Chip info NULL\n");
+        return WLAN_STATUS_FAILURE;
+    }
 
-	u4EventSize = prChipInfo->rxd_size + prChipInfo->init_event_size +
+    u4EventSize = prChipInfo->rxd_size + prChipInfo->init_event_size +
 		sizeof(struct INIT_EVENT_CMD_RESULT);
-	aucBuffer = kalMemAlloc(u4EventSize, PHY_MEM_TYPE);
-	if (aucBuffer == NULL) {
-		DBGLOG(INIT, ERROR, "Alloc CMD buffer failed\n");
-		return WLAN_STATUS_FAILURE;
-	}
 
-	do {
-		if (kalIsCardRemoved(prAdapter->prGlueInfo) == TRUE
-		    || fgIsBusAccessFailed == TRUE) {
-			u4Status = WLAN_STATUS_FAILURE;
-		} else if (nicRxWaitResponse(prAdapter, ucPortIdx,
-					     aucBuffer, u4EventSize,
-					     &u4RxPktLength) !=
-			   WLAN_STATUS_SUCCESS) {
-			u4Status = WLAN_STATUS_FAILURE;
-		} else {
-			prInitEvent = (struct INIT_WIFI_EVENT *)
-				(aucBuffer + prChipInfo->rxd_size);
+    aucBuffer = kalMemAlloc(u4EventSize, PHY_MEM_TYPE);
+    if (!aucBuffer) {
+        DBGLOG(INIT, ERROR, "Alloc CMD buffer failed\n");
+        return WLAN_STATUS_FAILURE;
+    }
 
-			/* EID / SeqNum check */
-			if (prInitEvent->ucEID != INIT_EVENT_ID_CMD_RESULT)
-				u4Status = WLAN_STATUS_FAILURE;
-			else if (prInitEvent->ucSeqNum != ucCmdSeqNum)
-				u4Status = WLAN_STATUS_FAILURE;
-			else {
-				prEventCmdResult =
-					(struct INIT_EVENT_CMD_RESULT *)
-					prInitEvent->aucBuffer;
+    /* Early exit if card removed or bus failure */
+    if (kalIsCardRemoved(prAdapter->prGlueInfo) == TRUE ||
+        fgIsBusAccessFailed == TRUE) {
+        DBGLOG(INIT, ERROR, "Card removed or bus access failed\n");
+        goto exit;
+    }
 
-				/* 0 for download success */
-				if (prEventCmdResult->ucStatus != 0) {
-					DBGLOG(INIT, ERROR,
-					"Start CMD failed, status[%u]:%s\n",
-					prEventCmdResult->ucStatus,
-					wlanInitEventStatusCodeToStr(
-						prEventCmdResult->ucStatus)
-					);
+    /* Wait for firmware response */
+    if (nicRxWaitResponse(prAdapter, ucPortIdx, aucBuffer, u4EventSize,
+                          &u4RxPktLength) != WLAN_STATUS_SUCCESS) {
+        DBGLOG(INIT, ERROR, "FW response timeout or failure\n");
+        goto exit;
+    }
+
+    prInitEvent = (struct INIT_WIFI_EVENT *)(aucBuffer + prChipInfo->rxd_size);
+    if (!prInitEvent) {
+        DBGLOG(INIT, ERROR, "Init event NULL\n");
+        goto exit;
+    }
+
+    /* Validate event ID and sequence number */
+    if (prInitEvent->ucEID != INIT_EVENT_ID_CMD_RESULT) {
+        DBGLOG(INIT, ERROR, "Unexpected event ID: %u\n", prInitEvent->ucEID);
+        goto exit;
+    }
+    if (prInitEvent->ucSeqNum != ucCmdSeqNum) {
+        DBGLOG(INIT, ERROR, "Sequence number mismatch: expected %u, got %u\n",
+               ucCmdSeqNum, prInitEvent->ucSeqNum);
+        goto exit;
+    }
+
+    prEventCmdResult = (struct INIT_EVENT_CMD_RESULT *)prInitEvent->aucBuffer;
+    if (!prEventCmdResult) {
+        DBGLOG(INIT, ERROR, "Event CMD result NULL\n");
+        goto exit;
+    }
+
+    if (prEventCmdResult->ucStatus != 0) {
+        DBGLOG(INIT, ERROR,
+               "Start CMD failed, status[%u]: %s\n",
+               prEventCmdResult->ucStatus,
+               wlanInitEventStatusCodeToStr(prEventCmdResult->ucStatus));
+
 #if CFG_SUPPORT_COMPRESSION_FW_OPTION
-					if (prEventCmdResult->ucStatus ==
-					    WIFI_FW_DECOMPRESSION_FAILED)
-						DBGLOG(INIT, ERROR,
-							"Start Decompression CMD failed, status[%u]\n",
-						  prEventCmdResult->ucStatus);
+        if (prEventCmdResult->ucStatus == WIFI_FW_DECOMPRESSION_FAILED) {
+            DBGLOG(INIT, ERROR,
+                   "Start Decompression CMD failed, status[%u]\n",
+                   prEventCmdResult->ucStatus);
+        }
 #endif
-					u4Status = WLAN_STATUS_FAILURE;
-				} else {
-					u4Status = WLAN_STATUS_SUCCESS;
-				}
-			}
-		}
-	} while (FALSE);
+        u4Status = WLAN_STATUS_FAILURE;
+    } else {
+        u4Status = WLAN_STATUS_SUCCESS;
+    }
 
-	kalMemFree(aucBuffer, PHY_MEM_TYPE, u4EventSize);
+ exit:
+    if (aucBuffer)
+        kalMemFree(aucBuffer, PHY_MEM_TYPE, u4EventSize);
 
-	return u4Status;
+    return u4Status;
 }
 
+
 uint32_t wlanConfigWifiFunc(IN struct ADAPTER *prAdapter,
-			    IN u_int8_t fgEnable, IN uint32_t u4StartAddress,
-			    IN uint8_t ucPDA)
+							IN u_int8_t fgEnable,
+							IN uint32_t u4StartAddress,
+							IN uint8_t ucPDA)
 {
-	struct CMD_INFO *prCmdInfo;
-	struct INIT_CMD_WIFI_START *prInitCmdWifiStart;
+	struct CMD_INFO *prCmdInfo = NULL;
+	struct INIT_CMD_WIFI_START *prInitCmdWifiStart = NULL;
+	struct mt66xx_chip_info *prChipInfo;
 	uint8_t ucTC, ucCmdSeqNum;
 	uint32_t u4Status = WLAN_STATUS_SUCCESS;
-	struct mt66xx_chip_info *prChipInfo;
+	int retryCount = 0;
 
-	ASSERT(prAdapter);
-	prChipInfo = prAdapter->chip_info;
+    ASSERT(prAdapter);
+    prChipInfo = prAdapter->chip_info;
 
-	DEBUGFUNC("wlanConfigWifiFunc");
+    DEBUGFUNC("wlanConfigWifiFunc");
 
-	/* 1. Allocate CMD Info Packet and its Buffer. */
-	prCmdInfo = cmdBufAllocateCmdInfo(prAdapter,
-		sizeof(struct INIT_HIF_TX_HEADER) +
-		sizeof(struct INIT_HIF_TX_HEADER_PENDING_FOR_HW_32BYTES) +
-		sizeof(struct INIT_CMD_WIFI_START));
+    /* Allocate CMD_INFO packet and buffer */
+    prCmdInfo = cmdBufAllocateCmdInfo(prAdapter,
+                                      sizeof(struct INIT_HIF_TX_HEADER) +
+                                      sizeof(struct INIT_HIF_TX_HEADER_PENDING_FOR_HW_32BYTES) +
+                                      sizeof(struct INIT_CMD_WIFI_START));
+    if (!prCmdInfo) {
+        DBGLOG(INIT, ERROR, "Allocate CMD_INFO_T failed\n");
+        return WLAN_STATUS_FAILURE;
+    }
 
-	if (!prCmdInfo) {
-		DBGLOG(INIT, ERROR, "Allocate CMD_INFO_T ==> FAILED.\n");
-		return WLAN_STATUS_FAILURE;
-	}
-
-	kalMemZero(prCmdInfo->pucInfoBuffer,
-		sizeof(struct INIT_HIF_TX_HEADER) +
-		sizeof(struct INIT_HIF_TX_HEADER_PENDING_FOR_HW_32BYTES) +
-		sizeof(struct INIT_CMD_WIFI_START));
-	prCmdInfo->u2InfoBufLen = sizeof(struct INIT_HIF_TX_HEADER) +
+    kalMemZero(prCmdInfo->pucInfoBuffer,
+               sizeof(struct INIT_HIF_TX_HEADER) +
+               sizeof(struct INIT_HIF_TX_HEADER_PENDING_FOR_HW_32BYTES) +
+               sizeof(struct INIT_CMD_WIFI_START));
+    prCmdInfo->u2InfoBufLen = sizeof(struct INIT_HIF_TX_HEADER) +
 		sizeof(struct INIT_HIF_TX_HEADER_PENDING_FOR_HW_32BYTES) +
 		sizeof(struct INIT_CMD_WIFI_START);
 
+    /* Pick TX resource */
 #if (CFG_USE_TC4_RESOURCE_FOR_INIT_CMD == 1)
-	/* 2. Always use TC4 (TC4 as CPU) */
-	ucTC = TC4_INDEX;
+    ucTC = TC4_INDEX;
 #else
-	/* 2. Use TC0's resource to send init_cmd.
-	 * Only TC0 is allowed because SDIO HW always reports
-	 * CPU's TXQ_CNT at TXQ0_CNT in CR4 architecutre)
-	 */
-	ucTC = TC0_INDEX;
+    ucTC = TC0_INDEX;
 #endif
-	prCmdInfo->ucCID = INIT_CMD_ID_WIFI_START;
+
+    prCmdInfo->ucCID = INIT_CMD_ID_WIFI_START;
+
+    /* Fill CMD header */
+	/* No return value: assume it succeeded if we reached here.
+   Any assertion failure or fatal error is handled inside the macro. */
 	NIC_FILL_CMD_TX_HDR(prAdapter,
-		prCmdInfo->pucInfoBuffer,
-		prCmdInfo->u2InfoBufLen,
-		prCmdInfo->ucCID,
-		INIT_CMD_PACKET_TYPE_ID,
-		&ucCmdSeqNum,
-		FALSE,
-		(void **)&prInitCmdWifiStart,
-		TRUE, 0, S2D_INDEX_CMD_H2N, FALSE);
+						prCmdInfo->pucInfoBuffer,
+						prCmdInfo->u2InfoBufLen,
+						prCmdInfo->ucCID,
+						INIT_CMD_PACKET_TYPE_ID,
+						&ucCmdSeqNum,
+						FALSE,
+						(void **)&prInitCmdWifiStart,
+						TRUE,
+						0,
+						S2D_INDEX_CMD_H2N,
+						FALSE);
 
-	prInitCmdWifiStart->u4Override = 0;
-	if (fgEnable)
-		prInitCmdWifiStart->u4Override |=
-			START_OVERRIDE_START_ADDRESS;
+    if (!prInitCmdWifiStart) {
+        DBGLOG(INIT, ERROR, "prInitCmdWifiStart NULL after fill\n");
+        cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+        return WLAN_STATUS_FAILURE;
+    }
 
-	/* 5G cal until send efuse buffer mode CMD */
+    prInitCmdWifiStart->u4Override = 0;
+    if (fgEnable)
+        prInitCmdWifiStart->u4Override |= START_OVERRIDE_START_ADDRESS;
+
 #if (CFG_EFUSE_BUFFER_MODE_DELAY_CAL == 1)
-	if (prAdapter->fgIsSupportDelayCal == TRUE)
-		prInitCmdWifiStart->u4Override |= START_DELAY_CALIBRATION;
+    if (prAdapter->fgIsSupportDelayCal == TRUE)
+        prInitCmdWifiStart->u4Override |= START_DELAY_CALIBRATION;
 #endif
 
-	if (ucPDA == PDA_CR4)
-		prInitCmdWifiStart->u4Override |= START_WORKING_PDA_OPTION;
+    if (ucPDA == PDA_CR4)
+        prInitCmdWifiStart->u4Override |= START_WORKING_PDA_OPTION;
 
-	prInitCmdWifiStart->u4Address = u4StartAddress;
+    prInitCmdWifiStart->u4Address = u4StartAddress;
 
-	/* 5. Seend WIFI start command */
-	while (1) {
-		/* 5.1 Acquire TX Resource */
-		if (nicTxAcquireResource(prAdapter, ucTC,
-				nicTxGetCmdPageCount(prAdapter, prCmdInfo),
-					 TRUE) == WLAN_STATUS_RESOURCES) {
-			if (nicTxPollingResource(prAdapter,
-						 ucTC) != WLAN_STATUS_SUCCESS) {
-				u4Status = WLAN_STATUS_FAILURE;
-				DBGLOG(INIT, ERROR,
-				       "Fail to get TX resource return within timeout\n");
-				goto exit;
-			}
-			continue;
-		}
-		/* 5.2 Send CMD Info Packet */
-		if (nicTxInitCmd(prAdapter, prCmdInfo,
-				 prChipInfo->u2TxInitCmdPort)
-					!= WLAN_STATUS_SUCCESS) {
-			u4Status = WLAN_STATUS_FAILURE;
-			DBGLOG(INIT, ERROR,
-			       "Fail to transmit WIFI start command\n");
-			goto exit;
-		}
+    /* Send WIFI start command with limited retry */
+    while (retryCount < 10) {
+        if (nicTxAcquireResource(prAdapter, ucTC,
+                                 nicTxGetCmdPageCount(prAdapter, prCmdInfo),
+                                 TRUE) == WLAN_STATUS_SUCCESS)
+            break;
 
-		break;
-	};
+        if (nicTxPollingResource(prAdapter, ucTC) != WLAN_STATUS_SUCCESS) {
+            DBGLOG(INIT, ERROR, "TX resource acquire failed\n");
+            u4Status = WLAN_STATUS_FAILURE;
+            goto exit;
+        }
 
-	DBGLOG(INIT, INFO, "FW_START CMD send, waiting for RSP\n");
+        retryCount++;
+    }
 
-	u4Status = wlanConfigWifiFuncStatus(prAdapter, ucCmdSeqNum);
+    if (retryCount == 10) {
+        DBGLOG(INIT, ERROR, "TX resource not available after retries\n");
+        u4Status = WLAN_STATUS_FAILURE;
+        goto exit;
+    }
 
-	if (u4Status != WLAN_STATUS_SUCCESS) {
-		DBGLOG(INIT, INFO, "FW_START EVT failed\n");
-		GL_DEFAULT_RESET_TRIGGER(prAdapter, RST_CMD_EVT_FAIL);
-	} else {
-		DBGLOG(INIT, INFO, "FW_START EVT success!!\n");
+    if (nicTxInitCmd(prAdapter, prCmdInfo, prChipInfo->u2TxInitCmdPort) != WLAN_STATUS_SUCCESS) {
+        DBGLOG(INIT, ERROR, "Failed to transmit WIFI start command\n");
+        u4Status = WLAN_STATUS_FAILURE;
+        goto exit;
+    }
+
+    DBGLOG(INIT, INFO, "FW_START CMD sent, waiting for RSP\n");
+
+    u4Status = wlanConfigWifiFuncStatus(prAdapter, ucCmdSeqNum);
+    if (u4Status != WLAN_STATUS_SUCCESS) {
+        DBGLOG(INIT, INFO, "FW_START EVT failed\n");
+        GL_DEFAULT_RESET_TRIGGER(prAdapter, RST_CMD_EVT_FAIL);
+    } else {
+        DBGLOG(INIT, INFO, "FW_START EVT success\n");
 
 #if (CFG_SUPPORT_CONNAC3X == 0)
 #if defined(_HIF_PCIE)
-		if (ucPDA == PDA_CR4 && prChipInfo->is_support_wacpu)
-			prChipInfo->rx_event_port = WFDMA1_RX_RING_IDX_1;
-#endif /* _HIF_PCIE */
+        if (ucPDA == PDA_CR4 && prChipInfo->is_support_wacpu)
+            prChipInfo->rx_event_port = WFDMA1_RX_RING_IDX_1;
 #endif
+#endif
+    }
 
-	}
+ exit:
+    /* Free CMD packet */
+    if (prCmdInfo)
+        cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
 
-exit:
-	/* 6. Free CMD Info Packet. */
-	cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
-
-	return u4Status;
+    return u4Status;
 }
+
+
 
 #if (CFG_DOWNLOAD_DYN_MEMORY_MAP == 1)
 uint32_t wlanRamCodeDynMemMapSendComplete(IN struct ADAPTER *prAdapter,

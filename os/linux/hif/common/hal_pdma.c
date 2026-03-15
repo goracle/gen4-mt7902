@@ -1691,6 +1691,25 @@ void halTxUpdateCutThroughDesc(struct GLUE_INFO *prGlueInfo,
 	 * ------------------------------------------------------------------
 	 */
 
+
+/* Disable cut-through for management frames */
+if (prMsduInfo && prMsduInfo->prPacket) {
+    struct sk_buff *prSkb_local = (struct sk_buff *)prMsduInfo->prPacket;
+    const uint8_t *p = prSkb_local->data;
+    uint8_t fc0 = p[0];
+    uint8_t type = (fc0 & 0x0c) >> 2;  /* 0 = management frame */
+
+    if (type == 0) {
+        /* Clear cut-through bit in TX descriptor */
+        uint32_t *pwTxdDw1 = (uint32_t *)(prMsduInfo->aucTxDescBuffer + 4);
+        *pwTxdDw1 &= ~TXD_PKT_FT_CUT_THROUGH;
+
+        DBGLOG(HAL, WARN, "[CUTTHRU] Disabled for mgmt frame\n");
+        return;
+    }
+}
+
+
 	if (unlikely(!prGlueInfo || !prGlueInfo->prAdapter ||
 				 !prMsduInfo || !prFillToken || !prToken)) {
 		DBGLOG(HAL, ERROR, "halTxUpdateCutThroughDesc: NULL arg\n");
@@ -2647,52 +2666,152 @@ void halWpdmaFreeRing(struct GLUE_INFO *prGlueInfo)
 	struct GL_HIF_INFO *prHifInfo;
 	struct HIF_MEM_OPS *prMemOps;
 	struct RTMP_TX_RING *pTxRing;
-	struct RTMP_RX_RING *pRxRing;
+	//struct RTMP_RX_RING *pRxRing;
 	struct TXD_STRUCT *pTxD;
-	struct RTMP_DMACB *prDmaCb;
+	//struct RTMP_DMACB *prDmaCb;
 	void *pPacket, *pBuffer;
+	struct RTMP_DMACB *cell;
 	uint32_t i, j;
+	uint32_t sdlen = 0;
 
 	prHifInfo = &prGlueInfo->rHifInfo;
 	prMemOps = &prHifInfo->rMemOps;
 
 	/* Free Tx Ring Packet */
+	/* Replace the original TX-ring free loop with this hardened version.
+	 * Mirrors init more closely: always unmap if a mapping (PacketPa) exists,
+	 * frees buffers/packets defensively, clears bookkeeping, and clears HW
+	 * descriptors/count registers (with ordering). */
 	for (i = 0; i < NUM_OF_TX_RING; i++) {
 		pTxRing = &prHifInfo->TxRing[i];
+		sdlen = 0;
 		for (j = 0; j < TX_RING_SIZE; j++) {
 			pTxD = (struct TXD_STRUCT *) (pTxRing->Cell[j].AllocVa);
+			cell = &pTxRing->Cell[j];
 
-			pPacket = pTxRing->Cell[j].pPacket;
-			pBuffer = pTxRing->Cell[j].pBuffer;
-			if (prMemOps->unmapTxBuf && pPacket)
-				prMemOps->unmapTxBuf(
-									 prHifInfo, pTxRing->Cell[j].PacketPa,
-									 pTxD->SDLen0);
-			pTxRing->Cell[j].pPacket = NULL;
+			/* Defensive snapshot of fields we will use */
+			pPacket = cell->pPacket;
+			pBuffer = cell->pBuffer;
+			/* PacketPa may be non-zero even if pPacket == NULL; prefer PacketPa to decide unmap */
+			if (pTxD)
+				sdlen = pTxD->SDLen0;
+			else
+				sdlen = 0;
 
-			if (prMemOps->freeBuf && pBuffer)
-				prMemOps->freeBuf(pBuffer, pTxD->SDLen0);
-			pTxRing->Cell[j].pBuffer = NULL;
+			/* Unmap DMA mapping if there is a physical mapping recorded.
+			 * This avoids leaking DMA mappings when pPacket was cleared earlier
+			 * or wasn't set. */
+			if (prMemOps->unmapTxBuf && cell->PacketPa) {
+				prMemOps->unmapTxBuf(prHifInfo, cell->PacketPa, sdlen);
+			}
+			/* Ensure we don't leave stale PA in place */
+			cell->PacketPa = 0;
+
+			/* Free associated packet (if any). Some paths allocate a skbuff/etc.;
+			 * freePacket is the canonical way if available. */
+			if (pPacket) {
+				if (prMemOps->freePacket)
+					prMemOps->freePacket(pPacket);
+			}
+			cell->pPacket = NULL;
+
+			/* Free any separately allocated buffer backing the descriptor */
+			if (prMemOps->freeBuf && pBuffer) {
+				prMemOps->freeBuf(pBuffer, sdlen);
+			}
+			cell->pBuffer = NULL;
+
+			/* Clear any token/state pointers to avoid stale references */
+			cell->prToken = NULL;
 		}
 
+		/* Free descriptor ring memory after all cells are cleaned up */
 		halWpdmaFreeRingDesc(prGlueInfo, &prHifInfo->TxDescRing[i]);
+
+		/* Reset software bookkeeping so init can rely on clean state */
+		pTxRing->TxSwUsedIdx = 0;
+		pTxRing->u4UsedCnt = 0;
+		pTxRing->TxCpuIdx = 0;
+
+		/* Clear hardware CSR state that init sets up.
+		 * Do a write memory barrier before touching HW registers to ensure
+		 * all prior stores are visible to device. */
+		wmb();
+		if (pTxRing->hw_desc_base)
+			kalDevRegWrite(prGlueInfo, pTxRing->hw_desc_base, 0);
+		if (pTxRing->hw_cidx_addr)
+			kalDevRegWrite(prGlueInfo, pTxRing->hw_cidx_addr, 0);
+		if (pTxRing->hw_didx_addr)
+			kalDevRegWrite(prGlueInfo, pTxRing->hw_didx_addr, 0);
+		if (pTxRing->hw_cnt_addr)
+			kalDevRegWrite(prGlueInfo, pTxRing->hw_cnt_addr, 0);
+
+		/* Zero out saved addresses in software to avoid accidental reuse */
+		pTxRing->hw_desc_base = 0;
+		pTxRing->hw_cidx_addr = 0;
+		pTxRing->hw_didx_addr = 0;
+		pTxRing->hw_cnt_addr = 0;
 	}
 
+	/* Hardened RX-ring free loop mirroring halWpdmaInitRxRing */
 	for (i = 0; i < NUM_OF_RX_RING; i++) {
-		pRxRing = &prHifInfo->RxRing[i];
+		struct RTMP_RX_RING *pRxRing = &prHifInfo->RxRing[i];
+		struct RTMP_DMACB *cell;
+		struct RXD_STRUCT *pRxD;
+		//uint32_t phy_addr = 0;
+
+		/* Defensive snapshot of ring state */
+		if (!pRxRing || !pRxRing->u4RingSize)
+			continue;
+
+		/* Clear DMADONE for all descriptors, like init does */
 		for (j = 0; j < pRxRing->u4RingSize; j++) {
-			prDmaCb = &pRxRing->Cell[j];
-			if (prMemOps->unmapRxBuf && prDmaCb->DmaBuf.AllocVa)
+			pRxD = (struct RXD_STRUCT *) pRxRing->Cell[j].AllocVa;
+			cell = &pRxRing->Cell[j];
+
+			if (pRxD && pRxD->DMADONE != 0) {
+				DBGLOG(HAL, WARN, "-->RX_RING_%d[%d]: DMADONE != 0\n", i, j);
+				pRxD->DMADONE = 0;
+			}
+
+			/* Unmap DMA buffer if allocated */
+			if (prMemOps->unmapRxBuf && cell->DmaBuf.AllocVa)
 				prMemOps->unmapRxBuf(prHifInfo,
-									 prDmaCb->DmaBuf.AllocPa,
-									 prDmaCb->DmaBuf.AllocSize);
-			if (prMemOps->freePacket && prDmaCb->pPacket)
-				prMemOps->freePacket(prDmaCb->pPacket);
-			prDmaCb->pPacket = NULL;
+									 cell->DmaBuf.AllocPa,
+									 cell->DmaBuf.AllocSize);
+
+			/* Free any packet and clear pointer */
+			if (prMemOps->freePacket && cell->pPacket)
+				prMemOps->freePacket(cell->pPacket);
+			cell->pPacket = NULL;
+
+			/* Clear buffer pointer */
+			cell->DmaBuf.AllocVa = NULL;
+			cell->DmaBuf.AllocPa = 0;
+			cell->DmaBuf.AllocSize = 0;
 		}
 
+		/* Free the descriptor ring memory */
 		halWpdmaFreeRingDesc(prGlueInfo, &prHifInfo->RxDescRing[i]);
+
+		/* Clear ring bookkeeping, HW registers, and flags */
+		pRxRing->RxCpuIdx = 0;
+		pRxRing->fgSwRead = false;
+		pRxRing->fgIsDumpLog = false;
+
+		/* Zero out hardware addresses to prevent accidental reuse */
+		if (pRxRing->hw_desc_base)
+			kalDevRegWrite(prGlueInfo, pRxRing->hw_desc_base, 0);
+		if (pRxRing->hw_cidx_addr)
+			kalDevRegWrite(prGlueInfo, pRxRing->hw_cidx_addr, 0);
+		if (pRxRing->hw_cnt_addr)
+			kalDevRegWrite(prGlueInfo, pRxRing->hw_cnt_addr, 0);
+
+		pRxRing->hw_desc_base = 0;
+		pRxRing->hw_cidx_addr = 0;
+		pRxRing->hw_cnt_addr = 0;
 	}
+
 }
 
 /*----------------------------------------------------------------------------*/
@@ -2740,63 +2859,146 @@ u_int8_t halWpdmaWaitIdle(struct GLUE_INFO *prGlueInfo,
 	return FALSE;
 }
 
+/*
+ * hal_pdma.c - halWpdmaInitRing (cleaned up)
+ *
+ * Changes:
+ *  - remove unconditional dump_stack() and ERROR-level log spam
+ *  - add NULL checks and clearer INFO logs
+ *  - add opt-in debug tracing:
+ *      - define CFG_HAL_INIT_TRACE to enable GLO_CFG reads/logging
+ *      - define CFG_HAL_INIT_STACKTRACE to enable runtime stack dumps
+ *        controlled by the (optional) runtime flag 'fgHalInitTrace'
+ *
+ * Usage:
+ *  - To get the extra GLO_CFG logging, add -DCFG_HAL_INIT_TRACE when building.
+ *  - To enable stack traces on-demand, add -DCFG_HAL_INIT_STACKTRACE and set
+ *    the runtime integer 'fgHalInitTrace' (non-zero) somewhere appropriate.
+ */
+
+#define CFG_HAL_INIT_STACKTRACE 1
+
+#ifdef CFG_HAL_INIT_STACKTRACE
+/* runtime flag to allow enabling a stack dump only when desired */
+int fgHalInitTrace = 0;
+#endif
+
 void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo)
 {
-	struct GL_HIF_INFO *prHifInfo;
-	struct BUS_INFO *prBusInfo;
+    struct GL_HIF_INFO *prHifInfo;
+    struct BUS_INFO *prBusInfo;
 
-	ASSERT(prGlueInfo);
+    /* basic guard */
+    if (!prGlueInfo) {
+        DBGLOG(HAL, ERROR, "halWpdmaInitRing: prGlueInfo == NULL\n");
+        return;
+    }
 
-	DBGLOG(HAL, ERROR, "[INIT-CALLER] halWpdmaInitRing called\n");
-	dump_stack();
-	//dump_stack();
-	prHifInfo = &prGlueInfo->rHifInfo;
-	prBusInfo = prGlueInfo->prAdapter->chip_info->bus_info;
+    prHifInfo = &prGlueInfo->rHifInfo;
 
-	/* Set DMA global configuration except TX_DMA_EN and RX_DMA_EN bits */
-	if (prBusInfo->pdmaSetup)
-		prBusInfo->pdmaSetup(prGlueInfo, FALSE);
+    /* be defensive about prAdapter and its chip_info */
+    if (!prGlueInfo->prAdapter || !prGlueInfo->prAdapter->chip_info) {
+        DBGLOG(HAL, ERROR, "halWpdmaInitRing: missing prAdapter/chip_info\n");
+        return;
+    }
 
-	//{
-	// 		uint32_t glo = 0;
-	// 		kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-	// 		DBGLOG(HAL, ERROR, "[INIT] GLO_CFG after pdmaSetup(FALSE)=0x%08x\n", glo);
-	// 	}
+    prBusInfo = prGlueInfo->prAdapter->chip_info->bus_info;
+    if (!prBusInfo) {
+        DBGLOG(HAL, ERROR, "halWpdmaInitRing: prBusInfo == NULL\n");
+        return;
+    }
 
-	halWpdmaInitTxRing(prGlueInfo);
+    /* friendly, non-alarming start log */
+    DBGLOG(HAL, INFO, "halWpdmaInitRing: start\n");
 
-	//{
-	// 		uint32_t glo = 0;
-	// 		kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-	// 		DBGLOG(HAL, ERROR, "[INIT] GLO_CFG after InitTxRing=0x%08x\n", glo);
-	// 	}
+#ifdef CFG_HAL_INIT_TRACE
+    /* optional: peek at GLO_CFG before we touch DMA config */
+    {
+        uint32_t glo = 0;
+        if (kalDevRegRead) {
+            kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+            DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG before pdmaSetup(FALSE)=0x%08x\n", glo);
+        }
+    }
+#endif
 
-	/* Init RX Ring0 Base/Size/Index pointer CSR */
-	halWpdmaInitRxRing(prGlueInfo);
+    /* Configure DMA global bits without enabling TX/RX DMA */
+    if (prBusInfo->pdmaSetup)
+        prBusInfo->pdmaSetup(prGlueInfo, FALSE);
 
-	//{
-	// 		uint32_t glo = 0;
-	// 		kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-	// 		DBGLOG(HAL, ERROR, "[INIT] GLO_CFG after InitRxRing=0x%08x\n", glo);
-	// 	}
+#ifdef CFG_HAL_INIT_TRACE
+    {
+        uint32_t glo = 0;
+        if (kalDevRegRead) {
+            kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+            DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG after pdmaSetup(FALSE)=0x%08x\n", glo);
+        }
+    }
+#endif
 
-	if (prBusInfo->pdmaSetup)
-		prBusInfo->pdmaSetup(prGlueInfo, TRUE);
+    /*
+     * Init TX ring(s). Keep the function call as-is so any specialized
+     * TX initialization logic in halWpdmaInitTxRing is preserved.
+     */
+    halWpdmaInitTxRing(prGlueInfo);
 
-	if (prBusInfo->wfdmaManualPrefetch)
-		prBusInfo->wfdmaManualPrefetch(prGlueInfo);
+#ifdef CFG_HAL_INIT_TRACE
+    {
+        uint32_t glo = 0;
+        if (kalDevRegRead) {
+            kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+            DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG after InitTxRing=0x%08x\n", glo);
+        }
+    }
+#endif
 
-	{
-		// 		uint32_t glo = 0;
-		// 		kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-		// 		DBGLOG(HAL, ERROR, "[INIT] GLO_CFG after wfdmaManualPrefetch=0x%08x\n", glo);
-		// 	}
+    /* Init RX ring0 base/size/index CSR */
+    halWpdmaInitRxRing(prGlueInfo);
 
-		/* Write sleep mode magic num to dummy reg */
-		if (prBusInfo->setDummyReg)
-			prBusInfo->setDummyReg(prGlueInfo);
-	}
+#ifdef CFG_HAL_INIT_TRACE
+    {
+        uint32_t glo = 0;
+        if (kalDevRegRead) {
+            kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+            DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG after InitRxRing=0x%08x\n", glo);
+        }
+    }
+#endif
+
+    /* Now finalize DMA setup (this may enable DMA master bits) */
+    if (prBusInfo->pdmaSetup)
+        prBusInfo->pdmaSetup(prGlueInfo, TRUE);
+
+    /* Optional manual prefetch step for WFDMA */
+    if (prBusInfo->wfdmaManualPrefetch)
+        prBusInfo->wfdmaManualPrefetch(prGlueInfo);
+
+#ifdef CFG_HAL_INIT_TRACE
+    {
+        uint32_t glo = 0;
+        if (kalDevRegRead) {
+            kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+            DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG after wfdmaManualPrefetch=0x%08x\n", glo);
+        }
+    }
+#endif
+
+    /* Write sleep-mode magic to dummy register if provided */
+    if (prBusInfo->setDummyReg)
+        prBusInfo->setDummyReg(prGlueInfo);
+
+    DBGLOG(HAL, INFO, "halWpdmaInitRing: complete\n");
+
+#ifdef CFG_HAL_INIT_STACKTRACE
+    /* only dump stack if explicitly requested at runtime (avoids log spam) */
+    if (fgHalInitTrace) {
+        DBGLOG(HAL, INFO, "halWpdmaInitRing: runtime stacktrace requested\n");
+        dump_stack();
+    }
+#endif
 }
+
+
 
 void halWpdmaInitTxRing(IN struct GLUE_INFO *prGlueInfo)
 {
