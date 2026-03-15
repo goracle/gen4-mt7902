@@ -2883,120 +2883,160 @@ u_int8_t halWpdmaWaitIdle(struct GLUE_INFO *prGlueInfo,
 int fgHalInitTrace = 0;
 #endif
 
+
+
+
+
+
 void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo)
 {
-    struct GL_HIF_INFO *prHifInfo;
-    struct BUS_INFO *prBusInfo;
+	struct GL_HIF_INFO *prHifInfo;
+	struct BUS_INFO *prBusInfo;
 
-    /* basic guard */
-    if (!prGlueInfo) {
-        DBGLOG(HAL, ERROR, "halWpdmaInitRing: prGlueInfo == NULL\n");
-        return;
-    }
+	/* basic guard */
+	if (!prGlueInfo) {
+		DBGLOG(HAL, ERROR, "halWpdmaInitRing: prGlueInfo == NULL\n");
+		return;
+	}
 
-    prHifInfo = &prGlueInfo->rHifInfo;
+	prHifInfo = &prGlueInfo->rHifInfo;
 
-    /* be defensive about prAdapter and its chip_info */
-    if (!prGlueInfo->prAdapter || !prGlueInfo->prAdapter->chip_info) {
-        DBGLOG(HAL, ERROR, "halWpdmaInitRing: missing prAdapter/chip_info\n");
-        return;
-    }
+	/* be defensive about prAdapter and its chip_info */
+	if (!prGlueInfo->prAdapter || !prGlueInfo->prAdapter->chip_info) {
+		DBGLOG(HAL, ERROR, "halWpdmaInitRing: missing prAdapter/chip_info\n");
+		return;
+	}
 
-    prBusInfo = prGlueInfo->prAdapter->chip_info->bus_info;
-    if (!prBusInfo) {
-        DBGLOG(HAL, ERROR, "halWpdmaInitRing: prBusInfo == NULL\n");
-        return;
-    }
+	prBusInfo = prGlueInfo->prAdapter->chip_info->bus_info;
+	if (!prBusInfo) {
+		DBGLOG(HAL, ERROR, "halWpdmaInitRing: prBusInfo == NULL\n");
+		return;
+	}
 
-    /* friendly, non-alarming start log */
-    DBGLOG(HAL, INFO, "halWpdmaInitRing: start\n");
-
-#ifdef CFG_HAL_INIT_TRACE
-    /* optional: peek at GLO_CFG before we touch DMA config */
-    {
-        uint32_t glo = 0;
-        if (kalDevRegRead) {
-            kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-            DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG before pdmaSetup(FALSE)=0x%08x\n", glo);
-        }
-    }
-#endif
-
-    /* Configure DMA global bits without enabling TX/RX DMA */
-    if (prBusInfo->pdmaSetup)
-        prBusInfo->pdmaSetup(prGlueInfo, FALSE);
+	/* friendly start log */
+	DBGLOG(HAL, INFO, "halWpdmaInitRing: start\n");
 
 #ifdef CFG_HAL_INIT_TRACE
-    {
-        uint32_t glo = 0;
-        if (kalDevRegRead) {
-            kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-            DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG after pdmaSetup(FALSE)=0x%08x\n", glo);
-        }
-    }
+	/* optional: peek at GLO_CFG before we touch DMA config */
+	{
+		uint32_t glo = 0;
+		if (kalDevRegRead) {
+			kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+			DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG before pdmaSetup(FALSE)=0x%08x\n", glo);
+		}
+	}
 #endif
 
-    /*
-     * Init TX ring(s). Keep the function call as-is so any specialized
-     * TX initialization logic in halWpdmaInitTxRing is preserved.
-     */
-    halWpdmaInitTxRing(prGlueInfo);
+	/* Configure DMA global bits without enabling TX/RX DMA */
+	if (prBusInfo->pdmaSetup)
+		prBusInfo->pdmaSetup(prGlueInfo, FALSE);
 
 #ifdef CFG_HAL_INIT_TRACE
-    {
-        uint32_t glo = 0;
-        if (kalDevRegRead) {
-            kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-            DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG after InitTxRing=0x%08x\n", glo);
-        }
-    }
+	{
+		uint32_t glo = 0;
+		if (kalDevRegRead) {
+			kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+			DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG after pdmaSetup(FALSE)=0x%08x\n", glo);
+		}
+	}
 #endif
 
-    /* Init RX ring0 base/size/index CSR */
-    halWpdmaInitRxRing(prGlueInfo);
+	/* Init TX ring(s). Keep the function call as-is so any specialized
+	 * TX initialization logic in halWpdmaInitTxRing is preserved.
+	 */
+	halWpdmaInitTxRing(prGlueInfo);
 
 #ifdef CFG_HAL_INIT_TRACE
-    {
-        uint32_t glo = 0;
-        if (kalDevRegRead) {
-            kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-            DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG after InitRxRing=0x%08x\n", glo);
-        }
-    }
+	{
+		uint32_t glo = 0;
+		if (kalDevRegRead) {
+			kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+			DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG after InitTxRing=0x%08x\n", glo);
+		}
+	}
 #endif
 
-    /* Now finalize DMA setup (this may enable DMA master bits) */
-    if (prBusInfo->pdmaSetup)
-        prBusInfo->pdmaSetup(prGlueInfo, TRUE);
-
-    /* Optional manual prefetch step for WFDMA */
-    if (prBusInfo->wfdmaManualPrefetch)
-        prBusInfo->wfdmaManualPrefetch(prGlueInfo);
+	/* Init RX ring base/size/index CSR */
+	halWpdmaInitRxRing(prGlueInfo);
 
 #ifdef CFG_HAL_INIT_TRACE
-    {
-        uint32_t glo = 0;
-        if (kalDevRegRead) {
-            kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-            DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG after wfdmaManualPrefetch=0x%08x\n", glo);
-        }
-    }
+	{
+		uint32_t glo = 0;
+		if (kalDevRegRead) {
+			kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+			DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG after InitRxRing=0x%08x\n", glo);
+		}
+	}
 #endif
 
-    /* Write sleep-mode magic to dummy register if provided */
-    if (prBusInfo->setDummyReg)
-        prBusInfo->setDummyReg(prGlueInfo);
+	/* --- KEY CHANGE: program manual prefetch BEFORE enabling DMA ---
+	 *
+	 * mt76 programs prefetch (EXT_CTRL) before enabling DMA and then
+	 * enables DMA. This ordering ensures the hardware prefetch engine has
+	 * correct ring base/offset values available prior to DMA master being set.
+	 *
+	 * Vendor drivers previously did manualPrefetch *after* pdmaSetup(TRUE).
+	 * That ordering can allow DMA/masters to start before prefetch is in
+	 * place and cause unreliable behavior on some platforms. So we move the
+	 * prefetch step here to match mt76 logic.
+	 */
+	if (prBusInfo->wfdmaManualPrefetch) {
+		DBGLOG(INIT, INFO, "halWpdmaInitRing: manual prefetch hook present, calling it\n");
+		prBusInfo->wfdmaManualPrefetch(prGlueInfo);
 
-    DBGLOG(HAL, INFO, "halWpdmaInitRing: complete\n");
+		/* Read-back a key register to ensure PCIe posting of EXT_CTRL writes.
+		 * This mirrors mt76's readback of TX_RING16_EXT_CTRL and a subsequent wmb().
+		 * Use GLO_CFG or TX_RING16_EXT_CTRL depending on availability.
+		 */
+		{
+			uint32_t tmp;
+
+#ifdef WF_WFDMA_HOST_DMA0_WPDMA_TX_RING16_EXT_CTRL_ADDR
+			kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING16_EXT_CTRL_ADDR, &tmp);
+#else
+			kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &tmp);
+#endif
+
+
+			DBGLOG(HAL, INFO,
+				   "halWpdmaInitRing: post-prefetch readback=0x%08x\n",
+				   tmp);
+
+			wmb();
+		}
+	} else {
+		DBGLOG(INIT, WARN, "halWpdmaInitRing: manual prefetch hook not set, skipping\n");
+	}
+
+	/* Now finalize DMA setup (this may enable DMA master bits) */
+	if (prBusInfo->pdmaSetup)
+		prBusInfo->pdmaSetup(prGlueInfo, TRUE);
+
+#ifdef CFG_HAL_INIT_TRACE
+	{
+		uint32_t glo = 0;
+		if (kalDevRegRead) {
+			kalDevRegRead(prGlueInfo, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+			DBGLOG(HAL, INFO, "halWpdmaInitRing: GLO_CFG after pdmaSetup(TRUE)=0x%08x\n", glo);
+		}
+	}
+#endif
+
+	/* Write sleep-mode magic to dummy register if provided */
+	if (prBusInfo->setDummyReg)
+		prBusInfo->setDummyReg(prGlueInfo);
+
+	DBGLOG(HAL, INFO, "halWpdmaInitRing: complete\n");
 
 #ifdef CFG_HAL_INIT_STACKTRACE
-    /* only dump stack if explicitly requested at runtime (avoids log spam) */
-    if (fgHalInitTrace) {
-        DBGLOG(HAL, INFO, "halWpdmaInitRing: runtime stacktrace requested\n");
-        dump_stack();
-    }
+	/* only dump stack if explicitly requested at runtime (avoids log spam) */
+	if (fgHalInitTrace) {
+		DBGLOG(HAL, INFO, "halWpdmaInitRing: runtime stacktrace requested\n");
+		dump_stack();
+	}
 #endif
 }
+
 
 
 

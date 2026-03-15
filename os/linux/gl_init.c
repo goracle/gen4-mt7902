@@ -6743,103 +6743,90 @@ static int wlanProbe_BusInit(void *pvData)
 }
 
 
-/* place near other mt79xx helpers */
 static int mt79xx_wfdma_early_init(struct ADAPTER *prAdapter)
 {
-    struct GLUE_INFO      *prGlueInfo;
-    struct GL_HIF_INFO    *prHifInfo;
-    struct BUS_INFO       *prBusInfo;
-    struct mt66xx_chip_info *chip;
-    uint32_t               glo;
-    uint32_t               tx16;
-    int                    rc = 0;
+	struct GLUE_INFO *prGlueInfo;
+	struct GL_HIF_INFO *prHifInfo;
+	struct BUS_INFO *prBusInfo;
+	struct mt66xx_chip_info *chip;
+	uint32_t glo;
+	uint32_t tx16;
+	int rc = 0;
 
-    if (!prAdapter) {
-        DBGLOG(INIT, ERROR, "%s: null prAdapter\n", __func__);
-        return -EINVAL;
-    }
+	if (!prAdapter) {
+		DBGLOG(INIT, ERROR, "%s: null prAdapter\n", __func__);
+		return -EINVAL;
+	}
 
-    prGlueInfo = prAdapter->prGlueInfo;
-    if (!prGlueInfo) {
-        DBGLOG(INIT, ERROR, "%s: null prGlueInfo\n", __func__);
-        return -EINVAL;
-    }
+	prGlueInfo = prAdapter->prGlueInfo;
+	if (!prGlueInfo) {
+		DBGLOG(INIT, ERROR, "%s: null prGlueInfo\n", __func__);
+		return -EINVAL;
+	}
 
-    chip = prAdapter->chip_info;
-    if (!chip) {
-        DBGLOG(INIT, ERROR, "%s: missing chip_info\n", __func__);
-        return -ENOTSUPP;
-    }
+	chip = prAdapter->chip_info;
+	if (!chip) {
+		DBGLOG(INIT, ERROR, "%s: missing chip_info\n", __func__);
+		return -ENOTSUPP;
+	}
 
-    prHifInfo = &prGlueInfo->rHifInfo;
-    prBusInfo = chip->bus_info;
-    if (!prBusInfo) {
-        DBGLOG(INIT, ERROR, "%s: missing bus_info\n", __func__);
-        return -ENOTSUPP;
-    }
+	prHifInfo = &prGlueInfo->rHifInfo;
+	prBusInfo = chip->bus_info;
+	if (!prBusInfo) {
+		DBGLOG(INIT, ERROR, "%s: missing bus_info\n", __func__);
+		return -ENOTSUPP;
+	}
 
-    /*
-     * Diagnostic: read GLO_CFG before touching anything so logs show initial state
-     */
-    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-    DBGLOG(INIT, INFO, "%s: EARLY GLO_CFG pre-init = 0x%08x\n", __func__, glo);
+	/* Diagnostic: read GLO_CFG before touching anything so logs show initial state */
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+	DBGLOG(INIT, INFO, "%s: EARLY WFDMA GLO_CFG pre-init = 0x%08x\n", __func__, glo);
 
-    /*
-     * Allocate ring structures and initialize them.
-     * halWpdmaAllocRing/halWpdmaInitRing are the canonical helpers used elsewhere,
-     * so using them here keeps order and semantics consistent.
-     *
-     * We pass 'true' to halWpdmaAllocRing to request the usual runtime allocations.
-     */
-    if (!halWpdmaAllocRing(prGlueInfo, true)) {
-        DBGLOG(INIT, ERROR, "%s: halWpdmaAllocRing failed\n", __func__);
-        return -ENOMEM;
-    }
+	/* Allocate ring structures (request usual runtime allocations) */
+	if (!halWpdmaAllocRing(prGlueInfo, true)) {
+		DBGLOG(INIT, ERROR, "%s: halWpdmaAllocRing failed\n", __func__);
+		return -ENOMEM;
+	}
 
-    /*
-     * Initialize ring CSRs + GLO config.  halWpdmaInitRing will:
-     *  - call bus_info->pdmaSetup(..., FALSE)
-     *  - program TX/RX base/size/index CSRs
-     *  - call bus_info->pdmaSetup(..., TRUE) (finalize / enable master bits)
-     *  - optionally perform manual prefetch
-     *
-     * This mirrors the normal path and ensures registers are consistent for FW.
-     */
-    halWpdmaInitRing(prGlueInfo);
+	/*
+	 * Initialize ring CSRs + GLO config.
+	 * halWpdmaInitRing now:
+	 *  - calls pdmaSetup(..., FALSE)
+	 *  - programs TX/RX ring base/size/index
+	 *  - performs manual prefetch (EXT_CTRL writes + readback + wmb)
+	 *  - calls pdmaSetup(..., TRUE)
+	 *
+	 * This ordering matches mt76's logic (program prefetch BEFORE enabling DMA),
+	 * while preserving vendor safety checks.
+	 */
+	halWpdmaInitRing(prGlueInfo);
 
-    /*
-     * Strong ordering: ensure CPU writes are posted before we read-back registers.
-     * As mt drivers do: read-back + wmb ordering is important on PCIe.
-     */
-    wmb();
+	/* Strong ordering: ensure CPU writes are posted before we read-back registers */
+	wmb();
 
-    /* Read final GLO_CFG and key EXT_CTRL to confirm the state */
-    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING16_EXT_CTRL_ADDR, &tx16);
+	/* Read final GLO_CFG and key EXT_CTRL to confirm the state (post-init diagnostic) */
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING16_EXT_CTRL_ADDR, &tx16);
 
-    DBGLOG(INIT, INFO, "%s: EARLY GLO_CFG post-init = 0x%08x (bit15=%d)\n",
-           __func__, glo, !!(glo & BIT(15)));
-    DBGLOG(INIT, INFO, "%s: TX_RING16_EXT_CTRL post-init = 0x%08x\n",
-           __func__, tx16);
+	DBGLOG(INIT, INFO, "%s: EARLY WFDMA GLO_CFG post-init = 0x%08x (bit15=%d)\n",
+	       __func__, glo, !!(glo & BIT(15)));
+	DBGLOG(INIT, INFO, "%s: TX_RING16_EXT_CTRL post-init = 0x%08x\n",
+	       __func__, tx16);
 
-    /*
-     * Basic sanity: if GLO_CFG is 0xffffffff the bus is dead.
-     * If GLO_CFG == 0x0 it's suspicious (DMA disabled); caller can decide.
-     */
-    if (glo == 0xffffffff) {
-        DBGLOG(INIT, ERROR, "%s: GLO_CFG=0xffffffff - bus dead after early init\n", __func__);
-        rc = -EIO;
-        goto out;
-    }
+	/* Basic sanity: if GLO_CFG is 0xffffffff the bus is dead. If 0x0 it's suspicious. */
+	if (glo == 0xffffffff) {
+		DBGLOG(INIT, ERROR, "%s: GLO_CFG=0xffffffff - bus dead after early init\n", __func__);
+		rc = -EIO;
+		goto out;
+	}
 
-    if (glo == 0x00000000) {
-        DBGLOG(INIT, WARN, "%s: GLO_CFG == 0x0 after early init (DMA master bits not set)\n",
-               __func__);
-        /* still allow caller to proceed; later reinit may set bits */
-    }
+	if (glo == 0x00000000) {
+		DBGLOG(INIT, WARN, "%s: GLO_CFG == 0x0 after early init (DMA master bits not set)\n",
+		       __func__);
+		/* allow caller to proceed; later reinit may set bits */
+	}
 
 out:
-    return rc;
+	return rc;
 }
 
 /* ------------------------------------------------------------------ */
