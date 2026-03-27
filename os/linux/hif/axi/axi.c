@@ -918,12 +918,14 @@ void glResetHifInfo(struct GLUE_INFO *prGlueInfo)
  * \return (none)
  */
 /*----------------------------------------------------------------------------*/
+#if 0
 u_int8_t glBusInit(void *pvData)
 {
 	ASSERT(pvData);
 
 	return TRUE;
 }
+#endif
 
 /*----------------------------------------------------------------------------*/
 /*!
