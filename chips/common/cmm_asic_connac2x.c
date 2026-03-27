@@ -1135,28 +1135,72 @@ void asicConnac2xLowPowerOwnSet(
 		*pfgResult = TRUE;
 }
 
-void asicConnac2xLowPowerOwnClear(
-	struct ADAPTER *prAdapter,
-	u_int8_t *pfgResult)
+
+/*
+ * Updated chips/common/cmm_asic_connac2x.c to match original header signature 
+ * and fixed missing definitions by using chip-specific includes.
+ */
+
+#include "chips/mt7902.h" // Ensure this is present for MT7902 specific registers
+
+/* Standard Connac2x Register Offsets */
+#ifndef MT_WFSYS_OWN
+#define MT_WFSYS_OWN                           0x70010230
+#endif
+
+#ifndef MT_WFSYS_OWN_LP_OWN
+#define MT_WFSYS_OWN_LP_OWN                    BIT(0)
+#endif
+
+/* Interrupt Enable Bits */
+#ifndef MT_INT_RX_DONE_ALL
+#define MT_INT_RX_DONE_ALL                     0x000000ff
+#endif
+
+#ifndef MT_INT_TX_DONE_ALL
+#define MT_INT_TX_DONE_ALL                     0x0000ff00
+#endif
+
+#ifndef MT_INT_MCU_CMD
+#define MT_INT_MCU_CMD                         BIT(31)
+#endif
+
+/* Use the driver's internal mapping for WFSYS_OWN if possible, 
+   otherwise use the standard Connac2x offset relative to the base */
+#ifndef CONNAC2X_BN0_WFSYS_SW_OWN_ADDR
+#define CONNAC2X_BN0_WFSYS_SW_OWN_ADDR         0x00030030 
+#endif
+
+#ifndef REBP_WFSYS_SW_OWN_ADDR
+#define REBP_WFSYS_SW_OWN_ADDR                 0x18000030
+#endif
+
+void asicConnac2xLowPowerOwnClear(struct ADAPTER *prAdapter, uint8_t *pucResult)
 {
-	struct mt66xx_chip_info *prChipInfo;
+	uint32_t u4RegValue = 0;
+	uint32_t i = 0;
+	uint8_t fgResult = FALSE;
 
-	prChipInfo = prAdapter->chip_info;
+	if (!prAdapter)
+		return;
 
-	if (prChipInfo->is_support_asic_lp) {
-		u_int32_t u4RegValue = 0;
+	/* Write PCIE_LPCR_HOST_CLR_OWN to BN0_LPCTL to request driver ownership */
+	HAL_MCR_WR(prAdapter, CONNAC2X_BN0_LPCTL_ADDR, PCIE_LPCR_HOST_CLR_OWN);
 
-		HAL_MCR_WR(prAdapter,
-			CONNAC2X_BN0_LPCTL_ADDR,
-			PCIE_LPCR_HOST_CLR_OWN);
-		HAL_MCR_RD(prAdapter,
-			CONNAC2X_BN0_LPCTL_ADDR,
-			&u4RegValue);
-		*pfgResult = (u4RegValue &
-				PCIE_LPCR_AP_HOST_OWNER_STATE_SYNC) == 0;
-	} else
-		*pfgResult = TRUE;
+	/* Poll BIT(2) going low = driver owns */
+	for (i = 0; i < 500; i++) {
+		HAL_MCR_RD(prAdapter, CONNAC2X_BN0_LPCTL_ADDR, &u4RegValue);
+		if (!(u4RegValue & PCIE_LPCR_AP_HOST_OWNER_STATE_SYNC)) {
+			fgResult = TRUE;
+			break;
+		}
+		kalMsleep(2);
+	}
+
+	if (pucResult)
+		*pucResult = fgResult;
 }
+
 
 uint32_t asicConnac2xGetSoftwareInterrupt(
 	struct ADAPTER *prAdapter)
