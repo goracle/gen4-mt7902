@@ -80,6 +80,12 @@
 #define PC_LOG_NUM 32
 
 
+#define MT7902_TX_DONE_INT0    BIT(0)
+#define MT7902_TX_DONE_INT1    BIT(1)
+#define MT7902_TX_DONE_INT2    BIT(2)
+#define MT7902_TX_DONE_INT3    BIT(3)
+#define MT7902_TX_DONE_INT_MCU BIT(17) /* Ring 15 */
+
 /*******************************************************************************
 *                         D A T A   T Y P E S
 ********************************************************************************
