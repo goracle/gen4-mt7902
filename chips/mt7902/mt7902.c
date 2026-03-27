@@ -665,6 +665,7 @@ void mt7902_enable_irq(struct ADAPTER *prAdapter)
 
 
 
+#if 0
 static void mt7902WfdmaPreInit(struct GLUE_INFO *prGlueInfo)
 {
 	struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
@@ -696,6 +697,7 @@ static void mt7902WfdmaPreInit(struct GLUE_INFO *prGlueInfo)
 		   MT7902_WFDMA0_RST_LOGIC | MT7902_WFDMA0_RST_DMASHDL);
 	kalUdelay(1000);
 }
+#endif
 
 
 void mt7902ReadIntStatus(
@@ -1653,7 +1655,7 @@ struct BUS_INFO mt7902_bus_info = {
 	.rx_evt_ring_buf_size = CFG_RX_MAX_PKT_SIZE,
 	/* null wfdmaManualPrefetch if want to disable manual mode */
 	.wfdmaManualPrefetch = mt7902Connac2xWfdmaManualPrefetch,
-	.wfdmaPreInit = mt7902WfdmaPreInit,
+	//.wfdmaPreInit = mt7902WfdmaPreInit,
 	.lowPowerOwnRead = asicConnac2xLowPowerOwnRead,
 	.lowPowerOwnSet = asicConnac2xLowPowerOwnSet,
 	.lowPowerOwnClear = asicConnac2xLowPowerOwnClear,
