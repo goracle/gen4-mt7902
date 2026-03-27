@@ -1682,11 +1682,10 @@ uint32_t wlanConfigWifiFuncStatus(IN struct ADAPTER *prAdapter,
     return u4Status;
 }
 
-
 uint32_t wlanConfigWifiFunc(IN struct ADAPTER *prAdapter,
-							IN u_int8_t fgEnable,
-							IN uint32_t u4StartAddress,
-							IN uint8_t ucPDA)
+			    IN u_int8_t fgEnable,
+			    IN uint32_t u4StartAddress,
+			    IN uint8_t ucPDA)
 {
 	struct CMD_INFO *prCmdInfo = NULL;
 	struct INIT_CMD_WIFI_START *prInitCmdWifiStart = NULL;
@@ -1695,125 +1694,123 @@ uint32_t wlanConfigWifiFunc(IN struct ADAPTER *prAdapter,
 	uint32_t u4Status = WLAN_STATUS_SUCCESS;
 	int retryCount = 0;
 
-    ASSERT(prAdapter);
-    prChipInfo = prAdapter->chip_info;
+	ASSERT(prAdapter);
+	prChipInfo = prAdapter->chip_info;
 
-    DEBUGFUNC("wlanConfigWifiFunc");
+	DEBUGFUNC("wlanConfigWifiFunc");
 
-    /* Allocate CMD_INFO packet and buffer */
-    prCmdInfo = cmdBufAllocateCmdInfo(prAdapter,
-                                      sizeof(struct INIT_HIF_TX_HEADER) +
-                                      sizeof(struct INIT_HIF_TX_HEADER_PENDING_FOR_HW_32BYTES) +
-                                      sizeof(struct INIT_CMD_WIFI_START));
-    if (!prCmdInfo) {
-        DBGLOG(INIT, ERROR, "Allocate CMD_INFO_T failed\n");
-        return WLAN_STATUS_FAILURE;
-    }
+	/* Allocate CMD_INFO packet and buffer */
+	prCmdInfo = cmdBufAllocateCmdInfo(prAdapter,
+					  sizeof(struct INIT_HIF_TX_HEADER) +
+					  sizeof(struct INIT_HIF_TX_HEADER_PENDING_FOR_HW_32BYTES) +
+					  sizeof(struct INIT_CMD_WIFI_START));
+	if (!prCmdInfo) {
+		DBGLOG(INIT, ERROR, "Allocate CMD_INFO_T failed\n");
+		return WLAN_STATUS_FAILURE;
+	}
 
-    kalMemZero(prCmdInfo->pucInfoBuffer,
-               sizeof(struct INIT_HIF_TX_HEADER) +
-               sizeof(struct INIT_HIF_TX_HEADER_PENDING_FOR_HW_32BYTES) +
-               sizeof(struct INIT_CMD_WIFI_START));
-    prCmdInfo->u2InfoBufLen = sizeof(struct INIT_HIF_TX_HEADER) +
-		sizeof(struct INIT_HIF_TX_HEADER_PENDING_FOR_HW_32BYTES) +
-		sizeof(struct INIT_CMD_WIFI_START);
+	kalMemZero(prCmdInfo->pucInfoBuffer,
+		   sizeof(struct INIT_HIF_TX_HEADER) +
+		   sizeof(struct INIT_HIF_TX_HEADER_PENDING_FOR_HW_32BYTES) +
+		   sizeof(struct INIT_CMD_WIFI_START));
+	prCmdInfo->u2InfoBufLen = sizeof(struct INIT_HIF_TX_HEADER) +
+				  sizeof(struct INIT_HIF_TX_HEADER_PENDING_FOR_HW_32BYTES) +
+				  sizeof(struct INIT_CMD_WIFI_START);
 
-    /* Pick TX resource */
+	/* Pick TX resource */
 #if (CFG_USE_TC4_RESOURCE_FOR_INIT_CMD == 1)
-    ucTC = TC4_INDEX;
+	ucTC = TC4_INDEX;
 #else
-    ucTC = TC0_INDEX;
+	ucTC = TC0_INDEX;
 #endif
 
-    prCmdInfo->ucCID = INIT_CMD_ID_WIFI_START;
+	prCmdInfo->ucCID = INIT_CMD_ID_WIFI_START;
 
-    /* Fill CMD header */
-	/* No return value: assume it succeeded if we reached here.
-   Any assertion failure or fatal error is handled inside the macro. */
+	/* Fill CMD header */
 	NIC_FILL_CMD_TX_HDR(prAdapter,
-						prCmdInfo->pucInfoBuffer,
-						prCmdInfo->u2InfoBufLen,
-						prCmdInfo->ucCID,
-						INIT_CMD_PACKET_TYPE_ID,
-						&ucCmdSeqNum,
-						FALSE,
-						(void **)&prInitCmdWifiStart,
-						TRUE,
-						0,
-						S2D_INDEX_CMD_H2N,
-						FALSE);
+			    prCmdInfo->pucInfoBuffer,
+			    prCmdInfo->u2InfoBufLen,
+			    prCmdInfo->ucCID,
+			    INIT_CMD_PACKET_TYPE_ID,
+			    &ucCmdSeqNum,
+			    FALSE,
+			    (void **)&prInitCmdWifiStart,
+			    TRUE,
+			    0,
+			    S2D_INDEX_CMD_H2N,
+			    FALSE);
 
-    if (!prInitCmdWifiStart) {
-        DBGLOG(INIT, ERROR, "prInitCmdWifiStart NULL after fill\n");
-        cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
-        return WLAN_STATUS_FAILURE;
-    }
+	if (!prInitCmdWifiStart) {
+		DBGLOG(INIT, ERROR, "prInitCmdWifiStart NULL after fill\n");
+		cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+		return WLAN_STATUS_FAILURE;
+	}
 
-    prInitCmdWifiStart->u4Override = 0;
-    if (fgEnable)
-        prInitCmdWifiStart->u4Override |= START_OVERRIDE_START_ADDRESS;
+	prInitCmdWifiStart->u4Override = 0;
+	if (fgEnable)
+		prInitCmdWifiStart->u4Override |= START_OVERRIDE_START_ADDRESS;
 
 #if (CFG_EFUSE_BUFFER_MODE_DELAY_CAL == 1)
-    if (prAdapter->fgIsSupportDelayCal == TRUE)
-        prInitCmdWifiStart->u4Override |= START_DELAY_CALIBRATION;
+	if (prAdapter->fgIsSupportDelayCal == TRUE)
+		prInitCmdWifiStart->u4Override |= START_DELAY_CALIBRATION;
 #endif
 
-    if (ucPDA == PDA_CR4)
-        prInitCmdWifiStart->u4Override |= START_WORKING_PDA_OPTION;
+	if (ucPDA == PDA_CR4)
+		prInitCmdWifiStart->u4Override |= START_WORKING_PDA_OPTION;
 
-    prInitCmdWifiStart->u4Address = u4StartAddress;
+	prInitCmdWifiStart->u4Address = u4StartAddress;
 
-    /* Send WIFI start command with limited retry */
-    while (retryCount < 10) {
-        if (nicTxAcquireResource(prAdapter, ucTC,
-                                 nicTxGetCmdPageCount(prAdapter, prCmdInfo),
-                                 TRUE) == WLAN_STATUS_SUCCESS)
-            break;
+	/* Send WIFI start command with limited retry */
+	while (retryCount < 10) {
+		if (nicTxAcquireResource(prAdapter, ucTC,
+					 nicTxGetCmdPageCount(prAdapter, prCmdInfo),
+					 TRUE) == WLAN_STATUS_SUCCESS)
+			break;
 
-        if (nicTxPollingResource(prAdapter, ucTC) != WLAN_STATUS_SUCCESS) {
-            DBGLOG(INIT, ERROR, "TX resource acquire failed\n");
-            u4Status = WLAN_STATUS_FAILURE;
-            goto exit;
-        }
+		if (nicTxPollingResource(prAdapter, ucTC) != WLAN_STATUS_SUCCESS) {
+			DBGLOG(INIT, ERROR, "TX resource acquire failed\n");
+			u4Status = WLAN_STATUS_FAILURE;
+			goto exit;
+		}
 
-        retryCount++;
-    }
+		retryCount++;
+	}
 
-    if (retryCount == 10) {
-        DBGLOG(INIT, ERROR, "TX resource not available after retries\n");
-        u4Status = WLAN_STATUS_FAILURE;
-        goto exit;
-    }
+	if (retryCount == 10) {
+		DBGLOG(INIT, ERROR, "TX resource not available after retries\n");
+		u4Status = WLAN_STATUS_FAILURE;
+		goto exit;
+	}
 
-    if (nicTxInitCmd(prAdapter, prCmdInfo, prChipInfo->u2TxInitCmdPort) != WLAN_STATUS_SUCCESS) {
-        DBGLOG(INIT, ERROR, "Failed to transmit WIFI start command\n");
-        u4Status = WLAN_STATUS_FAILURE;
-        goto exit;
-    }
+	if (nicTxInitCmd(prAdapter, prCmdInfo, prChipInfo->u2TxInitCmdPort) != WLAN_STATUS_SUCCESS) {
+		DBGLOG(INIT, ERROR, "Failed to transmit WIFI start command\n");
+		u4Status = WLAN_STATUS_FAILURE;
+		goto exit;
+	}
 
-    DBGLOG(INIT, INFO, "FW_START CMD sent, waiting for RSP\n");
+	DBGLOG(INIT, INFO, "FW_START CMD sent, waiting for RSP\n");
 
-    u4Status = wlanConfigWifiFuncStatus(prAdapter, ucCmdSeqNum);
-    if (u4Status != WLAN_STATUS_SUCCESS) {
-        DBGLOG(INIT, INFO, "FW_START EVT failed\n");
-        GL_DEFAULT_RESET_TRIGGER(prAdapter, RST_CMD_EVT_FAIL);
-    } else {
-        DBGLOG(INIT, INFO, "FW_START EVT success\n");
+	u4Status = wlanConfigWifiFuncStatus(prAdapter, ucCmdSeqNum);
+	if (u4Status != WLAN_STATUS_SUCCESS) {
+		DBGLOG(INIT, ERROR, "FW_START EVT failed\n");
+		goto exit;
+	}
+
+	DBGLOG(INIT, INFO, "FW_START EVT success\n");
 
 #if (CFG_SUPPORT_CONNAC3X == 0)
 #if defined(_HIF_PCIE)
-        if (ucPDA == PDA_CR4 && prChipInfo->is_support_wacpu)
-            prChipInfo->rx_event_port = WFDMA1_RX_RING_IDX_1;
+	if (ucPDA == PDA_CR4 && prChipInfo->is_support_wacpu)
+		prChipInfo->rx_event_port = WFDMA1_RX_RING_IDX_1;
 #endif
 #endif
-    }
 
- exit:
-    /* Free CMD packet */
-    if (prCmdInfo)
-        cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+exit:
+	/* Free CMD packet */
+	if (prCmdInfo)
+		cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
 
-    return u4Status;
+	return u4Status;
 }
 
 
