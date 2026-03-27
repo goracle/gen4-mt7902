@@ -1440,6 +1440,8 @@ int32_t wlanOffAtReset(void);
 int32_t wlanOnAtReset(void);
 #endif
 
+void mt792x_dma_cleanup(struct ADAPTER *prAdapter);
+
 /*******************************************************************************
  *			 E X T E R N A L   F U N C T I O N S / V A R I A B L E
  *******************************************************************************
