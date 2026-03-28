@@ -256,6 +256,22 @@ void nic_rxd_v2_fill_rfb(
 	}
 
 
+	// NEW: Cross-reference the hardware-reported header offset vs our calculated offset
+	uint32_t u4HwHeaderOffset = HAL_MAC_CONNAC2X_RX_STATUS_GET_HEADER_OFFSET(prRxStatus);
+
+	if (u4HwHeaderOffset != u4HeaderOffset) {
+		DBGLOG(RX, WARN, "[DEBUG_RX] OFFSET MISMATCH! HW_Reported=%u, SW_Calculated=%u (Raw Frame? %u)\n",
+			   u4HwHeaderOffset, u4HeaderOffset, 
+			   !HAL_MAC_CONNAC2X_RX_STATUS_IS_HEADER_TRAN(prRxStatus));
+	}
+
+	// Check for "Phantom Groups" - bits set in GroupVLD that we didn't account for
+	uint32_t u4UnhandledGroups = prSwRfb->ucGroupVLD & ~(BIT(1)|BIT(2)|BIT(3)|BIT(4)|BIT(5));
+	if (u4UnhandledGroups) {
+		DBGLOG(RX, ERROR, "[DEBUG_RX] UNHANDLED GROUPS DETECTED: 0x%02x\n", u4UnhandledGroups);
+	}
+
+
 	prSwRfb->u2RxStatusOffst = u2RxStatusOffset;
 	prSwRfb->pvHeader = (uint8_t *) prRxStatus +
 		u2RxStatusOffset + u4HeaderOffset;

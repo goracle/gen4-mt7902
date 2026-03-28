@@ -19,6 +19,16 @@ extern "C" {
 /* ****************************************************************************
  */
 
+#ifndef MT_WFDMA0_GLO_CFG_TX_DMA_EN
+#define MT_WFDMA0_GLO_CFG_TX_DMA_EN         BIT(0)
+#endif
+
+#ifndef MT_WFDMA0_GLO_CFG_RX_DMA_EN
+#define MT_WFDMA0_GLO_CFG_RX_DMA_EN         BIT(2)
+#endif
+
+
+
 #define WF_WFDMA_HOST_DMA0_BASE 0x7c024000
 #define WF_WFDMA_EXT_WRAP_CSR_BASE 0x7c027000
 

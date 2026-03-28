@@ -598,14 +598,6 @@ void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 #define MT_WFDMA0_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN BIT(15)
 #endif
 
-#ifndef MT_WFDMA0_GLO_CFG_TX_DMA_EN
-#define MT_WFDMA0_GLO_CFG_TX_DMA_EN         BIT(0)
-#endif
-
-#ifndef MT_WFDMA0_GLO_CFG_RX_DMA_EN
-#define MT_WFDMA0_GLO_CFG_RX_DMA_EN         BIT(2)
-#endif
-
 #define PREFETCH(base, depth) (((base) << 16) | (depth))
 
 	/* 1. Write prefetch registers BEFORE enabling DMA. 

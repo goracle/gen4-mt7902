@@ -2476,9 +2476,11 @@ bool halWpdmaAllocTxRing(struct GLUE_INFO *prGlueInfo, uint32_t u4Num,
 	return true;
 }
 
+
+
 bool halWpdmaAllocRxRing(struct GLUE_INFO *prGlueInfo, uint32_t u4Num,
-						 uint32_t u4Size, uint32_t u4DescSize,
-						 uint32_t u4BufSize, bool fgAllocMem)
+                         uint32_t u4Size, uint32_t u4DescSize,
+                         uint32_t u4BufSize, bool fgAllocMem)
 {
 	struct GL_HIF_INFO *prHifInfo;
 	struct HIF_MEM_OPS *prMemOps;
@@ -2493,10 +2495,10 @@ bool halWpdmaAllocRxRing(struct GLUE_INFO *prGlueInfo, uint32_t u4Num,
 
 	ASSERT(prGlueInfo);
 	prHifInfo = &prGlueInfo->rHifInfo;
-	prMemOps = &prHifInfo->rMemOps;
-	prRxDesc = &prHifInfo->RxDescRing[u4Num];
+	prMemOps  = &prHifInfo->rMemOps;
+	prRxDesc  = &prHifInfo->RxDescRing[u4Num];
+	pRxRing   = &prHifInfo->RxRing[u4Num];
 
-	/* Don't re-alloc memory when second time call alloc ring */
 	prRxDesc->AllocSize = u4Size * u4DescSize;
 	if (fgAllocMem && prMemOps->allocRxDesc)
 		prMemOps->allocRxDesc(prHifInfo, prRxDesc, u4Num);
@@ -2506,62 +2508,88 @@ bool halWpdmaAllocRxRing(struct GLUE_INFO *prGlueInfo, uint32_t u4Num,
 		return false;
 	}
 
-	DBGLOG(HAL, TRACE, "RxDescRing[%p]: total %lu bytes allocated\n",
-		   prRxDesc->AllocVa, prRxDesc->AllocSize);
-
-	/* Initialize Rx Ring and associated buffer memory */
 	RingBasePa = prRxDesc->AllocPa;
 	RingBaseVa = prRxDesc->AllocVa;
 
-	pRxRing = &prHifInfo->RxRing[u4Num];
-	pRxRing->u4BufSize = u4BufSize;
+	pRxRing->u4BufSize  = u4BufSize;
 	pRxRing->u4RingSize = u4Size;
 	pRxRing->fgRxSegPkt = FALSE;
 
 	for (u4Idx = 0; u4Idx < u4Size; u4Idx++) {
-		/* Init RX Ring Size, Va, Pa variables */
 		prRxCell = &pRxRing->Cell[u4Idx];
-		prRxCell->AllocSize = u4DescSize;
-		prRxCell->AllocVa = RingBaseVa;
-		prRxCell->AllocPa = RingBasePa;
-		prRxCell->prToken = NULL;
+		pDmaBuf  = &prRxCell->DmaBuf;
 
-		/* Offset to next ring descriptor address */
+		/* On SER recovery (fgAllocMem=false), existing DMA buffers
+		 * are still mapped. Free them before reinitializing to avoid
+		 * double-mapping the same physical pages.
+		 */
+		if (!fgAllocMem && prRxCell->pPacket) {
+			if (prMemOps->unmapRxBuf && pDmaBuf->AllocPa)
+				prMemOps->unmapRxBuf(prHifInfo,
+						     pDmaBuf->AllocPa,
+						     pDmaBuf->AllocSize);
+			if (prMemOps->freePacket)
+				prMemOps->freePacket(prRxCell->pPacket);
+			prRxCell->pPacket = NULL;
+			pDmaBuf->AllocVa  = NULL;
+			pDmaBuf->AllocPa  = 0;
+		}
+
+		prRxCell->AllocSize = u4DescSize;
+		prRxCell->AllocVa   = RingBaseVa;
+		prRxCell->AllocPa   = RingBasePa;
+		prRxCell->prToken   = NULL;
+
 		RingBasePa += u4DescSize;
 		RingBaseVa += u4DescSize;
 
-		/* Setup Rx associated Buffer size & allocate share memory */
-		pDmaBuf = &prRxCell->DmaBuf;
 		pDmaBuf->AllocSize = u4BufSize;
 
-		if (fgAllocMem && prMemOps->allocRxBuf)
-			prRxCell->pPacket = prMemOps->allocRxBuf(
-													 prHifInfo, pDmaBuf, u4Num, u4Idx);
+		if (prMemOps->allocRxBuf)
+			prRxCell->pPacket = prMemOps->allocRxBuf(prHifInfo,
+								  pDmaBuf,
+								  u4Num,
+								  u4Idx);
+
 		if (pDmaBuf->AllocVa == NULL) {
-			log_dbg(HAL, ERROR, "\nFailed to allocate RxRing buffer idx[%u]\n",
-					u4Idx);
-			return false;
+			DBGLOG(HAL, ERROR,
+			       "Failed to allocate RxRing buffer idx[%u]\n",
+			       u4Idx);
+			goto err_cleanup;
 		}
 
-		/* Write RxD buffer address & allocated buffer length */
 		pRxD = (struct RXD_STRUCT *)prRxCell->AllocVa;
 		pRxD->SDPtr0 = ((uint64_t)pDmaBuf->AllocPa) &
-			DMA_LOWER_32BITS_MASK;
+			       DMA_LOWER_32BITS_MASK;
 #ifdef CONFIG_PHYS_ADDR_T_64BIT
 		pRxD->SDPtr1 = (((uint64_t)pDmaBuf->AllocPa >>
-						 DMA_BITS_OFFSET) & DMA_HIGHER_4BITS_MASK);
+				  DMA_BITS_OFFSET) & DMA_HIGHER_4BITS_MASK);
 #else
 		pRxD->SDPtr1 = 0;
 #endif
-		pRxD->SDLen0 = u4BufSize;
+		pRxD->SDLen0  = u4BufSize;
 		pRxD->DMADONE = 0;
 	}
 
-	DBGLOG(HAL, TRACE, "Rx[%d] Ring: total %d entry allocated\n",
-	       u4Num, u4Idx);
-
 	return true;
+
+err_cleanup:
+	for (; u4Idx > 0; u4Idx--) {
+		prRxCell = &pRxRing->Cell[u4Idx - 1];
+		if (prRxCell->pPacket) {
+			if (prMemOps->unmapRxBuf)
+				prMemOps->unmapRxBuf(prHifInfo,
+						     prRxCell->DmaBuf.AllocPa,
+						     prRxCell->DmaBuf.AllocSize);
+			if (prMemOps->freePacket)
+				prMemOps->freePacket(prRxCell->pPacket);
+			prRxCell->pPacket = NULL;
+		}
+	}
+	return false;
 }
+
+
 
 static void halDefaultHifRst(struct GLUE_INFO *prGlueInfo)
 {
@@ -3360,7 +3388,7 @@ uint32_t halWpdmaGetRxDmaDoneCnt(IN struct GLUE_INFO *prGlueInfo,
 	kalDevRegRead(prGlueInfo, prRxRing->hw_cnt_addr, &u4MaxCnt);
 	u4MaxCnt &= MT_RING_CNT_MASK;
 
-	//DBGLOG(HAL, WARN, "[RXCNT-DBG] P[%u] hw_cnt_addr=0x%08x raw_cnt=0x%08x ring_size=%u\n", ucRingNum, prRxRing->hw_cnt_addr, u4MaxCnt, prRxRing->u4RingSize);
+	DBGLOG(HAL, WARN, "[RXCNT-DBG] P[%u] hw_cnt_addr=0x%08x raw_cnt=0x%08x ring_size=%u\n", ucRingNum, prRxRing->hw_cnt_addr, u4MaxCnt, prRxRing->u4RingSize);
 
 	if (u4MaxCnt == 0 || u4MaxCnt > RX_RING_SIZE)
 		return 0;
@@ -3369,8 +3397,8 @@ uint32_t halWpdmaGetRxDmaDoneCnt(IN struct GLUE_INFO *prGlueInfo,
 	kalDevRegRead(prGlueInfo, prRxRing->hw_didx_addr, &u4DmaIdx);
 	u4DmaIdx &= MT_RING_DIDX_MASK;
 
-	//DBGLOG(HAL, WARN, "[RXCNT-DBG] P[%u] CpuIdx=%u DmaIdx=%u MaxCnt=%u\n",
-	//      ucRingNum, u4CpuIdx, u4DmaIdx, u4MaxCnt);
+	DBGLOG(HAL, WARN, "[RXCNT-DBG] P[%u] CpuIdx=%u DmaIdx=%u MaxCnt=%u\n",
+	      ucRingNum, u4CpuIdx, u4DmaIdx, u4MaxCnt);
 
 	/* Ring empty: DIDX == (CIDX+1) % size */
 	uint32_t u4NextCpu = (u4CpuIdx + 1) % u4MaxCnt;
@@ -3640,6 +3668,18 @@ static bool halWpdmaFillTxRing(struct GLUE_INFO *prGlueInfo,
 
 	/* Update HW Tx DMA ring */
 	prTxRing->u4UsedCnt++;
+
+	// NEW: Log the exact bytes the DMA engine is about to fetch
+	DBGLOG(HAL, WARN, "[DEBUG_TX] Doorbell for Ring %u, Index %u\n", u2Port, prTxRing->TxCpuIdx);
+	DBGLOG(HAL, WARN, "[DEBUG_TX] Descriptor Raw: %08x %08x %08x %08x\n", 
+		   ((uint32_t *)pTxD)[0], ((uint32_t *)pTxD)[1], 
+		   ((uint32_t *)pTxD)[2], ((uint32_t *)pTxD)[3]);
+
+	// Dump the first 32 bytes of the actual payload to see if the header is there
+	if (pTxCell->AllocVa) {
+		print_hex_dump(KERN_WARNING, "TX_PAYLOAD_START: ", DUMP_PREFIX_OFFSET, 16, 1,
+					   pTxCell->AllocVa, 32, false);
+	}
 
 	kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr, prTxRing->TxCpuIdx);
 	{

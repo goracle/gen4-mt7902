@@ -69,6 +69,7 @@
  */
 #include "precomp.h"
 #include "mgmt/ais_fsm.h"
+#include "chips/coda/mt7902/wf_wfdma_host_dma0.h"
 
 /*******************************************************************************
  *                              C O N S T A N T S
@@ -1391,10 +1392,6 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 			}
 
 
-
-
-
-
 			prAdapter->u4OsPacketFilter
 				= PARAM_PACKET_FILTER_SUPPORTED;
 		}
@@ -1515,21 +1512,86 @@ uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
 			HAL_SET_MAILBOX_ACK_SUPPORT(prAdapter);
 #endif
 #endif
-			prAdapter->fgIsFwDownloaded = TRUE;
-			struct BUS_INFO *prBusInfo = prAdapter->chip_info->bus_info;
-			struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
+
+		prAdapter->fgIsFwDownloaded = TRUE;
+		struct BUS_INFO *prBusInfo = prAdapter->chip_info->bus_info;
+		struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
+
+		/* After firmware boot, DMA may be in a partially-live state
+		 * that causes EXT_CTRL writes to be silently ignored by HW.
+		 * Match mt76's mt792x_dma_disable() sequence: clear TX/RX DMA
+		 * enable bits and wait for busy to clear before writing prefetch.
+		 */
+		if (prBusInfo->wfdmaManualPrefetch) {
+			uint32_t glo = 0;
+			uint32_t retries = 100;
+
+			/* Step 1: disable TX/RX DMA */
+			HAL_MCR_RD(prAdapter,
+				   WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR,
+				   &glo);
+			DBGLOG(INIT, INFO,
+			       "[PRE-PREFETCH] GLO_CFG before disable=0x%08x\n",
+			       glo);
+			glo &= ~(MT_WFDMA0_GLO_CFG_TX_DMA_EN |
+				 MT_WFDMA0_GLO_CFG_RX_DMA_EN);
+			HAL_MCR_WR(prAdapter,
+				   WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR,
+				   glo);
+
+			/* Step 2: poll until TX_DMA_BUSY and RX_DMA_BUSY clear */
+			do {
+				HAL_MCR_RD(prAdapter,
+					   WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR,
+					   &glo);
+				if (!(glo & (BIT(1) | BIT(3))))
+					break;
+				kalMdelay(1);
+			} while (--retries);
+
+			if (!retries)
+				DBGLOG(INIT, WARN,
+				       "[PRE-PREFETCH] DMA busy timeout, proceeding anyway\n");
+
+			DBGLOG(INIT, INFO,
+			       "[PRE-PREFETCH] GLO_CFG after disable=0x%08x\n",
+			       glo);
+
+			/* Step 3: write EXT_CTRL prefetch registers */
 			prBusInfo->wfdmaManualPrefetch(prGlueInfo);
 
-			/* Re-arm WFDMA after FW boot resets GLO_CFG */
-			if (prAdapter->chip_info->asicWfdmaReInit) {
-				DBGLOG(INIT, ERROR, "[POST-FWDL] calling asicWfdmaReInit\n");
-				prAdapter->chip_info->asicWfdmaReInit(prAdapter);
-			} else {
-				struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
-				struct BUS_INFO *prBusInfo = prAdapter->chip_info->bus_info;
-				if (prBusInfo->pdmaSetup)
-					prBusInfo->pdmaSetup(prGlueInfo, TRUE);
+			/* Step 4: readback TX_RING0_EXT_CTRL to confirm */
+			{
+				uint32_t ext = 0;
+				HAL_MCR_RD(prAdapter,
+					   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR,
+					   &ext);
+				DBGLOG(INIT, ERROR,
+				       "[PRE-PREFETCH] TX_RING0_EXT_CTRL after prefetch=0x%08x\n",
+				       ext);
 			}
+		}
+
+		/* Step 5: Re-arm WFDMA after FW boot resets GLO_CFG */
+		if (prAdapter->chip_info->asicWfdmaReInit) {
+			DBGLOG(INIT, ERROR, "[POST-FWDL] calling asicWfdmaReInit\n");
+			prAdapter->chip_info->asicWfdmaReInit(prAdapter);
+		} else {
+			struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
+			struct BUS_INFO *prBusInfo = prAdapter->chip_info->bus_info;
+			if (prBusInfo->pdmaSetup)
+				prBusInfo->pdmaSetup(prGlueInfo, TRUE);
+		}
+
+
+
+
+
+
+
+
+
+
 
 			{
 				uint32_t glo = 0;
