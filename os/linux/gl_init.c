@@ -5372,474 +5372,9 @@ int32_t wlanOnWhenProbeSuccess(struct GLUE_INFO *prGlueInfo,
 /*----------------------------------------------------------------------------*/
 static int32_t wlanPowerOnInit(void)
 {
-/*
-*	pvData     data passed by bus driver init function
-*		_HIF_EHPI: NULL
-*		_HIF_SDIO: sdio bus driver handle
-*	see hifAxiProbe() for more detail...
-*	pfWlanProbe((void *)prPlatDev,
-*			(void *)prPlatDev->id_entry->driver_data)
-*/
-#if defined(SOC3_0)
-#if defined(_HIF_AXI)
-/* prPlatDev is already created by initWlan()->glRegisterBus()::axi.c */
-	void *pvData = (void *)prPlatDev;
-	void *pvDriverData = (void *)prPlatDev->id_entry->driver_data;
-#endif
-
-#if defined(_HIF_PCIE)
-	void *pvData = NULL;
-	void *pvDriverData = (void *)&mt66xx_driver_data_soc3_0;
-#endif
-#endif
-
-	int32_t i4Status = 0;
-	enum ENUM_POWER_ON_INIT_FAIL_REASON {
-		BUS_INIT_FAIL,
-		NET_CREATE_FAIL,
-		BUS_SET_IRQ_FAIL,
-		ALLOC_ADAPTER_MEM_FAIL,
-		DRIVER_OWN_FAIL,
-		INIT_ADAPTER_FAIL,
-		INIT_HIFINFO_FAIL,
-		ROM_PATCH_DOWNLOAD_FAIL,
-		POWER_ON_INIT_DONE,
-		FAIL_REASON_NUM
-	} eFailReason;
-	uint32_t i = 0;
-	int32_t i4DevIdx = 0;
-	struct wireless_dev *prWdev = NULL;
-	struct GLUE_INFO *prGlueInfo = NULL;
-	struct ADAPTER *prAdapter = NULL;
-	struct mt66xx_chip_info *prChipInfo;
-	struct FWDL_OPS_T *prFwDlOps;
-
-	DBGLOG(INIT, INFO, "wlanPowerOnInit::begin\n");
-
-	eFailReason = FAIL_REASON_NUM;
-
-	do {
-#if defined(_HIF_AXI)
-		/* AXI goes over here, to be conti... */
-		prChipInfo = ((struct mt66xx_hif_driver_data *)pvDriverData)
-					->chip_info;
-
-		pvData = (void *)prChipInfo->pdev;
-
-		/* we should call axi_enable_device(
-		*        (struct platform_device *)pvData);
-		* since it is invoked from within hifAxiProbe()::axi.c,
-		* before calling pfWlanProbe(), to be conti...
-		*/
-#endif
-
-#if defined(_HIF_PCIE)
-		prChipInfo = ((struct mt66xx_hif_driver_data *)pvDriverData)
-					->chip_info;
-
-		pvData = (void *)prChipInfo->pdev;
-
-		/* no need pci_enable_device(dev),
-		 * it has already been done in PCI driver's probe() function
-		 */
-#endif
-
-		/* [1]Copy from wlanProbe()::Begin */
-		/* Initialize the IO port of the interface */
-		/* GeorgeKuo: pData has different meaning for _HIF_XXX:
-		* _HIF_EHPI: pointer to memory base variable, which will be
-		*      initialized by glBusInit().
-		* _HIF_SDIO: bus driver handle
-		*/
-
-		/* Remember to call glBusRelease() in wlanPowerOnDeinit() */
-		if (glBusInit(pvData) == FALSE) {
-			DBGLOG(INIT, ERROR,
-				"[Wi-Fi PWR On] glBusInit() fail\n");
-
-			i4Status = -EIO;
-
-			eFailReason = BUS_INIT_FAIL;
-
-			break;
-		}
-		{
-			extern void __iomem *CSRBaseAddress;
-			uint32_t glo = readl(CSRBaseAddress + 0xd4014);
-			printk(KERN_ERR "[mt7902] GLO_CFG after glBusInit (PWR path) = 0x%08x\n", glo);
-		}
-
-#if (CFG_SUPPORT_TRACE_TC4 == 1)
-		wlanDebugTC4Init();
-#endif
-
-		/* Create network device, Adapter, KalInfo,
-		*       prDevHandler(netdev)
-		*/
-		prWdev = wlanNetCreate(pvData, pvDriverData);
-
-		if (prWdev == NULL) {
-			DBGLOG(INIT, ERROR,
-				"[Wi-Fi PWR On] No memory for dev and its private\n");
-
-			i4Status = -ENOMEM;
-
-			eFailReason = NET_CREATE_FAIL;
-
-			break;
-		}
-
-		/* Set the ioaddr to HIF Info */
-		prGlueInfo = (struct GLUE_INFO *) wiphy_priv(prWdev->wiphy);
-
-		/* Should we need this??? to be conti... */
-		gPrDev = prGlueInfo->prDevHandler;
-
-		/* Setup IRQ */
-		i4Status = glBusSetIrq(prWdev->netdev, NULL, prGlueInfo);
-
-		if (i4Status != WLAN_STATUS_SUCCESS) {
-			DBGLOG(INIT, ERROR, "[Wi-Fi PWR On] Set IRQ error\n");
-
-			eFailReason = BUS_SET_IRQ_FAIL;
-
-			break;
-		}
-
-		prGlueInfo->i4DevIdx = i4DevIdx;
-
-		prAdapter = prGlueInfo->prAdapter;
-		/* [1]Copy from wlanProbe()::End */
-
-		/* [2]Copy from wlanProbe()->wlanOnPreAdapterStart()::Begin */
-		/* Init Chip Capability */
-		prChipInfo = prAdapter->chip_info;
-
-		if (prChipInfo->asicCapInit)
-			prChipInfo->asicCapInit(prAdapter);
-
-		/* Trigger the action of switching Pwr state to drv_own */
-		prAdapter->fgIsFwOwn = TRUE;
-
-		nicpmWakeUpWiFi(prAdapter);
-		/* [2]Copy from wlanProbe()->wlanOnPreAdapterStart()::End */
-
-		/* [3]Copy from
-		* wlanProbe()
-		*	->wlanAdapterStart()
-		*		->wlanOnPreAllocAdapterMem()::Begin
-		*/
-#if 0  /* Sample's gen4m code base doesn't support */
-		prAdapter->u4HifDbgFlag = 0;
-		prAdapter->u4HifChkFlag = 0;
-		prAdapter->u4TxHangFlag = 0;
-		prAdapter->u4NoMoreRfb = 0;
-#endif
-
-		prAdapter->u4OwnFailedCount = 0;
-		prAdapter->u4OwnFailedLogCount = 0;
-
-#if 0  /* Sample's gen4m code base doesn't support */
-		prAdapter->fgEnHifDbgInfo = TRUE;
-#endif
-
-		/* Additional with chip reset optimize*/
-		prAdapter->ucCmdSeqNum = 0;
-		prAdapter->u4PwrCtrlBlockCnt = 0;
-
-		QUEUE_INITIALIZE(&(prAdapter->rPendingCmdQueue));
-#if CFG_SUPPORT_MULTITHREAD
-		QUEUE_INITIALIZE(&prAdapter->rTxCmdQueue);
-		QUEUE_INITIALIZE(&prAdapter->rTxCmdDoneQueue);
-#if CFG_FIX_2_TX_PORT
-		QUEUE_INITIALIZE(&prAdapter->rTxP0Queue);
-		QUEUE_INITIALIZE(&prAdapter->rTxP1Queue);
-#else
-		for (i = 0; i < TX_PORT_NUM; i++)
-			QUEUE_INITIALIZE(&prAdapter->rTxPQueue[i]);
-#endif
-		QUEUE_INITIALIZE(&prAdapter->rRxQueue);
-		QUEUE_INITIALIZE(&prAdapter->rTxDataDoneQueue);
-#endif
-
-		/* reset fgIsBusAccessFailed */
-		fgIsBusAccessFailed = FALSE;
-
-		/* Allocate mandatory resource for TX/RX */
-		if (nicAllocateAdapterMemory(prAdapter)
-			!= WLAN_STATUS_SUCCESS) {
-			DBGLOG(INIT, ERROR,
-				"[Wi-Fi PWR On] nicAllocateAdapterMemory Error!\n");
-
-			i4Status = -ENOMEM;
-
-			eFailReason = ALLOC_ADAPTER_MEM_FAIL;
-/*
-*#if CFG_ENABLE_KEYWORD_EXCEPTION_MECHANISM & 0
-*			mtk_wcn_wmt_assert_keyword(WMTDRV_TYPE_WIFI,
-*			"[Wi-Fi PWR On] nicAllocateAdapterMemory Error!");
-*#endif
-*/
-			break;
-		}
-
-		/* should we need this?  to be conti... */
-		prAdapter->u4OsPacketFilter = PARAM_PACKET_FILTER_SUPPORTED;
-
-		/* WLAN driver acquire LP own */
-		DBGLOG(INIT, TRACE, "[Wi-Fi PWR On] Acquiring LP-OWN\n");
-
-		ACQUIRE_POWER_CONTROL_FROM_PM(prAdapter);
-
-		DBGLOG(INIT, TRACE, "[Wi-Fi PWR On] Acquiring LP-OWN-end\n");
-
-		if (prAdapter->fgIsFwOwn == TRUE) {
-			DBGLOG(INIT, ERROR,
-				"[Wi-Fi PWR On] nicpmSetDriverOwn() failed!\n");
-
-			eFailReason = DRIVER_OWN_FAIL;
-/*
-*#if CFG_ENABLE_KEYWORD_EXCEPTION_MECHANISM & 0
-*			mtk_wcn_wmt_assert_keyword(WMTDRV_TYPE_WIFI,
-*				"[Wi-Fi PWR On] nicpmSetDriverOwn() failed!");
-*#endif
-*/
-			break;
-		}
-
-		/* Initialize the Adapter:
-		*       verify chipset ID, HIF init...
-		*       the code snippet just do the copy thing
-		*/
-		if (nicInitializeAdapter(prAdapter) != WLAN_STATUS_SUCCESS) {
-			DBGLOG(INIT, ERROR,
-				"[Wi-Fi PWR On] nicInitializeAdapter failed!\n");
-
-			eFailReason = INIT_ADAPTER_FAIL;
-
-			break;
-		}
-
-		/* Do the post NIC init adapter:
-		* copy only the mandatory task
-		* in wlanOnPostNicInitAdapter(prAdapter, FALSE)::Begin
-		*/
-		nicInitSystemService(prAdapter, FALSE);
-
-		/* Initialize Tx */
-		nicTxInitialize(prAdapter);
-
-		/* Initialize Rx */
-		nicRxInitialize(prAdapter);
-		/* Do the post NIC init adapter:
-		* copy only the mandatory task
-		* in wlanOnPostNicInitAdapter(prAdapter, FALSE)::End
-		*/
-
-		/* HIF SW info initialize */
-		if (!halHifSwInfoInit(prAdapter)) {
-			DBGLOG(INIT, ERROR,
-				"[Wi-Fi PWR On] halHifSwInfoInit failed!\n");
-
-			eFailReason = INIT_HIFINFO_FAIL;
-
-			break;
-		}
-
-		/* Enable HIF  cut-through to N9 mode */
-		HAL_ENABLE_FWDL(prAdapter, TRUE);
-
-		wlanSetChipEcoInfo(prAdapter);
-
-		/* should we open it, to be conti */
-		/* wlanOnPostInitHifInfo(prAdapter); */
-
-		/* Disable interrupt, download is done by polling mode only */
-		nicDisableInterrupt(prAdapter);
-
-		/* Initialize Tx Resource to fw download state */
-		nicTxInitResetResource(prAdapter);
-
-		/* MCU ROM EMI +
-		* WiFi ROM EMI + ROM patch download goes over here::Begin
-		*/
-		/* assiggned in wlanNetCreate() */
-		prChipInfo = prAdapter->chip_info;
-
-		/* It is configured in mt66xx_chip_info_connac2x2.fw_dl_ops */
-		prFwDlOps = prChipInfo->fw_dl_ops;
-
-		/* No need to check F/W ready bit,
-		* since we are downloading MCU ROM EMI
-		* + WiFi ROM EMI + ROM patch
-		*/
-		/*
-		*DBGLOG(INIT, INFO,
-		*	"wlanDownloadFW:: Check ready_bits(=0x%x)\n",
-		*	prChipInfo->sw_ready_bits);
-		*
-		*HAL_WIFI_FUNC_READY_CHECK(prAdapter,
-		*	prChipInfo->sw_ready_bits, &fgReady);
-		*/
-
-		if (prFwDlOps->downloadPatch) {
-			HAL_ENABLE_FWDL(prAdapter, TRUE);
-
-			DBGLOG_LIMITED(INIT, INFO,
-				"[Wi-Fi PWR On] download Start\n");
-
-			if (prFwDlOps->downloadPatch(prAdapter)
-				!= WLAN_STATUS_SUCCESS) {
-				eFailReason = ROM_PATCH_DOWNLOAD_FAIL;
-
-				HAL_ENABLE_FWDL(prAdapter, FALSE);
-
-				break;
-			}
-
-			DBGLOG_LIMITED(INIT, INFO,
-				"[Wi-Fi PWR On] download End\n");
-
-			HAL_ENABLE_FWDL(prAdapter, FALSE);
-
-			/* This is only to download ROM patch in power on stage,
-			* have to find a better way, to be conti...
-			*/
-			prFwDlOps->downloadPatch = NULL;
-		}
-		/* MCU ROM EMI + WiFi ROM EMI
-		* + ROM patch download goes over here::End
-		*/
-
-		eFailReason = POWER_ON_INIT_DONE;
-		/* [3]Copy from wlanProbe()
-		*		->wlanAdapterStart()
-		*			->wlanOnPreAllocAdapterMem()::End
-		*/
-	} while (FALSE);
-
-	switch (eFailReason) {
-	case BUS_INIT_FAIL:
-		break;
-
-	case NET_CREATE_FAIL:
-#if (CFG_SUPPORT_TRACE_TC4 == 1)
-		wlanDebugTC4Uninit();  /* Uninit for TC4 debug */
-#endif
-
-		/* We should call this, although nothing is inside */
-		glBusRelease(pvData);
-
-		break;
-
-	case BUS_SET_IRQ_FAIL:
-#if (CFG_SUPPORT_TRACE_TC4 == 1)
-		wlanDebugTC4Uninit();  /* Uninit for TC4 debug */
-#endif
-
-		/* We should call this, although nothing is inside */
-		glBusRelease(pvData);
-
-		wlanWakeLockUninit(prGlueInfo);
-
-		wlanNetDestroy(prWdev);
-
-		break;
-
-	case ALLOC_ADAPTER_MEM_FAIL:
-	case DRIVER_OWN_FAIL:
-	case INIT_ADAPTER_FAIL:
-		/* Should we set Onwership to F/W for advanced debug???
-		* to be conti...
-		*/
-		/* nicpmSetFWOwn(prAdapter, FALSE); */
-
-		halWpdmaFreeRing(prGlueInfo);
-		glBusFreeIrq(prWdev->netdev,
-			*((struct GLUE_INFO **)netdev_priv(prWdev->netdev)));
-
-#if (CFG_SUPPORT_TRACE_TC4 == 1)
-		wlanDebugTC4Uninit();  /* Uninit for TC4 debug */
-#endif
-
-		/* We should call this, although nothing is inside */
-		glBusRelease(pvData);
-
-		wlanWakeLockUninit(prGlueInfo);
-
-		wlanNetDestroy(prWdev);
-
-		break;
-
-	case INIT_HIFINFO_FAIL:
-		nicRxUninitialize(prAdapter);
-
-		nicTxRelease(prAdapter, FALSE);
-
-		/* System Service Uninitialization */
-		nicUninitSystemService(prAdapter);
-
-		/* Should we set Onwership to F/W for advanced debug???
-		* to be conti...
-		*/
-		/* nicpmSetFWOwn(prAdapter, FALSE); */
-		halWpdmaFreeRing(prGlueInfo);
-		glBusFreeIrq(prWdev->netdev,
-			*((struct GLUE_INFO **)netdev_priv(prWdev->netdev)));
-
-#if (CFG_SUPPORT_TRACE_TC4 == 1)
-		wlanDebugTC4Uninit();  /* Uninit for TC4 debug */
-#endif
-
-		/* We should call this, although nothing is inside */
-		glBusRelease(pvData);
-
-		wlanWakeLockUninit(prGlueInfo);
-
-		wlanNetDestroy(prWdev);
-
-		break;
-
-	case ROM_PATCH_DOWNLOAD_FAIL:
-	case POWER_ON_INIT_DONE:
-		HAL_ENABLE_FWDL(prAdapter, FALSE);
-
-		nicRxUninitialize(prAdapter);
-
-		nicTxRelease(prAdapter, FALSE);
-
-		/* System Service Uninitialization */
-		nicUninitSystemService(prAdapter);
-
-		/* Should we set Onwership to F/W for advanced debug???
-		* to be conti...
-		*/
-		/* nicpmSetFWOwn(prAdapter, FALSE); */
-		halWpdmaFreeRing(prGlueInfo);
-
-		glBusFreeIrq(prWdev->netdev,
-			*((struct GLUE_INFO **)netdev_priv(prWdev->netdev)));
-
-#if (CFG_SUPPORT_TRACE_TC4 == 1)
-		wlanDebugTC4Uninit();  /* Uninit for TC4 debug */
-#endif
-
-		/* We should call this, although nothing is inside */
-		glBusRelease(pvData);
-
-		wlanWakeLockUninit(prGlueInfo);
-
-		wlanNetDestroy(prWdev);
-
-		break;
-
-	default:
-		break;
-	}
-
-	DBGLOG(INIT, INFO, "wlanPowerOnInit::end\n");
-
-	return i4Status;
+	DBGLOG(INIT, INFO,
+	       "wlanPowerOnInit is deprecated; probe owns hardware bring-up\n");
+	return 0;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -6203,6 +5738,8 @@ void wlanOffStopWlanThreads(IN struct GLUE_INFO *prGlueInfo)
 
 	DBGLOG(INIT, INFO, "all wlan threads stopped\n");
 
+	halWpdmaFreeRing(prGlueInfo);
+	glBusFreeResources(prGlueInfo);
 	if (test_and_clear_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag) &&
 			!completion_done(&prGlueInfo->rPendComp)) {
 		struct GL_IO_REQ *prIoReq;
@@ -6841,44 +6378,62 @@ static int wlanProbe_AdapterBringup(struct GLUE_INFO *prGlueInfo,
 {
     int ret;
 
-    if (mt79xx_wfsys_cold_boot_and_wait(prAdapter) != 0) {
+    DBGLOG(INIT, INFO, "==> wlanProbe_AdapterBringup entered\n");
+
+    /* Step 1: Cold boot WFSYS */
+    DBGLOG(INIT, INFO, "Step 1: Cold boot WFSYS\n");
+    ret = mt79xx_wfsys_cold_boot_and_wait(prAdapter);
+    if (ret != 0) {
         DBGLOG(INIT, ERROR,
-               "wlanProbe: WFSYS cold boot failed - MCU unresponsive\n");
+               "wlanProbe: WFSYS cold boot failed - MCU unresponsive, ret=%d\n", ret);
         return -EIO;
     }
+    DBGLOG(INIT, INFO, "WFSYS cold boot succeeded\n");
 
-    /* Early WFDMA setup so FW can use DMA rings during FWDL / mailbox */
+    /* Step 2: Early WFDMA setup */
+    DBGLOG(INIT, INFO, "Step 2: Early WFDMA init\n");
     ret = mt79xx_wfdma_early_init(prAdapter);
     if (ret) {
         DBGLOG(INIT, ERROR, "wlanProbe: mt79xx_wfdma_early_init failed: %d\n", ret);
-        return ret; /* choose propagation you prefer (or try fallback) */
+        return ret;
+    }
+    DBGLOG(INIT, INFO, "Early WFDMA init succeeded\n");
+
+    /* Step 3: Log GLO_CFG for diagnostics */
+    {
+        uint32_t glo;
+        HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+        DBGLOG(INIT, INFO, "Step 3: EARLY WFDMA GLO_CFG=0x%08x\n", glo);
     }
 
-	uint32_t glo;
-	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-	DBGLOG(INIT, INFO, "EARLY WFDMA GLO_CFG=0x%08x\n", glo);
-
+    /* Step 4: Set IRQ */
+    DBGLOG(INIT, INFO, "Step 4: glBusSetIrq\n");
     ret = glBusSetIrq(prWdev->netdev, NULL, prGlueInfo);
     if (ret != WLAN_STATUS_SUCCESS) {
-        DBGLOG(INIT, ERROR, "wlanProbe: glBusSetIrq failed\n");
+        DBGLOG(INIT, ERROR, "wlanProbe: glBusSetIrq failed, ret=%d\n", ret);
         return -EIO;
     }
+    DBGLOG(INIT, INFO, "IRQ set successfully\n");
 
+    /* Step 5: Start adapter */
+    DBGLOG(INIT, INFO, "Step 5: wlanAdapterStart\n");
     ret = wlanAdapterStart(prAdapter, prRegInfo, FALSE);
     if (ret != WLAN_STATUS_SUCCESS) {
         DBGLOG(INIT, ERROR,
                "wlanProbe: wlanAdapterStart failed (0x%x)\n", ret);
-        /*
-         * Silence hardware and kill tasklet before returning.
-         * The caller's error path will call glBusFreeIrq which
-         * handles the IRQ and BAR teardown.
-         */
+
+        /* Silence hardware and kill tasklet */
+        DBGLOG(INIT, INFO, "Disabling interrupts and halting adapter\n");
         nicDisableInterrupt(prAdapter);
         set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
         tasklet_kill(&prGlueInfo->rRxTask);
+
+        DBGLOG(INIT, INFO, "Step 5: wlanAdapterStart aborted, returning -EIO\n");
         return -EIO;
     }
+    DBGLOG(INIT, INFO, "wlanAdapterStart succeeded\n");
 
+    DBGLOG(INIT, INFO, "<== wlanProbe_AdapterBringup completed successfully\n");
     return 0;
 }
 
@@ -6983,6 +6538,8 @@ static void wlanProbe_Cleanup(enum ENUM_PROBE_FAIL_REASON eFailReason,
      * Safe to call even if adapter start never completed — it guards
      * internally against uninitialized state.
      */
+
+	DBGLOG(INIT, INFO, "wlanProbe_Cleanup running!\n");
     if (prAdapter)
         nicDisableInterrupt(prAdapter);
 
@@ -7302,13 +6859,11 @@ static void wlanRemove(void)
 	}
 #endif
 
-	/* 1. Signal halt to all paths immediately. */
+	/* Block new work paths immediately. */
 	kalSetHalted(TRUE);
 	g_u4HaltFlag = 1;
 	smp_wmb();
 
-	/* SECURE FIX: Cancel pending global workqueues before tearing down netdevs 
-	 * to prevent UAF if a networking state change triggers while unloading. */
 	cancel_delayed_work_sync(&workq);
 	cancel_delayed_work_sync(&sched_workq);
 #if CFG_REDIRECT_OID_SUPPORT
@@ -7325,59 +6880,73 @@ static void wlanRemove(void)
 
 	if (!prDev) {
 		DBGLOG(INIT, ERROR, "prDev is NULL\n");
-		goto exit_removing;
+		goto out;
 	}
 
 	prGlueInfo = *((struct GLUE_INFO **)netdev_priv(prDev));
 	if (!prGlueInfo) {
+		DBGLOG(INIT, ERROR, "prGlueInfo is NULL\n");
 		wlanFreeNetDev();
-		goto exit_removing;
+		goto out;
 	}
 
 	prAdapter = prGlueInfo->prAdapter;
 	prGlueInfo->u4ReadyFlag = 0;
 
 	/*
-	 * 2. Disable hardware interrupts and kill bottom-halves, but do NOT
-	 * release the PCI BARs yet.  Threads may still be mid-cleanup and
-	 * could access hardware registers (e.g. wlanReleasePendingOid →
-	 * nicTxCancelSendingCmd).  Unmapping the BARs before the threads
-	 * exit would turn those accesses into MMIO use-after-iounmap faults.
-	 *
-	 * Correct teardown order:
-	 * 1. Set HALT + silence HW (nicDisableInterrupt) — no new IRQs.
-	 * 2. Kill bottom-halves (tasklet_kill, glTaskletUninit).
-	 * 3. Stop all threads (wlanOffStopWlanThreads) — BARs still mapped.
-	 * 4. Free IRQ and unmap BARs (glBusFreeIrq) — safe, nothing running.
+	 * Phase 1: stop anything that can still touch the device.
+	 * Keep BAR/MMIO mapped until after this phase completes.
 	 */
 	set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
-	/* Clear pending RX/TX bits to prevent main_thread processing after HALT */
 	clear_bit(GLUE_FLAG_RX_BIT, &prGlueInfo->ulFlag);
 	smp_wmb();
-	if (prAdapter){
+
+	if (prAdapter)
 		nicDisableInterrupt(prAdapter);
-		tasklet_kill(&prGlueInfo->rRxTask);
-		glTaskletUninit(prGlueInfo);
-		wlanOffStopWlanThreads(prGlueInfo);
-		halWpdmaFreeRing(prGlueInfo);
-		glBusFreeIrq(prDev, prGlueInfo);
-	}
+
+	tasklet_kill(&prGlueInfo->rRxTask);
+	glTaskletUninit(prGlueInfo);
+
+	wlanOffStopWlanThreads(prGlueInfo);
+
 	/*
-	 * 5. Now safe to unregister and destroy the netdev — IRQ is gone,
-	 * no more callbacks into driver code can occur.
+	 * Phase 2: free DMA rings after all worker threads have exited.
+	 */
+	halWpdmaFreeRing(prGlueInfo);
+
+	/*
+	 * Phase 3: disconnect the IRQ.  This should be IRQ-only.
+	 * Do not unmap BARs in glBusFreeIrq().
+	 */
+	glBusFreeIrq(prDev, prGlueInfo);
+
+	/*
+	 * Phase 4: netdev/cfg80211 teardown.  Keep MMIO mapped until
+	 * all driver-facing callbacks are done.
 	 */
 	wlanNetUnregister(prDev->ieee80211_ptr);
 	wlanNetDestroy(prDev->ieee80211_ptr);
-
 	wlanUnregisterInetAddrNotifier();
 
 #if CFG_MET_PACKET_TRACE_SUPPORT
 	kalMetRemoveProcfs();
 #endif
 
-exit_removing:
+	/*
+	 * Phase 5: free BAR/MMIO and PCI regions last.
+	 */
+	glBusFreeResources(prGlueInfo);
+
+#if (CFG_SUPPORT_TRACE_TC4 == 1)
+	wlanDebugTC4Uninit();
+#endif
+
+	fgSimplifyResetFlow = TRUE;
+
+out:
 	atomic_set(&g_wlanRemoving, 0);
 }
+
 
 
 static void wlanGlobalReset(void)
@@ -7406,76 +6975,57 @@ static int initWlan(void)
 {
 	int ret = 0;
 	struct GLUE_INFO *prGlueInfo = NULL;
+
 	pr_info("initWlan entered\n");
 
-	/* 0. GLOBAL RESET: Prevent the driver from using stale pointers 
-       from a previous failed insmod attempt. */
+	/* Start from a known software state every insmod. */
 	wlanGlobalReset();
-
-#if (CFG_POWER_ON_DOWNLOAD_EMI_ROM_PATCH == 1)
-#if defined(SOC3_0)
-#if defined(_HIF_AXI)
-/* prPlatDev is already created by initWlan()->glRegisterBus()::axi.c */
-	void *pvData = (void *)prPlatDev;
-	void *pvDriverData = (void *)prPlatDev->id_entry->driver_data;
-#endif
-
-#if defined(_HIF_PCIE)
-	void *pvData = NULL;
-	void *pvDriverData = (void *)&mt66xx_driver_data_soc3_0;
-#endif
-#endif
-
-	struct mt66xx_chip_info *prChipInfo;
-#endif
 
 #if defined(UT_TEST_MODE) && defined(CFG_BUILD_X86_PLATFORM)
 	/* Refer 6765 dts setting */
-	char *ptr = NULL;
+	{
+		char *ptr = NULL;
 
-	gConEmiSize = 0x400000;
-	ptr = kmalloc(gConEmiSize, GFP_KERNEL);
-	if (!ptr) {
-		DBGLOG(INIT, INFO,
-		       "initWlan try to allocate 0x%x bytes memory error\n",
-		       gConEmiSize);
-		return -EINVAL;
+		gConEmiSize = 0x400000;
+		ptr = kmalloc(gConEmiSize, GFP_KERNEL);
+		if (!ptr) {
+			DBGLOG(INIT, INFO,
+			       "initWlan: failed to allocate 0x%x bytes for EMI\n",
+			       gConEmiSize);
+			return -ENOMEM;
+		}
+		memset(ptr, 0, gConEmiSize);
+		gConEmiPhyBase = (phys_addr_t)ptr;
 	}
-	memset(ptr, 0, gConEmiSize);
-	gConEmiPhyBase = (phys_addr_t)ptr;
 #endif
 
+	DBGLOG(INIT, INFO, "initWlan: begin\n");
 
-
-	DBGLOG(INIT, INFO, "initWlan\n");
 	atomic_set(&g_wlanRemoving, 0);
 
 #ifdef CFG_CHIP_RESET_KO_SUPPORT
 	rstNotifyWholeChipRstStatus(RST_MODULE_WIFI,
-		RST_MODULE_STATE_KO_INSMOD, NULL);
+				     RST_MODULE_STATE_KO_INSMOD, NULL);
 #endif
 
 #ifdef CFG_DRIVER_INF_NAME_CHANGE
-
 	if (kalStrLen(gprifnamesta) > CUSTOM_IFNAMESIZ ||
 	    kalStrLen(gprifnamep2p) > CUSTOM_IFNAMESIZ ||
 	    kalStrLen(gprifnameap) > CUSTOM_IFNAMESIZ) {
-		DBGLOG(INIT, ERROR, "custom infname len illegal > %d\n",
+		DBGLOG(INIT, ERROR,
+		       "initWlan: custom infname len illegal > %d\n",
 		       CUSTOM_IFNAMESIZ);
 		return -EINVAL;
 	}
-
-#endif /*  CFG_DRIVER_INF_NAME_CHANGE */
+#endif /* CFG_DRIVER_INF_NAME_CHANGE */
 
 	wlanDebugInit();
 
-	/* memory pre-allocation */
 #if CFG_PRE_ALLOCATION_IO_BUFFER
 	kalInitIOBuffer(TRUE);
 #else
 	kalInitIOBuffer(FALSE);
 #endif
-
 
 #if WLAN_INCLUDE_PROC
 	procInitFs();
@@ -7485,58 +7035,64 @@ static int initWlan(void)
 #endif
 
 	wlanCreateWirelessDevice();
-	if (gprWdev[0] == NULL)
+	if (gprWdev[0] == NULL) {
+		DBGLOG(INIT, ERROR, "initWlan: wlanCreateWirelessDevice failed\n");
 		return -ENOMEM;
+	}
 
-	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(
-			     wlanGetWiphy());
+	prGlueInfo = (struct GLUE_INFO *)wiphy_priv(wlanGetWiphy());
+	if (!prGlueInfo) {
+		DBGLOG(INIT, ERROR, "initWlan: prGlueInfo is NULL\n");
+		return -ENODEV;
+	}
+
 	if (gprWdev[0]) {
 		/* P2PDev and P2PRole[0] share the same Wdev */
 		if (glP2pCreateWirelessDevice(prGlueInfo) == TRUE)
 			gprP2pWdev = gprP2pRoleWdev[0];
 	}
+
 	gPrDev = NULL;
 
 #if CFG_DC_USB_WOW_CALLBACK
-	/* register system DC wow enable/disable callback function */
 	do {
-		typedef void (*func_ptr) (int (*f) (void));
+		typedef void (*func_ptr)(int (*f)(void));
 		char *func_name = "WifiRegisterPdwncCallback";
-		func_ptr pFunc =
-			(func_ptr)GLUE_SYMBOL_GET(func_name);
+		func_ptr pFunc = (func_ptr)GLUE_SYMBOL_GET(func_name);
 		char *func_name2 = "RegisterPdwncCallbackWifi";
-		func_ptr pFunc2 =
-			(func_ptr)GLUE_SYMBOL_GET(func_name2);
+		func_ptr pFunc2 = (func_ptr)GLUE_SYMBOL_GET(func_name2);
 
 		if (pFunc) {
-			DBGLOG(INIT, ERROR,
-			"Register Wow callback1 success\n");
-				pFunc(&kalDcSetWow);
+			DBGLOG(INIT, INFO, "initWlan: Wow callback1 registered\n");
+			pFunc(&kalDcSetWow);
 			GLUE_SYMBOL_PUT(func_name);
 		} else if (pFunc2) {
-			DBGLOG(INIT, ERROR,
-			"Register Wow callback2 success\n");
+			DBGLOG(INIT, INFO, "initWlan: Wow callback2 registered\n");
 			pFunc2(&kalDcSetWow);
 			GLUE_SYMBOL_PUT(pFunc2);
-		} else
-			DBGLOG(INIT, ERROR,
-			"No Exported Func Found:%s\n",
-			func_name);
+		} else {
+			DBGLOG(INIT, WARN, "initWlan: no exported wow callback found\n");
+		}
 	} while (0);
 #endif
 
-	ret = ((glRegisterBus(wlanProbe,
-			      wlanRemove) == WLAN_STATUS_SUCCESS) ? 0 : -EIO);
-
-	if (ret == -EIO) {
+	/*
+	 * Bus registration is the point where probe() gets invoked.
+	 * Do not duplicate bring-up here.
+	 */
+	DBGLOG(INIT, INFO, "initWlan: registering bus\n");
+	ret = (glRegisterBus(wlanProbe, wlanRemove) == WLAN_STATUS_SUCCESS) ? 0 : -EIO;
+	if (ret) {
+		DBGLOG(INIT, ERROR, "initWlan: glRegisterBus failed (%d)\n", ret);
 		kalUninitIOBuffer();
 		return ret;
 	}
-#if (CFG_CHIP_RESET_SUPPORT)
+
+#ifdef CFG_CHIP_RESET_SUPPORT
 	glResetInit(prGlueInfo);
 #endif
-	kalFbNotifierReg((struct GLUE_INFO *) wiphy_priv(
-				 wlanGetWiphy()));
+
+	kalFbNotifierReg((struct GLUE_INFO *)wiphy_priv(wlanGetWiphy()));
 	wlanRegisterNetdevNotifier();
 
 #ifdef CONFIG_MTK_CONNSYS_DEDICATED_LOG_PATH
@@ -7544,47 +7100,33 @@ static int initWlan(void)
 #endif
 
 #if CFG_MTK_ANDROID_EMI
-	/* Set WIFI EMI protection to consys permitted on system boot up */
+	/* Set Wi-Fi EMI protection to consys permitted on system boot up. */
 	kalSetEmiMpuProtection(gConEmiPhyBase, true);
 #endif
 
-#if (CFG_POWER_ON_DOWNLOAD_EMI_ROM_PATCH == 1)
-/* #pragma message("initWlan(2)::CFG_POWER_ON_DOWNLOAD_EMI_ROM_PATCH == 1") */
-/* Power on download MCU ROM EMI + WiFi ROM EMI + ROM patch */
-	wlanPowerOnInit();
-
-#if defined(_HIF_AXI) && defined(SOC3_0)
-/* AXI goes over here, to be conti... */
-#endif
-
-#if defined(_HIF_PCIE) && defined(SOC3_0)
-	prChipInfo = ((struct mt66xx_hif_driver_data *)pvDriverData)->chip_info;
-
-	pvData = (void *)prChipInfo->pdev;
-#endif
-
-/* Manual probe disabled for Arch branch */
-/* Removed manual probe for Arch/PCIe */
-	//	wlanProbe(pvData, pvDriverData);
+#if CFG_POWER_ON_DOWNLOAD_EMI_ROM_PATCH == 1
+	/*
+	 * Legacy power-on-download path removed.
+	 * Probe owns hardware bring-up and firmware download now.
+	 * Keep this block empty on purpose.
+	 */
 #endif
 
 #if CFG_POWER_OFF_CTRL_SUPPORT
 	wlanRegisterRebootNotifier();
 #endif
+
 #if CFG_AP_80211KVR_INTERFACE
 	nl_sk = netlink_kernel_create(&init_net, NETLINK_OSS_KERNEL, NULL);
 	if (!nl_sk) {
-		DBGLOG(INIT, ERROR, "netlink create failed!\n");
+		DBGLOG(INIT, ERROR, "initWlan: netlink create failed\n");
 		return -EBUSY;
 	}
 #endif /* CFG_AP_80211KVR_INTERFACE */
 
-
 	DBGLOG(INIT, INFO, "initWlan::End\n");
-
-	return ret;
-}				/* end of initWlan() */
-
+	return 0;
+}
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief Driver exit point when the driver as a Linux Module is removed. Called
@@ -7710,6 +7252,7 @@ static void exitWlan(void)
 	DBGLOG(INIT, INFO, "exitWlan\n");
 
 }				/* end of exitWlan() */
+
 
 #if CFG_POWER_OFF_CTRL_SUPPORT
 static int wf_pdwnc_notify(struct notifier_block *nb,

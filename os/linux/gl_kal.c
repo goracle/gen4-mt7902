@@ -4803,9 +4803,9 @@ int main_thread(void *data)
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule();
 	}
+
 	return 0;
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*!

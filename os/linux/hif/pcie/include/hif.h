@@ -429,4 +429,5 @@ extern void dump_pci_state(struct pci_dev *pdev);
 extern void dump_mailbox(struct ADAPTER *prAdapter);
 extern void dump_pdma_state(struct ADAPTER *prAdapter);
 
+void glBusFreeResources(struct GLUE_INFO *prGlueInfo);
 #endif /* _HIF_H */

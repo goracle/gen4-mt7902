@@ -280,19 +280,21 @@ static bool kalWaitRxDmaDone(struct GLUE_INFO *prGlueInfo,
 {
 	uint32_t u4Count = 0;
 
-	for (u4Count = 0; pRxD->DMADONE == 0; u4Count++) {
+	for (u4Count = 0; ; u4Count++) {
+		dma_rmb();
+		if (pRxD->DMADONE != 0)
+			return true;
 		kalDevRegRead(prGlueInfo, prRxRing->hw_didx_addr,
 			      &prRxRing->RxDmaIdx);
 		if (u4Count > DMA_DONE_WAITING_COUNT) {
 			DBGLOG(HAL, WARN,
 			       "[DMADONE-TIMEOUT] P[%u] DMA[%u] CPU[%u] DMADONE=%u\n",
-			       u2Port, prRxRing->RxDmaIdx, prRxRing->RxCpuIdx, pRxD->DMADONE);
+			       u2Port, prRxRing->RxDmaIdx,
+			       prRxRing->RxCpuIdx, pRxD->DMADONE);
 			return false;
 		}
-
 		kalMdelay(DMA_DONE_WAITING_TIME);
 	}
-	return true;
 }
 
 /*----------------------------------------------------------------------------*/

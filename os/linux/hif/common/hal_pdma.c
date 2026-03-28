@@ -1895,11 +1895,9 @@ static void hal_rx_process_event_rfbs(struct ADAPTER *prAdapter, struct QUE *prR
 			continue;
 		}
 
-		/* populate prRxStatus, pvHeader, u2HeaderLen etc via descriptor */
-		nicRxFillRFB(prAdapter, prSwRfb);
-
+		/* check pkt_type BEFORE calling nicRxFillRFB */
 		if (prRxDescOps && prRxDescOps->nic_rxd_get_pkt_type)
-			ucRawPktType = prRxDescOps->nic_rxd_get_pkt_type(prSwRfb->prRxStatus);
+			ucRawPktType = prRxDescOps->nic_rxd_get_pkt_type(prSwRfb->pucRecvBuff);
 
 		DBGLOG(RX, WARN,
 		       "[EVT-RING] idx=%u pkt_type=%u wlanIdx=%u buf[0..3]=%02x %02x %02x %02x\n",
@@ -1909,14 +1907,14 @@ static void hal_rx_process_event_rfbs(struct ADAPTER *prAdapter, struct QUE *prR
 
 		if (ucRawPktType == RX_PKT_TYPE_SW_DEFINED ||
 		    ucRawPktType == RX_PKT_TYPE_MSDU_REPORT) {
+			/* nicRxFillRFB not needed — firmware event, not an 802.11 frame */
+			prSwRfb->prRxStatus = (void *)prSwRfb->pucRecvBuff;
 			prSwRfb->ucPacketType = ucRawPktType;
 			nicRxProcessPacketType(prAdapter, prSwRfb);
 		} else {
-			/*
-			 * nicRxFillRFB set pvHeader/u2HeaderLen correctly via
-			 * the RX descriptor. Use them directly — no heuristics.
-			 */
-			prSwRfb->ucPacketType = RX_PKT_TYPE_RX_DATA;
+			/* 802.11 mgmt frame — fill RFB then process */
+			nicRxFillRFB(prAdapter, prSwRfb);
+			prSwRfb->ucPacketType = RX_PKT_TYPE_SW_DEFINED;
 			prSwRfb->ucSecMode = CIPHER_SUITE_NONE;
 
 			if (prSwRfb->pvHeader &&
@@ -1956,7 +1954,6 @@ static void hal_rx_process_event_rfbs(struct ADAPTER *prAdapter, struct QUE *prR
 
 	DBGLOG(RX, WARN, "[EVT-RING] exit processed=%u\n", u4Processed);
 }
-
 
 /* Helper: process each SW_RFB from prRxQue
  * - reads data (fgRxData decides which read primitive)
@@ -2500,6 +2497,27 @@ bool halWpdmaAllocRxRing(struct GLUE_INFO *prGlueInfo, uint32_t u4Num,
 	pRxRing   = &prHifInfo->RxRing[u4Num];
 
 	prRxDesc->AllocSize = u4Size * u4DescSize;
+
+	/* Free any previously allocated per-cell buffers before (re)alloc
+	 * to prevent swiotlb leaks on repeated probe/remove cycles.
+	 */
+	for (u4Idx = 0; u4Idx < pRxRing->u4RingSize; u4Idx++) {
+		struct RTMP_DMACB *prCell = &pRxRing->Cell[u4Idx];
+		struct RTMP_DMABUF *pBuf = &prCell->DmaBuf;
+
+		if (prCell->pPacket) {
+			if (prMemOps->unmapRxBuf && pBuf->AllocPa)
+				prMemOps->unmapRxBuf(prHifInfo,
+						     pBuf->AllocPa,
+						     pBuf->AllocSize);
+			if (prMemOps->freePacket)
+				prMemOps->freePacket(prCell->pPacket);
+			prCell->pPacket = NULL;
+			pBuf->AllocVa  = NULL;
+			pBuf->AllocPa  = 0;
+		}
+	}
+
 	if (fgAllocMem && prMemOps->allocRxDesc)
 		prMemOps->allocRxDesc(prHifInfo, prRxDesc, u4Num);
 
@@ -3381,6 +3399,7 @@ uint32_t halWpdmaGetRxDmaDoneCnt(IN struct GLUE_INFO *prGlueInfo,
 	struct RTMP_RX_RING *prRxRing;
 	struct GL_HIF_INFO *prHifInfo;
 	uint32_t u4MaxCnt = 0, u4CpuIdx = 0, u4DmaIdx = 0;
+	static atomic_t s_rxcnt_dbg_calls = ATOMIC_INIT(0);
 
 	prHifInfo = &prGlueInfo->rHifInfo;
 	prRxRing = &prHifInfo->RxRing[ucRingNum];
@@ -3388,7 +3407,15 @@ uint32_t halWpdmaGetRxDmaDoneCnt(IN struct GLUE_INFO *prGlueInfo,
 	kalDevRegRead(prGlueInfo, prRxRing->hw_cnt_addr, &u4MaxCnt);
 	u4MaxCnt &= MT_RING_CNT_MASK;
 
-	DBGLOG(HAL, WARN, "[RXCNT-DBG] P[%u] hw_cnt_addr=0x%08x raw_cnt=0x%08x ring_size=%u\n", ucRingNum, prRxRing->hw_cnt_addr, u4MaxCnt, prRxRing->u4RingSize);
+	DBGLOG(HAL, WARN,
+	       "[RXCNT-DBG] P[%u] hw_cnt_addr=0x%08x raw_cnt=0x%08x ring_size=%u\n",
+	       ucRingNum, prRxRing->hw_cnt_addr, u4MaxCnt, prRxRing->u4RingSize);
+
+	if (atomic_inc_return(&s_rxcnt_dbg_calls) == 100) {
+		DBGLOG(HAL, WARN,
+		       "[RXCNT-DBG] 100th invocation reached, dumping stack\n");
+		dump_stack();
+	}
 
 	if (u4MaxCnt == 0 || u4MaxCnt > RX_RING_SIZE)
 		return 0;
@@ -3397,20 +3424,22 @@ uint32_t halWpdmaGetRxDmaDoneCnt(IN struct GLUE_INFO *prGlueInfo,
 	kalDevRegRead(prGlueInfo, prRxRing->hw_didx_addr, &u4DmaIdx);
 	u4DmaIdx &= MT_RING_DIDX_MASK;
 
-	DBGLOG(HAL, WARN, "[RXCNT-DBG] P[%u] CpuIdx=%u DmaIdx=%u MaxCnt=%u\n",
-	      ucRingNum, u4CpuIdx, u4DmaIdx, u4MaxCnt);
+	DBGLOG(HAL, WARN,
+	       "[RXCNT-DBG] P[%u] CpuIdx=%u DmaIdx=%u MaxCnt=%u\n",
+	       ucRingNum, u4CpuIdx, u4DmaIdx, u4MaxCnt);
 
 	/* Ring empty: DIDX == (CIDX+1) % size */
-	uint32_t u4NextCpu = (u4CpuIdx + 1) % u4MaxCnt;
-	if (u4NextCpu == u4DmaIdx)
-		return 0;
+	{
+		uint32_t u4NextCpu = (u4CpuIdx + 1) % u4MaxCnt;
+		if (u4NextCpu == u4DmaIdx)
+			return 0;
+	}
 
 	if (u4CpuIdx >= u4DmaIdx)
 		return u4MaxCnt + u4DmaIdx - u4CpuIdx - 1;
 	else
 		return u4DmaIdx - u4CpuIdx - 1;
 }
-
 
 
 bool halWpdmaWriteCmd(IN struct GLUE_INFO *prGlueInfo,
@@ -4597,6 +4626,12 @@ void halHwRecoveryFromError(IN struct ADAPTER *prAdapter)
 
 			DBGLOG(HAL, INFO, "SER(M) Host enable PDMA\n");
 			halWpdmaInitRing(prGlueInfo);
+
+			/* Reclaim driver ownership after ring reinit */
+			prAdapter->fgIsFwOwn = TRUE;
+			if (!halSetDriverOwn(prAdapter)) {
+				DBGLOG(HAL, ERROR, "[SER] halSetDriverOwn failed after ring reinit\n");
+			}
 
 			DBGLOG(HAL, INFO,
 				   "SER(N) Host interrupt MCU PDMA ring init done\n");

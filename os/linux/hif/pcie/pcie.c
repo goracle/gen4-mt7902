@@ -387,56 +387,42 @@ static void mtk_pci_remove(struct pci_dev *pdev)
 	prHifInfo = &prGlueInfo->rHifInfo;
 	prAdapter = prGlueInfo->prAdapter;
 
-	/* 1. Set the teardown flag immediately.
-	 * This prevents any recovery workers from trying to 'help' while we exit.
-	 */
+	/* 1. Block recovery paths */
 	set_bit(MTK_FLAG_TEARDOWN, &prHifInfo->state_flags);
 	cancel_work_sync(&prHifInfo->recovery_work);
 
-	/* 2. EMERGENCY THAW: If the hardware is dead, the threads are stuck.
-	 * We manually signal the completions that wlanOffStopWlanThreads waits for.
-	 */
+	/* 2. Optional thaw (your existing logic is fine) */
 	if (mt7902_mmio_dead(prHifInfo)) {
-		DBGLOG(INIT, WARN, "[Sovereignty] Link dead. Force-thawing completions to prevent hang.\n");
+		DBGLOG(INIT, WARN,
+		       "[Sovereignty] Link dead. Force-thawing completions.\n");
 
 		if (prAdapter) {
-			/* Signal the scan completion */
 			complete_all(&prAdapter->rScanDoneCompletion);
-
-			/* * MTK drivers usually have hidden completions in prAdapter or prHifInfo
-			 * used for thread synchronization (rHaltComp, rHifHaltComp).
-			 * We signal these to allow the 'wait_for_completion' in
-			 * wlanOffStopWlanThreads to fall through.
-			 */
-			if (prAdapter->fgIsIntEnable) {
-				/* If you have access to rHaltComp or rHifHaltComp in your headers:
-				 * complete_all(&prAdapter->rHaltComp);
-				 * complete_all(&prAdapter->rHifHaltComp);
-				 */
-			}
+			/* optional hidden completions */
 		}
 	}
 
-	/* 3. Disable interrupts at the kernel level so the ISR stops firing
-	 * 0xFFFFFFFF reads into the tasklets.
-	 */
+	/* 3. Stop ISR entry ASAP */
 	disable_irq(pdev->irq);
 
-	/* 4. Trigger the main driver removal.
-	 * With the completions forced above, this should no longer hang.
-	 */
+	/* 4. Full driver teardown (threads, DMA, IRQ, etc.) */
 	pfWlanRemove();
+
+	/* 5. NOW it is safe to free MMIO + PCI resources */
+	if (prGlueInfo)
+		glBusFreeResources(prGlueInfo);
 
 disable_device:
 	if (pci_is_enabled(pdev)) {
-		/* Clean up PCI resources */
-		pci_release_regions(pdev);
+		/* Only disable here — regions already released */
 		pci_disable_device(pdev);
 	}
 
 	pci_set_drvdata(pdev, NULL);
-	DBGLOG(INIT, INFO, "[Sovereignty] mtk_pci_remove: Cleanup complete.\n");
+	DBGLOG(INIT, INFO,
+	       "[Sovereignty] mtk_pci_remove: Cleanup complete.\n");
 }
+
 /*----------------------------------------------------------------------------*/
 /*! \brief Mark IRQs as dead - call before any PCI teardown
  *
@@ -454,6 +440,24 @@ static inline void mt7902_mark_irq_dead(struct GL_HIF_INFO *prHifInfo)
 {
 	clear_bit(MTK_FLAG_IRQ_ALIVE, &prHifInfo->state_flags);
 	DBGLOG(HAL, WARN, "IRQ marked as DEAD - no more synchronize_irq allowed\n");
+}
+
+void glBusFreeResources(struct GLUE_INFO *prGlueInfo)
+{
+    struct GL_HIF_INFO *prHifInfo = &prGlueInfo->rHifInfo;
+    struct pci_dev *pdev = prHifInfo->pdev;
+
+    if (prHifInfo->CSRBaseAddress) {
+        DBGLOG(INIT, INFO, "Freeing BAR/MMIO\n");
+
+        iounmap(prHifInfo->CSRBaseAddress);
+        prHifInfo->CSRBaseAddress = NULL;
+
+        if (pdev) {
+            pci_release_regions(pdev);
+            pci_clear_master(pdev);
+        }
+    }
 }
 
 /*----------------------------------------------------------------------------*/
@@ -1343,6 +1347,7 @@ void glBusFreeIrq(void *pvData, void *pvCookie)
     struct GLUE_INFO *prGlueInfo = NULL;
     struct GL_HIF_INFO *prHifInfo = NULL;
     struct pci_dev *pdev = NULL;
+	//dump_stack(); // no spooky allowed!
 
     if (!pvData || !pvCookie) {
         DBGLOG(INIT, INFO, "%s: Invalid arguments (pvData:%p, pvCookie:%p)\n", 
@@ -1397,22 +1402,7 @@ void glBusFreeIrq(void *pvData, void *pvCookie)
 
     /* ===================== BAR / PCI ===================== */
 
-    /* Use the struct-wrapped address to ensure we aren't unmapping NULL */
-    if (prHifInfo->CSRBaseAddress) {
-        DBGLOG(INIT, INFO, "%s: unmapping CSRBaseAddress %p\n",
-               __func__, prHifInfo->CSRBaseAddress);
-
-        iounmap(prHifInfo->CSRBaseAddress);
-        prHifInfo->CSRBaseAddress = NULL;
-
-        /* Only release regions if we are the ones who requested them */
-        if (pdev) {
-            pci_release_regions(pdev);
-            pci_clear_master(pdev);
-        }
-    } else {
-        DBGLOG(INIT, INFO, "%s: CSRBaseAddress already NULL\n", __func__);
-    }
+	// reserved for later cleanup, in wlanOffStopWlanThreads
 }
 
 

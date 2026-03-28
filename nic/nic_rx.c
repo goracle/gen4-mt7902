@@ -2426,32 +2426,33 @@ void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
  */
 /*----------------------------------------------------------------------------*/
 void nicRxProcessMgmtPacket(IN struct ADAPTER *prAdapter,
-                            IN OUT struct SW_RFB *prSwRfb)
-{struct GLUE_INFO *prGlueInfo;
-    uint8_t ucSubtype;
-    uint16_t u2TxFrameCtrl;
+							IN OUT struct SW_RFB *prSwRfb)
+{
+	struct GLUE_INFO *prGlueInfo;
+	uint8_t ucSubtype;
+	uint16_t u2TxFrameCtrl;
 #if CFG_SUPPORT_802_11W
-    /* BOOL   fgMfgDrop = FALSE; */
+	/* BOOL   fgMfgDrop = FALSE; */
 #endif
 
-    ASSERT(prAdapter);
-    ASSERT(prSwRfb);
+	ASSERT(prAdapter);
+	ASSERT(prSwRfb);
 
-    /*
-     * Fill RFB only if not already done. The data-ring reroute path
-     * (RX_PKT_TYPE_SW_DEFINED) already called nicRxFillRFB and set
-     * pvHeader to the correct 802.11 FC offset. Calling fill again
-     * would clobber pvHeader with a stale u4HeaderOffset calculation.
-     */
-    if (prSwRfb->ucPacketType != RX_PKT_TYPE_SW_DEFINED)
-        nicRxFillRFB(prAdapter, prSwRfb);
+	if (!prSwRfb->pvHeader)
+		nicRxFillRFB(prAdapter, prSwRfb);
 
-    __relay_mgmt_to_cfg80211(prAdapter, prSwRfb);
+	if (!prSwRfb->pvHeader) {
+		DBGLOG(RX, ERROR, "[MGMT-RX] pvHeader NULL after fill, dropping\n");
+		nicRxReturnRFB(prAdapter, prSwRfb);
+		return;
+	}
+
+	__relay_mgmt_to_cfg80211(prAdapter, prSwRfb);
 
     /* Extract management subtype from the 802.11 header */
     ucSubtype = (*(uint8_t *)(prSwRfb->pvHeader) & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
     DBGLOG(RX, WARN, "[MGMT-RX] subtype=0x%02x wlanIdx=%d staRecIdx=%d pktType=%d\n",
-        ucSubtype, prSwRfb->ucWlanIdx, prSwRfb->ucStaRecIdx, prSwRfb->ucPacketType);
+		   ucSubtype, prSwRfb->ucWlanIdx, prSwRfb->ucStaRecIdx, prSwRfb->ucPacketType);
 
     /* Extract the frame type (beacon/probe vs other mgmt) */
     u2TxFrameCtrl = (*(uint8_t *)(prSwRfb->pvHeader) & MASK_FRAME_TYPE);
@@ -2531,7 +2532,7 @@ void nicRxProcessMgmtPacket(IN struct ADAPTER *prAdapter,
 #if CFG_MGMT_FRAME_HANDLING
         prGlueInfo = prAdapter->prGlueInfo;
 
-/* 0x3801 Bypass: Frame was already relayed above. Skip internal processing. */
+		/* 0x3801 Bypass: Frame was already relayed above. Skip internal processing. */
         if (prSwRfb->ucPacketType == RX_PKT_TYPE_SW_DEFINED) {
             if (u2TxFrameCtrl == MAC_FRAME_BEACON ||
                 u2TxFrameCtrl == MAC_FRAME_PROBE_RSP) {
