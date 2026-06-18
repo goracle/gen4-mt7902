@@ -537,7 +537,7 @@ void halSerPollDoneInSuspend(IN struct ADAPTER *prAdapter);
 void halHifRst(struct GLUE_INFO *prGlueInfo);
 bool halWpdmaAllocRing(struct GLUE_INFO *prGlueInfo, bool fgAllocMem);
 void halWpdmaFreeRing(struct GLUE_INFO *prGlueInfo);
-void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo);
+void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo, u_int8_t fgEnableDma);
 void halWpdmaInitTxRing(IN struct GLUE_INFO *prGlueInfo);
 void halWpdmaInitRxRing(IN struct GLUE_INFO *prGlueInfo);
 void halWpdmaProcessCmdDmaDone(IN struct GLUE_INFO *prGlueInfo,

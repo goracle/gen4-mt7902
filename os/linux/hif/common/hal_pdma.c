@@ -719,7 +719,7 @@ u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 
 				halWpdmaAllocRing(prAdapter->prGlueInfo, false);
 				halResetMsduToken(prAdapter);
-				halWpdmaInitRing(prAdapter->prGlueInfo);
+				halWpdmaInitRing(prAdapter->prGlueInfo, TRUE);
 				nicSerReInitBeaconFrame(prAdapter);
 			} else if (prChipInfo->asicWfdmaReInit) {
 				prChipInfo->asicWfdmaReInit(prAdapter);
@@ -1464,14 +1464,14 @@ bool halHifSwInfoInit(IN struct ADAPTER *prAdapter)
 
 		halResetMsduToken(prAdapter);
 		DBGLOG(INIT, INFO, "[SER][L0.5] Host enable WFDMA\n");
-		halWpdmaInitRing(prAdapter->prGlueInfo);
+		halWpdmaInitRing(prAdapter->prGlueInfo, FALSE);
 	} else
 #endif
 		{
 			if (!halWpdmaAllocRing(prAdapter->prGlueInfo, true))
 				return false;
 
-			halWpdmaInitRing(prAdapter->prGlueInfo);
+			halWpdmaInitRing(prAdapter->prGlueInfo, FALSE);
 			halInitMsduTokenInfo(prAdapter);
 		}
 
@@ -2930,11 +2930,7 @@ int fgHalInitTrace = 0;
 #endif
 
 
-
-
-
-
-void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo)
+void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo, u_int8_t fgEnableDma)
 {
 	struct GL_HIF_INFO *prHifInfo;
 	struct BUS_INFO *prBusInfo;
@@ -3026,7 +3022,7 @@ void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo)
 	 * place and cause unreliable behavior on some platforms. So we move the
 	 * prefetch step here to match mt76 logic.
 	 */
-	if (prBusInfo->wfdmaManualPrefetch) {
+	if (fgEnableDma && prBusInfo->wfdmaManualPrefetch) {
 		DBGLOG(INIT, INFO, "halWpdmaInitRing: manual prefetch hook present, calling it\n");
 		prBusInfo->wfdmaManualPrefetch(prGlueInfo);
 
@@ -3055,7 +3051,7 @@ void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo)
 	}
 
 	/* Now finalize DMA setup (this may enable DMA master bits) */
-	if (prBusInfo->pdmaSetup)
+	if (prBusInfo->pdmaSetup && fgEnableDma)
 		prBusInfo->pdmaSetup(prGlueInfo, TRUE);
 
 #ifdef CFG_HAL_INIT_TRACE
@@ -3399,7 +3395,7 @@ uint32_t halWpdmaGetRxDmaDoneCnt(IN struct GLUE_INFO *prGlueInfo,
 	struct RTMP_RX_RING *prRxRing;
 	struct GL_HIF_INFO *prHifInfo;
 	uint32_t u4MaxCnt = 0, u4CpuIdx = 0, u4DmaIdx = 0;
-	static atomic_t s_rxcnt_dbg_calls = ATOMIC_INIT(0);
+	//static atomic_t s_rxcnt_dbg_calls = ATOMIC_INIT(0);
 
 	prHifInfo = &prGlueInfo->rHifInfo;
 	prRxRing = &prHifInfo->RxRing[ucRingNum];
@@ -3407,6 +3403,7 @@ uint32_t halWpdmaGetRxDmaDoneCnt(IN struct GLUE_INFO *prGlueInfo,
 	kalDevRegRead(prGlueInfo, prRxRing->hw_cnt_addr, &u4MaxCnt);
 	u4MaxCnt &= MT_RING_CNT_MASK;
 
+	/*
 	DBGLOG(HAL, WARN,
 	       "[RXCNT-DBG] P[%u] hw_cnt_addr=0x%08x raw_cnt=0x%08x ring_size=%u\n",
 	       ucRingNum, prRxRing->hw_cnt_addr, u4MaxCnt, prRxRing->u4RingSize);
@@ -3416,6 +3413,7 @@ uint32_t halWpdmaGetRxDmaDoneCnt(IN struct GLUE_INFO *prGlueInfo,
 		       "[RXCNT-DBG] 100th invocation reached, dumping stack\n");
 		dump_stack();
 	}
+	*/
 
 	if (u4MaxCnt == 0 || u4MaxCnt > RX_RING_SIZE)
 		return 0;
@@ -3424,9 +3422,11 @@ uint32_t halWpdmaGetRxDmaDoneCnt(IN struct GLUE_INFO *prGlueInfo,
 	kalDevRegRead(prGlueInfo, prRxRing->hw_didx_addr, &u4DmaIdx);
 	u4DmaIdx &= MT_RING_DIDX_MASK;
 
+	/*
 	DBGLOG(HAL, WARN,
 	       "[RXCNT-DBG] P[%u] CpuIdx=%u DmaIdx=%u MaxCnt=%u\n",
 	       ucRingNum, u4CpuIdx, u4DmaIdx, u4MaxCnt);
+	*/
 
 	/* Ring empty: DIDX == (CIDX+1) % size */
 	{
@@ -4625,7 +4625,7 @@ void halHwRecoveryFromError(IN struct ADAPTER *prAdapter)
 			halResetMsduToken(prAdapter);
 
 			DBGLOG(HAL, INFO, "SER(M) Host enable PDMA\n");
-			halWpdmaInitRing(prGlueInfo);
+			halWpdmaInitRing(prGlueInfo, TRUE);
 
 			/* Reclaim driver ownership after ring reinit */
 			prAdapter->fgIsFwOwn = TRUE;

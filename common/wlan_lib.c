@@ -1337,380 +1337,361 @@ static inline void safe_sleep_ms(unsigned int ms)
 }
 
 
-uint32_t wlanAdapterStart(IN struct ADAPTER *prAdapter,
-			IN struct REG_INFO *prRegInfo,
-			IN const u_int8_t bAtResetFlow)
+/* ------------------------------------------------------------------ */
+/* 1. Alloc + basic init (cold only)                                   */
+/* ------------------------------------------------------------------ */
+static uint32_t
+wlanAdapterStart_AllocAndInit(struct ADAPTER *prAdapter,
+                              struct REG_INFO *prRegInfo)
 {
-	uint32_t u4Status = WLAN_STATUS_SUCCESS;
-	enum ENUM_ADAPTER_START_FAIL_REASON {
-		ALLOC_ADAPTER_MEM_FAIL,
-		DRIVER_OWN_FAIL,
-		INIT_ADAPTER_FAIL,
-		INIT_HIFINFO_FAIL,
-		SET_CHIP_ECO_INFO_FAIL,
-		RAM_CODE_DOWNLOAD_FAIL,
-		WAIT_FIRMWARE_READY_FAIL,
-		FAIL_REASON_MAX
-	} eFailReason;
+    uint32_t u4Status;
 
-	ASSERT(prAdapter);
-	DEBUGFUNC("wlanAdapterStart");
+    u4Status = nicAllocateAdapterMemory(prAdapter);
+    if (u4Status != WLAN_STATUS_SUCCESS) {
+        DBGLOG(INIT, ERROR, "nicAllocateAdapterMemory failed\n");
+        return WLAN_STATUS_FAILURE;
+    }
 
-	eFailReason = FAIL_REASON_MAX;
+    prAdapter->u4OsPacketFilter = PARAM_PACKET_FILTER_SUPPORTED;
 
-	wlanOnPreAllocAdapterMem(prAdapter, bAtResetFlow);
+    u4Status = nicInitializeAdapter(prAdapter);
+    if (u4Status != WLAN_STATUS_SUCCESS) {
+        DBGLOG(INIT, ERROR, "nicInitializeAdapter failed\n");
+        nicReleaseAdapterMemory(prAdapter);
+        return WLAN_STATUS_FAILURE;
+    }
 
+    return WLAN_STATUS_SUCCESS;
+}
 
-            // ⭐⭐⭐ MOVE THE MUTEX INIT HERE - RIGHT AFTER MEMORY ALLOCATION! ⭐⭐⭐
-            DBGLOG(INIT, ERROR, "========================================\n");
-            DBGLOG(INIT, ERROR, "LOCK INIT: Initializing synchronization primitives\n");
-            DBGLOG(INIT, ERROR, "========================================\n");
-            
-            mutex_init(&prAdapter->rAisFsmMutex);
-            spin_lock_init(&prAdapter->rScanListLock);
-            init_completion(&prAdapter->rScanDoneCompletion);
-            
-            DBGLOG(INIT, ERROR, "LOCK INIT: Locks initialized successfully\n");
-            // ⭐⭐⭐ END OF NEW CODE ⭐⭐⭐
+/* ------------------------------------------------------------------ */
+/* 2. Power + HIF sw info                                              */
+/* ------------------------------------------------------------------ */
+static uint32_t
+wlanAdapterStart_PowerAndHif(struct ADAPTER *prAdapter,
+                             struct REG_INFO *prRegInfo,
+                             u_int8_t bAtResetFlow)
+{
+    if (wlanWakeUpWiFi(prAdapter) != WLAN_STATUS_SUCCESS) {
+        DBGLOG(INIT, ERROR, "wlanWakeUpWiFi failed\n");
+        return WLAN_STATUS_FAILURE;
+    }
 
-
-
-
-	do {
-		if (!bAtResetFlow) {
-			u4Status = nicAllocateAdapterMemory(prAdapter);
-			if (u4Status != WLAN_STATUS_SUCCESS) {
-				DBGLOG(INIT, ERROR,
-					"nicAllocateAdapterMemory Error!\n");
-				u4Status = WLAN_STATUS_FAILURE;
-				eFailReason = ALLOC_ADAPTER_MEM_FAIL;
-#if CFG_ENABLE_KEYWORD_EXCEPTION_MECHANISM
-				mtk_wcn_wmt_assert_keyword(WMTDRV_TYPE_WIFI,
-					"[Wi-Fi On] nicAllocateAdapterMemory Error!");
-#endif
-				break;
-			}
-
-
-			prAdapter->u4OsPacketFilter
-				= PARAM_PACKET_FILTER_SUPPORTED;
-		}
-
-		DBGLOG(INIT, INFO,
-		       "wlanAdapterStart(): Acquiring LP-OWN\n");
-		ACQUIRE_POWER_CONTROL_FROM_PM(prAdapter);
-		DBGLOG(INIT, INFO,
-		       "wlanAdapterStart(): Acquiring LP-OWN-end\n");
+    ACQUIRE_POWER_CONTROL_FROM_PM(prAdapter);
 
 #if (CFG_ENABLE_FULL_PM == 0)
-		nicpmSetDriverOwn(prAdapter);
+    nicpmSetDriverOwn(prAdapter);
 #endif
+
 #if !defined(_HIF_USB)
-		if (prAdapter->fgIsFwOwn == TRUE) {
-			DBGLOG(INIT, ERROR, "nicpmSetDriverOwn() failed!\n");
-			u4Status = WLAN_STATUS_FAILURE;
-			eFailReason = DRIVER_OWN_FAIL;
-#if CFG_ENABLE_KEYWORD_EXCEPTION_MECHANISM
-			mtk_wcn_wmt_assert_keyword(WMTDRV_TYPE_WIFI,
-				"[Wi-Fi On] nicpmSetDriverOwn() failed!");
-#endif
-			break;
-		}
+    if (prAdapter->fgIsFwOwn == TRUE) {
+        DBGLOG(INIT, ERROR, "nicpmSetDriverOwn() failed\n");
+        return WLAN_STATUS_FAILURE;
+    }
 #endif
 
+    wlanOnPostNicInitAdapter(prAdapter, prRegInfo, bAtResetFlow);
 
-		if (!bAtResetFlow) {
-			u4Status = nicInitializeAdapter(prAdapter);
-			if (u4Status != WLAN_STATUS_SUCCESS) {
-				DBGLOG(INIT, ERROR,
-					"nicInitializeAdapter failed!\n");
-				u4Status = WLAN_STATUS_FAILURE;
-				eFailReason = INIT_ADAPTER_FAIL;
-				break;
-			}
-		}
+    if (!halHifSwInfoInit(prAdapter)) {
+        DBGLOG(INIT, ERROR, "halHifSwInfoInit failed\n");
+        return WLAN_STATUS_FAILURE;
+    }
 
-		wlanOnPostNicInitAdapter(prAdapter, prRegInfo, bAtResetFlow);
+    HAL_ENABLE_FWDL(prAdapter, TRUE);
 
-		u4Status = wlanWakeUpWiFi(prAdapter);
-		if (u4Status != WLAN_STATUS_SUCCESS) {
-			DBGLOG(INIT, ERROR, "wlanWakeUpWiFi failed!\n");
-			u4Status = WLAN_STATUS_FAILURE;
-			break;
-		}
+    if (wlanSetChipEcoInfo(prAdapter) != WLAN_STATUS_SUCCESS) {
+        DBGLOG(INIT, ERROR, "wlanSetChipEcoInfo failed\n");
+        return WLAN_STATUS_FAILURE;
+    }
 
-		if (!halHifSwInfoInit(prAdapter)) {
-			DBGLOG(INIT, ERROR, "halHifSwInfoInit failed!\n");
-			u4Status = WLAN_STATUS_FAILURE;
-			eFailReason = INIT_HIFINFO_FAIL;
-			break;
-		}
+    wlanCheckAsicCap(prAdapter);
 
-		HAL_ENABLE_FWDL(prAdapter, TRUE);
+    return WLAN_STATUS_SUCCESS;
+}
 
-		if (wlanSetChipEcoInfo(prAdapter) != WLAN_STATUS_SUCCESS) {
-			DBGLOG(INIT, ERROR, "wlanSetChipEcoInfo failed!\n");
-			u4Status = WLAN_STATUS_FAILURE;
-			eFailReason = SET_CHIP_ECO_INFO_FAIL;
-			break;
-		}
 
-		wlanCheckAsicCap(prAdapter);
-
+/* ------------------------------------------------------------------ */
+/* 3. Firmware download                                                */
+/* ------------------------------------------------------------------ */
 #if CFG_ENABLE_FW_DOWNLOAD
-		nicDisableInterrupt(prAdapter);
-		nicTxInitResetResource(prAdapter);
+static uint32_t
+wlanAdapterStart_FirmwareDownload(struct ADAPTER *prAdapter)
+{
+    uint32_t u4Status;
 
-		u4Status = wlanDownloadFW(prAdapter);
-		if (u4Status != WLAN_STATUS_SUCCESS) {
-			eFailReason = RAM_CODE_DOWNLOAD_FAIL;
+    nicDisableInterrupt(prAdapter);
+    nicTxInitResetResource(prAdapter);
+
+    /* Enable DMA before firmware download. EXT_CTRL prefetch registers
+     * are only accessible after WFSYS MCU init-done, and the firmware
+     * download TX ring requires DMA to be live. This matches the upstream
+     * mt76 sequence: mt792x_dma_enable() runs before any MCU comms. */
+    halWpdmaInitRing(prAdapter->prGlueInfo, TRUE);
+
+    u4Status = wlanDownloadFW(prAdapter);
+    if (u4Status != WLAN_STATUS_SUCCESS) {
+        DBGLOG(INIT, ERROR, "wlanDownloadFW failed\n");
 #if CFG_ENABLE_KEYWORD_EXCEPTION_MECHANISM
-			mtk_wcn_wmt_assert_keyword(WMTDRV_TYPE_WIFI,
-				"[Wi-Fi On] [Ram code download fail!]");
+        mtk_wcn_wmt_assert_keyword(WMTDRV_TYPE_WIFI,
+            "[Wi-Fi On] [Ram code download fail!]");
 #endif
-			break;
-		}
+        return WLAN_STATUS_FAILURE;
+    }
+
+    return WLAN_STATUS_SUCCESS;
+}
 #endif
 
-		DBGLOG(INIT, INFO, "Waiting for Ready bit..\n");
-		u4Status = wlanCheckWifiFunc(prAdapter, TRUE);
+/* ------------------------------------------------------------------ */
+/* 4. Post-FWDL DMA re-arm                                            */
+/* ------------------------------------------------------------------ */
+static uint32_t
+wlanAdapterStart_PostFwdl(struct ADAPTER *prAdapter)
+{
+    uint32_t glo = 0;
 
-		if (u4Status == WLAN_STATUS_SUCCESS) {
-		  /* Apply deferred US override only if flagged and
-		   * FW is ready. */
+    if (prAdapter->chip_info->asicWfdmaReInit) {
+        DBGLOG(INIT, INFO, "[POST-FWDL] calling asicWfdmaReInit\n");
+        prAdapter->chip_info->asicWfdmaReInit(prAdapter);
+    } else {
+        struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
+        struct BUS_INFO  *prBusInfo  = prAdapter->chip_info->bus_info;
 
-		  // Your existing ACPI D0 lines here:
-		  DBGLOG(INIT, INFO, "Setting adapter to ACPI D0 state\n");
-		  prAdapter->rAcpiState = ACPI_STATE_D0;
-		  prAdapter->fgIsRadioOff = FALSE;
+        if (prBusInfo->pdmaSetup)
+            prBusInfo->pdmaSetup(prGlueInfo, TRUE);
+    }
 
+    HAL_MCR_RD(prAdapter,
+               WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+    DBGLOG(INIT, INFO,
+           "[POST-FWDL] GLO_CFG after reInit=0x%08x\n", glo);
 
+    if (glo == 0x0 || glo == 0xffffffff) {
+        DBGLOG(INIT, ERROR,
+               "[POST-FWDL] bad GLO_CFG=0x%08x after reInit\n", glo);
+        return WLAN_STATUS_FAILURE;
+    }
 
+    return WLAN_STATUS_SUCCESS;
+}
+
+/* ------------------------------------------------------------------ */
+/* 5. NIC capability queries + config                                  */
+/* ------------------------------------------------------------------ */
+static uint32_t
+wlanAdapterStart_NicCapAndConfig(struct ADAPTER *prAdapter,
+                                 struct REG_INFO *prRegInfo,
+                                 u_int8_t bAtResetFlow)
+{
+    uint32_t u4Status = WLAN_STATUS_SUCCESS;
+
+    prAdapter->rAcpiState  = ACPI_STATE_D0;
+    prAdapter->fgIsRadioOff = FALSE;
 
 #if defined(_HIF_SDIO)
-			uint32_t *pu4WHISR = NULL;
-			uint16_t au2TxCount[SDIO_TX_RESOURCE_NUM];
+    {
+        uint32_t *pu4WHISR = NULL;
+        uint16_t  au2TxCount[SDIO_TX_RESOURCE_NUM];
 
-			pu4WHISR = (uint32_t *)kalMemAlloc(sizeof(uint32_t),
-						   PHY_MEM_TYPE);
-			if (!pu4WHISR) {
-				eFailReason = RAM_CODE_DOWNLOAD_FAIL;
-				DBGLOG(INIT, ERROR,
-				       "Allocate pu4WHISR fail\n");
-				u4Status = WLAN_STATUS_FAILURE;
-				break;
-			}
-			HAL_READ_INTR_STATUS(prAdapter, sizeof(uint32_t),
-					     (uint8_t *)pu4WHISR);
-			if (HAL_IS_TX_DONE_INTR(*pu4WHISR))
-				HAL_READ_TX_RELEASED_COUNT(prAdapter,
-							   au2TxCount);
-			if (pu4WHISR)
-				kalMemFree(pu4WHISR, PHY_MEM_TYPE,
-					   sizeof(uint32_t));
+        pu4WHISR = (uint32_t *)kalMemAlloc(sizeof(uint32_t),
+                                           PHY_MEM_TYPE);
+        if (!pu4WHISR) {
+            DBGLOG(INIT, ERROR, "Allocate pu4WHISR fail\n");
+            return WLAN_STATUS_FAILURE;
+        }
+        HAL_READ_INTR_STATUS(prAdapter, sizeof(uint32_t),
+                             (uint8_t *)pu4WHISR);
+        if (HAL_IS_TX_DONE_INTR(*pu4WHISR))
+            HAL_READ_TX_RELEASED_COUNT(prAdapter, au2TxCount);
+        kalMemFree(pu4WHISR, PHY_MEM_TYPE, sizeof(uint32_t));
 #if (CFG_SUPPORT_MAILBOX_ACK == 1)
-			HAL_SET_MAILBOX_ACK_SUPPORT(prAdapter);
+        HAL_SET_MAILBOX_ACK_SUPPORT(prAdapter);
 #endif
+    }
 #endif
 
-		prAdapter->fgIsFwDownloaded = TRUE;
-		struct BUS_INFO *prBusInfo = prAdapter->chip_info->bus_info;
-		struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
-
-		/* After firmware boot, DMA may be in a partially-live state
-		 * that causes EXT_CTRL writes to be silently ignored by HW.
-		 * Match mt76's mt792x_dma_disable() sequence: clear TX/RX DMA
-		 * enable bits and wait for busy to clear before writing prefetch.
-		 */
-		if (prBusInfo->wfdmaManualPrefetch) {
-			uint32_t glo = 0;
-			uint32_t retries = 100;
-
-			/* Step 1: disable TX/RX DMA */
-			HAL_MCR_RD(prAdapter,
-				   WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR,
-				   &glo);
-			DBGLOG(INIT, INFO,
-			       "[PRE-PREFETCH] GLO_CFG before disable=0x%08x\n",
-			       glo);
-			glo &= ~(MT_WFDMA0_GLO_CFG_TX_DMA_EN |
-				 MT_WFDMA0_GLO_CFG_RX_DMA_EN);
-			HAL_MCR_WR(prAdapter,
-				   WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR,
-				   glo);
-
-			/* Step 2: poll until TX_DMA_BUSY and RX_DMA_BUSY clear */
-			do {
-				HAL_MCR_RD(prAdapter,
-					   WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR,
-					   &glo);
-				if (!(glo & (BIT(1) | BIT(3))))
-					break;
-				kalMdelay(1);
-			} while (--retries);
-
-			if (!retries)
-				DBGLOG(INIT, WARN,
-				       "[PRE-PREFETCH] DMA busy timeout, proceeding anyway\n");
-
-			DBGLOG(INIT, INFO,
-			       "[PRE-PREFETCH] GLO_CFG after disable=0x%08x\n",
-			       glo);
-
-			/* Step 3: write EXT_CTRL prefetch registers */
-			prBusInfo->wfdmaManualPrefetch(prGlueInfo);
-
-			/* Step 4: readback TX_RING0_EXT_CTRL to confirm */
-			{
-				uint32_t ext = 0;
-				HAL_MCR_RD(prAdapter,
-					   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR,
-					   &ext);
-				DBGLOG(INIT, ERROR,
-				       "[PRE-PREFETCH] TX_RING0_EXT_CTRL after prefetch=0x%08x\n",
-				       ext);
-			}
-		}
-
-		/* Step 5: Re-arm WFDMA after FW boot resets GLO_CFG */
-		if (prAdapter->chip_info->asicWfdmaReInit) {
-			DBGLOG(INIT, ERROR, "[POST-FWDL] calling asicWfdmaReInit\n");
-			prAdapter->chip_info->asicWfdmaReInit(prAdapter);
-		} else {
-			struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
-			struct BUS_INFO *prBusInfo = prAdapter->chip_info->bus_info;
-			if (prBusInfo->pdmaSetup)
-				prBusInfo->pdmaSetup(prGlueInfo, TRUE);
-		}
-
-
-
-
-
-
-
-
-
-
-
-			{
-				uint32_t glo = 0;
-				HAL_MCR_RD(prAdapter, 0x7c024014, &glo);
-				DBGLOG(INIT, ERROR, "[POST-FWDL] GLO_CFG after pdmaSetup(TRUE)=0x%08x\n", glo);
-			}
-
-			wlanCfgSetCountryCode(prAdapter);
-
-
-			wlanQueryNicResourceInformation(prAdapter);
+    prAdapter->fgIsFwDownloaded = TRUE;
 
 #if (CFG_SUPPORT_NIC_CAPABILITY == 1)
-			if (!bAtResetFlow) {
+    if (!bAtResetFlow) {
 #if (CFG_SUPPORT_CONNAC3X == 0)
-				wlanSendDummyCmd(prAdapter, TRUE);
+        wlanSendDummyCmd(prAdapter, TRUE);
 #endif
-				if (prAdapter->chip_info->isNicCapV1)
-					wlanQueryNicCapability(prAdapter);
+        if (prAdapter->chip_info->isNicCapV1)
+            wlanQueryNicCapability(prAdapter);
 
-				u4Status = wlanQueryNicCapabilityV2(prAdapter);
-				if (u4Status != WLAN_STATUS_SUCCESS) {
-					DBGLOG(INIT, WARN,
-						"wlanQueryNicCapabilityV2 failed.\n");
-					RECLAIM_POWER_CONTROL_TO_PM(
-						prAdapter, FALSE);
-					eFailReason = WAIT_FIRMWARE_READY_FAIL;
-					break;
-				}
-			}
+        u4Status = wlanQueryNicCapabilityV2(prAdapter);
+        if (u4Status != WLAN_STATUS_SUCCESS) {
+            DBGLOG(INIT, WARN, "wlanQueryNicCapabilityV2 failed\n");
+            RECLAIM_POWER_CONTROL_TO_PM(prAdapter, FALSE);
+            return WLAN_STATUS_FAILURE;
+        }
+    }
 
-			wlanUpdateNicResourceInformation(prAdapter);
-			wlanPrintVersion(prAdapter);
+    wlanUpdateNicResourceInformation(prAdapter);
+    wlanPrintVersion(prAdapter);
 #endif
-			wlanUpdateBasicConfig(prAdapter);
 
-			if (!bAtResetFlow) {
-				uint32_t u4Idx = 0;
+    wlanUpdateBasicConfig(prAdapter);
 
-				wlanUpdateNetworkAddress(prAdapter);
-				nicApplyNetworkAddress(prAdapter);
+    if (!bAtResetFlow) {
+        uint32_t u4Idx;
 
-				for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++)
-					kalIndicateStatusAndComplete(
-						prAdapter->prGlueInfo,
-						WLAN_STATUS_MEDIA_DISCONNECT,
-						NULL, 0, u4Idx);
-			}
-		}
+        wlanUpdateNetworkAddress(prAdapter);
+        nicApplyNetworkAddress(prAdapter);
 
-		if (u4Status != WLAN_STATUS_SUCCESS) {
-			eFailReason = WAIT_FIRMWARE_READY_FAIL;
-			break;
-		}
+        for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++)
+            kalIndicateStatusAndComplete(
+                prAdapter->prGlueInfo,
+                WLAN_STATUS_MEDIA_DISCONNECT,
+                NULL, 0, u4Idx);
 
-		if (!bAtResetFlow)
-			wlanOnPostFirmwareReady(prAdapter, prRegInfo);
-		else {
+        wlanOnPostFirmwareReady(prAdapter, prRegInfo);
+    } else {
 #if CFG_SUPPORT_NVRAM
-			if (kalIsConfigurationExist(prAdapter->prGlueInfo)
-				== TRUE)
-				wlanLoadManufactureData(prAdapter, prRegInfo);
-			else
-				DBGLOG(INIT, WARN,
-				"%s: load manufacture data fail\n", __func__);
+        if (kalIsConfigurationExist(prAdapter->prGlueInfo) == TRUE)
+            wlanLoadManufactureData(prAdapter, prRegInfo);
+        else
+            DBGLOG(INIT, WARN,
+                   "%s: load manufacture data fail\n", __func__);
 #endif
-		}
+    }
 
-		HAL_SET_INTR_STATUS_READ_CLEAR(prAdapter);
-		HAL_SET_MAILBOX_READ_CLEAR(prAdapter, FALSE);
+    return WLAN_STATUS_SUCCESS;
+}
 
-		nicEnableInterrupt(prAdapter);
-		nicSerInit(prAdapter, bAtResetFlow);
+/* ------------------------------------------------------------------ */
+/* 6. Finalize interrupts                                              */
+/* ------------------------------------------------------------------ */
+static void
+wlanAdapterStart_FinalizeInterrupts(struct ADAPTER *prAdapter,
+                                    u_int8_t bAtResetFlow)
+{
+    HAL_SET_INTR_STATUS_READ_CLEAR(prAdapter);
+    HAL_SET_MAILBOX_READ_CLEAR(prAdapter, FALSE);
+    nicEnableInterrupt(prAdapter);
+    nicSerInit(prAdapter, bAtResetFlow);
+    RECLAIM_POWER_CONTROL_TO_PM(prAdapter, FALSE);
+}
 
-		RECLAIM_POWER_CONTROL_TO_PM(prAdapter, FALSE);
-	} while (FALSE);
+/* ------------------------------------------------------------------ */
+/* Top-level                                                           */
+/* ------------------------------------------------------------------ */
+uint32_t wlanAdapterStart(struct ADAPTER *prAdapter,
+                          struct REG_INFO *prRegInfo,
+                          const u_int8_t   bAtResetFlow)
+{
+    uint32_t u4Status = WLAN_STATUS_SUCCESS;
+    u_int8_t fgSysServiceInited = FALSE;
+    enum ENUM_ADAPTER_START_FAIL_REASON {
+        ALLOC_ADAPTER_MEM_FAIL,
+        DRIVER_OWN_FAIL,
+        INIT_ADAPTER_FAIL,
+        INIT_HIFINFO_FAIL,
+        SET_CHIP_ECO_INFO_FAIL,
+        RAM_CODE_DOWNLOAD_FAIL,
+        WAIT_FIRMWARE_READY_FAIL,
+        FAIL_REASON_MAX
+    } eFailReason = FAIL_REASON_MAX;
 
-	if (u4Status != WLAN_STATUS_SUCCESS) {
-		prAdapter->u4HifDbgFlag |= DEG_HIF_DEFAULT_DUMP;
-		halPrintHifDbgInfo(prAdapter);
-		DBGLOG(INIT, WARN, "Fail reason: %d\n", eFailReason);
+    ASSERT(prAdapter);
+    DEBUGFUNC("wlanAdapterStart");
 
-		if (!bAtResetFlow) {
-			switch (eFailReason) {
-			case WAIT_FIRMWARE_READY_FAIL:
-			case RAM_CODE_DOWNLOAD_FAIL:
-			case SET_CHIP_ECO_INFO_FAIL:
-			case INIT_HIFINFO_FAIL:
-				nicRxUninitialize(prAdapter);
-				nicTxRelease(prAdapter, FALSE);
-				nicUninitSystemService(prAdapter);
-				kal_fallthrough;
-			case INIT_ADAPTER_FAIL:
-				kal_fallthrough;
-			case DRIVER_OWN_FAIL:
-				nicReleaseAdapterMemory(prAdapter);
-				break;
-			case ALLOC_ADAPTER_MEM_FAIL:
-			default:
-				break;
-			}
-		}
-	}
+    wlanOnPreAllocAdapterMem(prAdapter, bAtResetFlow);
+
+    mutex_init(&prAdapter->rAisFsmMutex);
+    spin_lock_init(&prAdapter->rScanListLock);
+    init_completion(&prAdapter->rScanDoneCompletion);
+
+    do {
+        if (!bAtResetFlow) {
+            u4Status = wlanAdapterStart_AllocAndInit(prAdapter, prRegInfo);
+            if (u4Status != WLAN_STATUS_SUCCESS) {
+                eFailReason = ALLOC_ADAPTER_MEM_FAIL;
+                break;
+            }
+        }
+
+        u4Status = wlanAdapterStart_PowerAndHif(prAdapter, prRegInfo,
+                                                bAtResetFlow);
+        if (u4Status != WLAN_STATUS_SUCCESS) {
+            eFailReason = INIT_HIFINFO_FAIL;
+            break;
+        }
+        fgSysServiceInited = TRUE;
+
+#if CFG_ENABLE_FW_DOWNLOAD
+        u4Status = wlanAdapterStart_FirmwareDownload(prAdapter);
+        if (u4Status != WLAN_STATUS_SUCCESS) {
+            eFailReason = RAM_CODE_DOWNLOAD_FAIL;
+            break;
+        }
+#endif
+
+        u4Status = wlanAdapterStart_PostFwdl(prAdapter);
+        if (u4Status != WLAN_STATUS_SUCCESS) {
+            eFailReason = RAM_CODE_DOWNLOAD_FAIL;
+            break;
+        }
+
+        DBGLOG(INIT, INFO, "Waiting for Ready bit..\n");
+        u4Status = wlanCheckWifiFunc(prAdapter, TRUE);
+        if (u4Status != WLAN_STATUS_SUCCESS) {
+            eFailReason = WAIT_FIRMWARE_READY_FAIL;
+            break;
+        }
+
+        u4Status = wlanAdapterStart_NicCapAndConfig(prAdapter, prRegInfo,
+                                                    bAtResetFlow);
+        if (u4Status != WLAN_STATUS_SUCCESS) {
+            eFailReason = WAIT_FIRMWARE_READY_FAIL;
+            break;
+        }
+
+        wlanAdapterStart_FinalizeInterrupts(prAdapter, bAtResetFlow);
+
+    } while (FALSE);
+
+    if (u4Status != WLAN_STATUS_SUCCESS) {
+        prAdapter->u4HifDbgFlag |= DEG_HIF_DEFAULT_DUMP;
+        halPrintHifDbgInfo(prAdapter);
+        DBGLOG(INIT, WARN, "Fail reason: %d\n", eFailReason);
+
+        if (!bAtResetFlow) {
+            switch (eFailReason) {
+            case WAIT_FIRMWARE_READY_FAIL:
+            case RAM_CODE_DOWNLOAD_FAIL:
+            case SET_CHIP_ECO_INFO_FAIL:
+            case INIT_HIFINFO_FAIL:
+                nicRxUninitialize(prAdapter);
+                nicTxRelease(prAdapter, FALSE);
+                if (fgSysServiceInited)
+                    nicUninitSystemService(prAdapter);
+                kal_fallthrough;
+            case INIT_ADAPTER_FAIL:
+                kal_fallthrough;
+            case DRIVER_OWN_FAIL:
+                nicReleaseAdapterMemory(prAdapter);
+                break;
+            case ALLOC_ADAPTER_MEM_FAIL:
+            default:
+                break;
+            }
+        }
+    }
 
 #if CFG_SUPPORT_CUSTOM_NETLINK
-	glCustomGenlInit();
+    glCustomGenlInit();
 #endif
 
-	/* Late channel force: must run after wiphy is live and FW is ready.
-	 * This is the only reliable way to unblock disabled channels on
-	 * this hardware — do not remove. */
-	{
-		struct wiphy *prWiphy = wlanGetWiphy();
-		if (prWiphy)
-			mt79xx_force_channels_late(prWiphy);
-	}
+    {
+        struct wiphy *prWiphy = wlanGetWiphy();
+        if (prWiphy)
+            mt79xx_force_channels_late(prWiphy);
+    }
 
-	return u4Status;
-}	/* wlanAdapterStart */
+    return u4Status;
+}
 
 
 

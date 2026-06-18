@@ -63,6 +63,7 @@
 ********************************************************************************
 */
 
+#include "chips/coda/mt7902/wf_wfdma_host_dma0.h"
 #include "coda/mt7915/wf_wfdma_host_dma0.h"
 #include "coda/mt7915/wf_wfdma_host_dma1.h"
 #include "precomp.h"
@@ -461,86 +462,107 @@ void asicConnac2xWfdmaReInit(
 	DBGLOG(INIT, ERROR, "[REINIT] DummyCrRead fgResult=%d\n", fgResult);
 
 #if defined(_HIF_PCIE) || defined(_HIF_AXI)
-	/*
-	 * On PCIe/AXI we expect the FW to clear/reset GLO_CFG during boot.
-	 * Re-enable DMA. If the simple re-enable path doesn't restore GLO_CFG,
-	 * fall back to the full ring re-init.
-	 */
 	if (fgResult) {
+		/* Deep sleep path: full ring re-init */
 		DBGLOG(INIT, ERROR, "[REINIT] deep sleep path: full halWpdmaInitRing\n");
-		halWpdmaInitRing(prGlueInfo);
+		halWpdmaInitRing(prGlueInfo, TRUE);
 		reinit_done = true;
 	} else {
-		/* Cold boot path: snapshot GLO_CFG, attempt to re-enable via pdma config */
-		HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &u4Val);
-		DBGLOG(INIT, ERROR, "[REINIT] cold boot GLO_CFG before re-enable=0x%08x\n", u4Val);
-
-		/* Attempt the normal config enable which should set tx/rx and chain_en */
-		asicConnac2xWpdmaConfig(prGlueInfo, TRUE);
-
-		/* Ensure PCI write posting ordering before read-back */
-		wmb();
-
-		/* Read back and confirm */
-		HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &u4Val);
-		DBGLOG(INIT, ERROR, "[REINIT] cold boot GLO_CFG after re-enable=0x%08x\n", u4Val);
-
 		/*
-		 * If GLO_CFG is still zero (or looks invalid), try the more heavyweight
-		 * recovery: re-allocate/init rings and then re-check.
+		 * Cold boot path.
+		 *
+		 * EXT_CTRL prefetch registers are only writable while DMA is
+		 * disabled.  wfdmaManualPrefetch writes all EXT_CTRL registers
+		 * first, then enables CLK_GAT_DIS + CHAIN_EN, then sets
+		 * TX/RX_DMA_EN — the correct sequence.
+		 *
+		 * Do NOT call asicConnac2xWpdmaConfig here: it enables DMA
+		 * before EXT_CTRL is written, closing the write window and
+		 * leaving EXT_CTRL ghosted at 0x0.
 		 */
-		if (u4Val == 0x00000000 || u4Val == 0xffffffff) {
-			DBGLOG(INIT, ERROR,
-			       "[REINIT] GLO_CFG invalid after pdmaSetup (0x%08x). Trying halWpdmaInitRing fallback\n",
-			       u4Val);
+		HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR,
+			   &u4Val);
+		DBGLOG(INIT, ERROR,
+		       "[REINIT] cold boot GLO_CFG before prefetch=0x%08x\n",
+		       u4Val);
 
-			/* Full re-init of ring structures and CSRs */
-			halWpdmaInitRing(prGlueInfo);
-
-			/* ordering then re-read */
-			wmb();
-			HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &u4Val);
-			DBGLOG(INIT, ERROR, "[REINIT] cold boot GLO_CFG after fallback=0x%08x\n", u4Val);
-
-			/* Mark reinit success if we see non-zero non-0xffffffff value */
-			if (u4Val != 0x00000000 && u4Val != 0xffffffff)
-				reinit_done = true;
-		} else {
-			/* Normal path succeeded */
-			reinit_done = true;
+		/* Disable DMA — EXT_CTRL writes are silently dropped while DMA is live */
+		HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &u4Val);
+		u4Val &= ~(MT_WFDMA0_GLO_CFG_TX_DMA_EN | MT_WFDMA0_GLO_CFG_RX_DMA_EN);
+		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, u4Val);
+		{
+			uint32_t retries = 100;
+			do {
+				HAL_MCR_RD(prAdapter,
+						   WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &u4Val);
+				if (!(u4Val & (BIT(1) | BIT(3))))
+					break;
+				kalMdelay(1);
+			} while (--retries);
+			if (!retries)
+				DBGLOG(INIT, WARN, "[REINIT] DMA busy timeout\n");
 		}
+		DBGLOG(INIT, ERROR, "[REINIT] GLO_CFG after disable=0x%08x\n", u4Val);
+
+		if (prChipInfo && prChipInfo->bus_info &&
+		    prChipInfo->bus_info->wfdmaManualPrefetch) {
+			prChipInfo->bus_info->wfdmaManualPrefetch(prGlueInfo);
+		} else {
+			DBGLOG(INIT, ERROR,
+			       "[REINIT] wfdmaManualPrefetch not set, falling back to halWpdmaInitRing\n");
+			halWpdmaInitRing(prGlueInfo, TRUE);
+		}
+
+		wmb();
+		HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR,
+			   &u4Val);
+		DBGLOG(INIT, ERROR,
+		       "[REINIT] cold boot GLO_CFG after prefetch=0x%08x\n",
+		       u4Val);
+
+		if (u4Val != 0x00000000 && u4Val != 0xffffffff)
+			reinit_done = true;
+		else
+			DBGLOG(INIT, ERROR,
+			       "[REINIT] cold boot GLO_CFG still bad=0x%08x after prefetch\n",
+			       u4Val);
 	}
 
-	/* Only enable interrupts once we've attempted to bring DMA back */
-	if (reinit_done) {
-		nicEnableInterrupt(prAdapter);
-	} else {
-		DBGLOG(INIT, ERROR, "%s: DMA reinit failed, enabling interrupts anyway\n", __func__);
-		nicEnableInterrupt(prAdapter);
-	}
+	/* Enable interrupts regardless — caller needs them live */
+	if (!reinit_done)
+		DBGLOG(INIT, ERROR,
+		       "%s: DMA reinit failed, enabling interrupts anyway\n",
+		       __func__);
+	nicEnableInterrupt(prAdapter);
 
 	/* Tell FW/adapter we've finished the re-init flow */
 	asicConnac2xWfdmaDummyCrWrite(prAdapter);
 
 #else
-	/* USB path: follow existing behavior but defend against NULL chip_info */
+	/* USB path: unchanged */
 	if (fgResult) {
 		DBGLOG(INIT, ERROR, "[REINIT] USB deep-sleep recovery path\n");
 		if (prChipInfo) {
-			if (prChipInfo->is_support_asic_lp && prChipInfo->asicUsbInit)
+			if (prChipInfo->is_support_asic_lp &&
+			    prChipInfo->asicUsbInit)
 				prChipInfo->asicUsbInit(prAdapter, prChipInfo);
 			if (prChipInfo->is_support_wacpu)
-				asicConnac2xEnableUsbCmdTxRing(prAdapter, CONNAC2X_USB_CMDPKT2WA);
+				asicConnac2xEnableUsbCmdTxRing(prAdapter,
+					CONNAC2X_USB_CMDPKT2WA);
 		} else {
-			DBGLOG(INIT, WARN, "%s: prChipInfo NULL on USB path\n", __func__);
+			DBGLOG(INIT, WARN,
+			       "%s: prChipInfo NULL on USB path\n", __func__);
 		}
 		nicEnableInterrupt(prAdapter);
 		asicConnac2xWfdmaDummyCrWrite(prAdapter);
 	} else {
-		DBGLOG(INIT, INFO, "%s: USB cold-boot path: no reinit action (fgResult=0)\n", __func__);
+		DBGLOG(INIT, INFO,
+		       "%s: USB cold-boot path: no reinit action (fgResult=0)\n",
+		       __func__);
 	}
 #endif
 }
+
 
 
 void asicConnac2xFillCmdTxd(

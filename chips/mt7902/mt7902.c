@@ -585,56 +585,187 @@ void mt7902_enable_interrupt(struct ADAPTER *prAdapter)
     HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_HOST_INT_ENA_ADDR, val);
 }
 
+
+#ifndef MT_WFDMA0_GLO_CFG_CLK_GAT_DIS
+#define MT_WFDMA0_GLO_CFG_CLK_GAT_DIS          BIT(30)
+#endif
+#ifndef MT_WFDMA0_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN
+#define MT_WFDMA0_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN   BIT(15)
+#endif
+
 void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 {
 	struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
 	uint32_t glo = 0;
 
-#ifndef MT_WFDMA0_GLO_CFG_CLK_GAT_DIS
-#define MT_WFDMA0_GLO_CFG_CLK_GAT_DIS       BIT(30)
+	DBGLOG(INIT, ERROR, "%s: ADAPTER_FLAG_HW_ERR=%d fgIsBusAccessFailed=%d\n",
+		__func__,
+		(int)HAL_TEST_FLAG(prAdapter, ADAPTER_FLAG_HW_ERR),
+		(int)fgIsBusAccessFailed);
+
+	/* Local aliases for GLO_CFG bits not in vendor headers.
+	 * Values verified against mt792x_regs.h and hw datasheet. */
+#ifndef MT7902_GLO_CFG_TX_WB_DDONE
+#define MT7902_GLO_CFG_TX_WB_DDONE		BIT(6)
+#endif
+#ifndef MT7902_GLO_CFG_FIFO_LITTLE_ENDIAN
+#define MT7902_GLO_CFG_FIFO_LITTLE_ENDIAN	BIT(12)
+#endif
+#ifndef MT7902_GLO_CFG_RX_WB_DDONE
+#define MT7902_GLO_CFG_RX_WB_DDONE		BIT(13)
+#endif
+#ifndef MT7902_GLO_CFG_FIFO_DIS_CHECK
+#define MT7902_GLO_CFG_FIFO_DIS_CHECK		BIT(11)
+#endif
+#ifndef MT7902_GLO_CFG_DMA_SIZE_3
+#define MT7902_GLO_CFG_DMA_SIZE_3		(3 << 4)  /* DMA_SIZE[5:4] = 3 */
+#endif
+#ifndef MT7902_GLO_CFG_OMIT_TX_INFO
+#define MT7902_GLO_CFG_OMIT_TX_INFO		BIT(28)
+#endif
+#ifndef MT7902_GLO_CFG_OMIT_RX_INFO_PFET2
+#define MT7902_GLO_CFG_OMIT_RX_INFO_PFET2	BIT(21)
 #endif
 
-#ifndef MT_WFDMA0_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN
-#define MT_WFDMA0_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN BIT(15)
-#endif
+	/* RST_DTX_PTR: 0x7c024000 + 0x20c */
+#define MT7902_WFDMA0_RST_DTX_PTR	(WF_WFDMA_HOST_DMA0_BASE + 0x20c)
 
-#define PREFETCH(base, depth) (((base) << 16) | (depth))
+#define PREFETCH(base, depth)	(((base) << 16) | (depth))
 
-	/* 1. Write prefetch registers BEFORE enabling DMA. 
-	 * Hardware ignores these writes if TX/RX_DMA_EN is already set.
-	 */
+	/* Disable DMA unconditionally - EXT_CTRL writes are silently dropped
+	 * while TX/RX_DMA_EN is set. The firmware may leave DMA enabled after
+	 * cold boot, so we own the disable here rather than relying on caller. */
+	{
+		uint32_t g = 0;
+		HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &g);
+		DBGLOG(INIT, ERROR, "%s: GLO_CFG on entry=0x%08x\n", __func__, g);
+		g &= ~(MT_WFDMA0_GLO_CFG_TX_DMA_EN | MT_WFDMA0_GLO_CFG_RX_DMA_EN);
+		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, g);
+		{
+			uint32_t retries = 100;
+			do {
+				HAL_MCR_RD(prAdapter,
+					WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &g);
+				if (!(g & (BIT(1) | BIT(3))))
+					break;
+				kalMdelay(1);
+			} while (--retries);
+			if (!retries)
+				DBGLOG(INIT, WARN, "%s: DMA busy timeout\n", __func__);
+		}
+		HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &g);
+		DBGLOG(INIT, ERROR, "%s: GLO_CFG after disable=0x%08x\n", __func__, g);
+	}
+
+	/* Reset WFDMA logic - this is what actually opens the EXT_CTRL write
+	 * window. mt792x_dma_disable(force=true) does this in the upstream
+	 * driver before any prefetch writes. Without it EXT_CTRL ghosts at 0. */
+	{
+		uint32_t rst_addr = WF_WFDMA_HOST_DMA0_BASE + 0x100;
+		uint32_t rst_val  = 0;
+		HAL_MCR_RD(prAdapter, rst_addr, &rst_val);
+		rst_val &= ~(BIT(4) | BIT(5));
+		HAL_MCR_WR(prAdapter, rst_addr, rst_val);
+		kalMdelay(1);
+		rst_val |= BIT(4) | BIT(5);
+		HAL_MCR_WR(prAdapter, rst_addr, rst_val);
+		kalMdelay(1);
+		DBGLOG(INIT, ERROR, "%s: WFDMA logic reset done\n", __func__);
+	}
+
+	/* Step 1: write EXT_CTRL prefetch registers. */
+
 	/* RX rings */
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING0_EXT_CTRL_ADDR, PREFETCH(0x000, 0x4));
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING1_EXT_CTRL_ADDR, PREFETCH(0x040, 0x4));
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING2_EXT_CTRL_ADDR, PREFETCH(0x080, 0x4));
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_RX_RING3_EXT_CTRL_ADDR, PREFETCH(0x0c0, 0x4));
+	HAL_MCR_WR(prAdapter,
+		   WF_WFDMA_HOST_DMA0_WPDMA_RX_RING0_EXT_CTRL_ADDR,
+		   PREFETCH(0x000, 0x4));
+	HAL_MCR_WR(prAdapter,
+		   WF_WFDMA_HOST_DMA0_WPDMA_RX_RING1_EXT_CTRL_ADDR,
+		   PREFETCH(0x040, 0x4));
+	HAL_MCR_WR(prAdapter,
+		   WF_WFDMA_HOST_DMA0_WPDMA_RX_RING2_EXT_CTRL_ADDR,
+		   PREFETCH(0x080, 0x4));
+	HAL_MCR_WR(prAdapter,
+		   WF_WFDMA_HOST_DMA0_WPDMA_RX_RING3_EXT_CTRL_ADDR,
+		   PREFETCH(0x0c0, 0x4));
 
 	/* TX rings */
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR,  PREFETCH(0x100, 0x4));
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING1_EXT_CTRL_ADDR,  PREFETCH(0x140, 0x4));
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING2_EXT_CTRL_ADDR,  PREFETCH(0x180, 0x4));
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING3_EXT_CTRL_ADDR,  PREFETCH(0x1c0, 0x4));
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING4_EXT_CTRL_ADDR,  PREFETCH(0x200, 0x4));
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING5_EXT_CTRL_ADDR,  PREFETCH(0x240, 0x4));
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING6_EXT_CTRL_ADDR,  PREFETCH(0x280, 0x4));
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING15_EXT_CTRL_ADDR, PREFETCH(0x2c0, 0x4));
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING16_EXT_CTRL_ADDR, PREFETCH(0x300, 0x4));
+	HAL_MCR_WR(prAdapter,
+		   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR,
+		   PREFETCH(0x100, 0x4));
+	HAL_MCR_WR(prAdapter,
+		   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING1_EXT_CTRL_ADDR,
+		   PREFETCH(0x140, 0x4));
+	HAL_MCR_WR(prAdapter,
+		   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING2_EXT_CTRL_ADDR,
+		   PREFETCH(0x180, 0x4));
+	HAL_MCR_WR(prAdapter,
+		   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING3_EXT_CTRL_ADDR,
+		   PREFETCH(0x1c0, 0x4));
+	HAL_MCR_WR(prAdapter,
+		   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING4_EXT_CTRL_ADDR,
+		   PREFETCH(0x200, 0x4));
+	HAL_MCR_WR(prAdapter,
+		   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING5_EXT_CTRL_ADDR,
+		   PREFETCH(0x240, 0x4));
+	HAL_MCR_WR(prAdapter,
+		   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING6_EXT_CTRL_ADDR,
+		   PREFETCH(0x280, 0x4));
+	HAL_MCR_WR(prAdapter,
+		   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING15_EXT_CTRL_ADDR,
+		   PREFETCH(0x2c0, 0x4));
+	HAL_MCR_WR(prAdapter,
+		   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING16_EXT_CTRL_ADDR,
+		   PREFETCH(0x300, 0x4));
 
-	/* 2. Configure GLO_CFG attributes (Clock gating & base ptr chain) */
-	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR,
-		   glo | 
-		   MT_WFDMA0_GLO_CFG_CLK_GAT_DIS |
-		   MT_WFDMA0_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN);
+	/* Step 2: reset DMA TX index pointers.
+	 * mt76 does this between prefetch and GLO_CFG enable.
+	 * Ensures hardware latches the prefetch config cleanly. */
+	HAL_MCR_WR(prAdapter, MT7902_WFDMA0_RST_DTX_PTR, 0xffffffff);
+	wmb();
 
-	/* 3. Finally, enable the DMA engines. */
+	/* Step 3: readback TX_RING0_EXT_CTRL to confirm writes stuck */
+	{
+		uint32_t ext = 0;
+		HAL_MCR_RD(prAdapter,
+			   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR,
+			   &ext);
+		DBGLOG(INIT, INFO,
+		       "%s: TX_RING0_EXT_CTRL after prefetch=0x%08x\n",
+		       __func__, ext);
+		if (ext == 0x0)
+			DBGLOG(INIT, ERROR,
+			       "%s: EXT_CTRL still ghosting after RST_DTX_PTR\n",
+			       __func__);
+	}
+
+	/* Step 4: set GLO_CFG config bits (no TX/RX_DMA_EN yet).
+	 * Matches mt792x_dma_enable() bit set exactly. */
 	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR,
-		   glo | MT_WFDMA0_GLO_CFG_TX_DMA_EN | MT_WFDMA0_GLO_CFG_RX_DMA_EN);
+	glo |= MT7902_GLO_CFG_TX_WB_DDONE        |
+	       MT7902_GLO_CFG_FIFO_LITTLE_ENDIAN  |
+	       MT_WFDMA0_GLO_CFG_CLK_GAT_DIS      |
+	       MT7902_GLO_CFG_OMIT_TX_INFO        |
+	       MT7902_GLO_CFG_DMA_SIZE_3          |
+	       MT7902_GLO_CFG_FIFO_DIS_CHECK      |
+	       MT7902_GLO_CFG_RX_WB_DDONE         |
+	       MT_WFDMA0_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN |
+	       MT7902_GLO_CFG_OMIT_RX_INFO_PFET2;
+	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, glo);
+
+	/* Step 5: enable DMA engines separately, matching mt76 two-write
+	 * sequence which ensures config bits are posted before DMA starts. */
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+	glo |= MT_WFDMA0_GLO_CFG_TX_DMA_EN | MT_WFDMA0_GLO_CFG_RX_DMA_EN;
+	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, glo);
+
+	/* Step 6: final readback for log confirmation */
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+	DBGLOG(INIT, INFO, "%s: GLO_CFG after enable=0x%08x\n", __func__, glo);
 
 #undef PREFETCH
+#undef MT7902_WFDMA0_RST_DTX_PTR
 }
-
 
 /* Ensure MCU Ring (15) is included in the host interrupt mask */
 #define MT7902_MCU_RING_INDEX    15
