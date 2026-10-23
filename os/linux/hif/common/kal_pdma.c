@@ -260,6 +260,27 @@ u_int8_t kalDevRegWrite(IN struct GLUE_INFO *prGlueInfo,
 		return FALSE;
 	}
 
+#ifndef MT7902_DROP_56000208
+#define MT7902_DROP_56000208	1
+#endif
+#if MT7902_DROP_56000208
+	/* Test 2: mt76 never writes 0x56000208 (reserved WFDMA window); the
+	 * vendor path writes 0x200 there twice before the first command.  Drop
+	 * it, and dump the stack once so the originating caller can be found. */
+	if (u4Register == 0x56000208) {
+		static bool fgOnce;
+
+		if (!fgOnce) {
+			fgOnce = true;
+			DBGLOG(HAL, ERROR,
+			       "[mt7902] dropping write CR[0x56000208]=0x%08x (caller below)\n",
+			       u4Value);
+			dump_stack();
+		}
+		return TRUE;
+	}
+#endif
+
 	/* Static mapping */
 	if (halChipToStaticMapBusAddr(prGlueInfo, u4Register, &u4BusAddr)) {
 		RTMP_IO_WRITE32(prHifInfo, u4BusAddr, u4Value);
@@ -449,6 +470,33 @@ kalDevPortWrite(IN struct GLUE_INFO *prGlueInfo,
 	}
 #endif
 
+#ifndef MT7902_FORCE_MCU_ROUTE
+#define MT7902_FORCE_MCU_ROUTE 1
+#endif
+#if MT7902_FORCE_MCU_ROUTE
+	/* EXPERIMENT: trace showed Q_IDX (txd[0] bits 31:25) and pq_id (u16 @0x22)
+	 * are both 0 on ROM-phase cmds. mt76 sets Q_IDX=MT_TX_MCU_PORT_RX_Q0 (0x20)
+	 * and pq_id = MCU port(1)<<15. Force them, only on init cmds (pkt_type 0xA0).
+	 */
+	if (u2Port == TX_RING_CMD_IDX_2 && u4Len >= 0x28 && pucBuf[0x25] == 0xA0) {
+		static int iRoute;
+
+		if ((pucBuf[3] & 0xFE) == 0)
+			pucBuf[3] |= 0x40;
+		if (pucBuf[0x22] == 0 && pucBuf[0x23] == 0)
+			pucBuf[0x23] = 0x80;
+		/* mt76 txd[1] also has MT_TXD1_LONG_FORMAT (bit 31) */
+		pucBuf[7] |= 0x80;
+		if (iRoute < 6) {
+			iRoute++;
+			printk(KERN_ERR "[mt7902] [ROUTE-FORCE #%d] cid=0x%02x txd0=0x%02x%02x%02x%02x txd1=0x%02x%02x%02x%02x pq_id=0x%02x%02x\n",
+			       iRoute, pucBuf[0x24], pucBuf[3], pucBuf[2],
+			       pucBuf[1], pucBuf[0], pucBuf[7], pucBuf[6],
+			       pucBuf[5], pucBuf[4], pucBuf[0x23], pucBuf[0x22]);
+		}
+	}
+#endif
+
 	if (prMemOps->allocRuntimeMem)
 		pucDst = prMemOps->allocRuntimeMem(u4Len);
 
@@ -497,11 +545,46 @@ kalDevPortWrite(IN struct GLUE_INFO *prGlueInfo,
 	pTxD->Burst = 0;
 	pTxD->DMADONE = 0;
 
+	{
+		/* Port-write trace (first 8): the cmd/FWDL path actually in use */
+		static int iPortTrace;
+		u32 *pu4D = (u32 *)pTxD;
+
+		if (iPortTrace < 8) {
+			iPortTrace++;
+			printk(KERN_ERR "[mt7902] [PORT-TRACE #%d] port=%u slot=%u len=%u PacketPa=%pa DMAD=%08x %08x %08x %08x\n",
+			       iPortTrace, u2Port, prTxRing->TxCpuIdx, u4Len,
+			       &pTxCell->PacketPa, pu4D[0], pu4D[1], pu4D[2], pu4D[3]);
+			print_hex_dump(KERN_ERR, "[mt7902] [PORT-TRACE] src: ",
+				       DUMP_PREFIX_OFFSET, 16, 1, pucBuf,
+				       min_t(u32, u4Len, 96), false);
+			if (pucDst)
+				print_hex_dump(KERN_ERR, "[mt7902] [PORT-TRACE] dma: ",
+					       DUMP_PREFIX_OFFSET, 16, 1, pucDst,
+					       min_t(u32, u4Len, 96), false);
+		}
+	}
+
 	/* Increase TX_CTX_IDX and sync with hardware. */
 	INC_RING_INDEX(prTxRing->TxCpuIdx, TX_RING_SIZE);
 	prTxRing->u4UsedCnt++;
 
+	wmb();
 	kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr, prTxRing->TxCpuIdx);
+
+	{
+		static int iPortPost;
+
+		if (iPortPost < 8) {
+			u32 *pu4D = (u32 *)pTxD;
+
+			iPortPost++;
+			udelay(300);
+			rmb();
+			printk(KERN_ERR "[mt7902] [PORT-TRACE post #%d] port=%u DMAD=%08x %08x %08x %08x (DDONE = ctrl bit31)\n",
+			       iPortPost, u2Port, pu4D[0], pu4D[1], pu4D[2], pu4D[3]);
+		}
+	}
 
 	return TRUE;
 }

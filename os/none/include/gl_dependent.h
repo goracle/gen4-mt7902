@@ -254,7 +254,7 @@ struct sk_buff {
 	char cb[48];
 	unsigned char *data;
 	unsigned int len;
-	struct net_device *dev;
+	struct net_device *ndev;
 };
 
 /*

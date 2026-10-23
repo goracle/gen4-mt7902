@@ -565,31 +565,31 @@ int mtk_cfg_set_default_mgmt_key(struct wiphy *wiphy,
 
 #if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_get_station(struct wiphy *wiphy,
-			struct net_device *ndev,
+			struct wireless_dev *ndev,
 			const u8 *mac, struct station_info *sinfo);
 #else
 int mtk_cfg_get_station(struct wiphy *wiphy,
-			struct net_device *ndev,
+			struct wireless_dev *ndev,
 			u8 *mac, struct station_info *sinfo);
 #endif
 
 #if CFG_SUPPORT_TDLS
 #if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_change_station(struct wiphy *wiphy,
-			   struct net_device *ndev,
+			   struct wireless_dev *ndev,
 			   const u8 *mac, struct station_parameters *params);
 #else
 int mtk_cfg_change_station(struct wiphy *wiphy,
-			   struct net_device *ndev,
+			   struct wireless_dev *ndev,
 			   u8 *mac, struct station_parameters *params);
 #endif
 #if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_add_station(struct wiphy *wiphy,
-			struct net_device *ndev,
+			struct wireless_dev *ndev,
 			const u8 *mac, struct station_parameters *params);
 #else
 int mtk_cfg_add_station(struct wiphy *wiphy,
-			struct net_device *ndev,
+			struct wireless_dev *ndev,
 			u8 *mac, struct station_parameters *params);
 #endif
 #if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
@@ -629,15 +629,15 @@ int mtk_cfg_tdls_mgmt(struct wiphy *wiphy,
 
 #if KERNEL_VERSION(3, 19, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_del_station(struct wiphy *wiphy,
-			struct net_device *ndev,
+			struct wireless_dev *ndev,
 			struct station_del_parameters *params);
 #elif KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_del_station(struct wiphy *wiphy,
-			struct net_device *ndev,
+			struct wireless_dev *ndev,
 			const u8 *mac);
 #else
 int mtk_cfg_del_station(struct wiphy *wiphy,
-			struct net_device *ndev, u8 *mac);
+			struct wireless_dev *ndev, u8 *mac);
 #endif
 int mtk_cfg_scan(struct wiphy *wiphy,
 		 struct cfg80211_scan_request *request);
@@ -705,7 +705,7 @@ int mtk_cfg_remain_on_channel(struct wiphy *wiphy,
 			      struct wireless_dev *wdev,
 			      struct ieee80211_channel *chan,
 			      unsigned int duration,
-			      u64 *cookie);
+			      u64 *cookie, const u8 *addr);
 int mtk_cfg_cancel_remain_on_channel(struct wiphy *wiphy,
 				     struct wireless_dev *wdev, u64 cookie);
 uint16_t cfg80211_get_non_wfa_vendor_ie(

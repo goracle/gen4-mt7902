@@ -81,6 +81,7 @@
 #include "nic/wlan_def.h"
 #include "wlan_lib.h"
 #include "wlan_oid.h"
+#include <linux/string.h>
 
 #if CFG_ENABLE_BT_OVER_WIFI
 #include "nic/bow.h"
@@ -916,9 +917,11 @@ kalCfg80211VendorEventAlloc(struct wiphy *wiphy, struct wireless_dev *wdev,
 #define strnicmp(s1, s2, n)                         strncasecmp(s1, s2, n)
 #endif
 
+#include <linux/string.h>
+
 /* string operation */
 #define kalStrCpy(dest, src)               strcpy(dest, src)
-#define kalStrnCpy(dest, src, n)           strncpy(dest, src, n)
+#define kalStrnCpy(dest, src, n)           strscpy(dest, src, n)
 #define kalStrCmp(ct, cs)                  strcmp(ct, cs)
 #define kalStrnCmp(ct, cs, n)              strncmp(ct, cs, n)
 #define kalStrChr(s, c)                    strchr(s, c)
@@ -1992,10 +1995,10 @@ void kalSetThreadSchPolicyPriority(IN struct GLUE_INFO *prGlueInfo);
 #endif
 
 #if CFG_SUPPORT_ROAMING
-void kalIndicateCqmRssiNotify(struct net_device *dev,
+void kalIndicateCqmRssiNotify(struct net_device *ndev,
 			      enum nl80211_cqm_rssi_threshold_event rssi_event,
 			      s32 rssi_level);
-void kalIndicateCqmTxeNotify(struct net_device *dev,
+void kalIndicateCqmTxeNotify(struct net_device *ndev,
 			      const u8 *peer, u32 num_packets,
 			     u32 rate, u32 intvl);
 #endif

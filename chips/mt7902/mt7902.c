@@ -593,18 +593,165 @@ void mt7902_enable_interrupt(struct ADAPTER *prAdapter)
 #define MT_WFDMA0_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN   BIT(15)
 #endif
 
+extern void mt79xx_wfdma_dump(struct ADAPTER *prAdapter, const char *tag);
+
+/* CONN_ON_MISC FW state (upstream mt76 patch "ensure MCU ready before ROM
+ * patch download" polls this before the first command).  The address and
+ * field values below are from memory of mt792x_regs.h / mt76_connac.h --
+ * verify against your headers.  Override with -D if they differ.
+ * 0x7c060000 is already in this file's remap table (conn_host_csr_top). */
+#ifndef MT7902_CONN_ON_MISC_ADDR
+#define MT7902_CONN_ON_MISC_ADDR	0x7c0600f0
+#endif
+#ifndef MT7902_TOP_MISC_FW_STATE_MASK
+#define MT7902_TOP_MISC_FW_STATE_MASK	0x7
+#endif
+#ifndef MT7902_TOP_MISC_FW_PWR_ON
+#define MT7902_TOP_MISC_FW_PWR_ON	0x1
+#endif
+
+void mt79xx_conn_on_misc_log(struct ADAPTER *prAdapter, const char *tag)
+{
+	uint32_t v = 0;
+	uint32_t rst = 0;
+	uint32_t romidx = 0;
+	uint32_t wdt = 0;
+
+	HAL_MCR_RD(prAdapter, MT7902_CONN_ON_MISC_ADDR, &v);
+	/* WFSYS_SW_RST reg: mt76 expects bit0=1 (out of reset) AND bit4
+	 * (INIT_DONE) = 1 after the reset.  Your earlier log only showed 0x01. */
+	HAL_MCR_RD(prAdapter, 0x7c000140, &rst);
+	/* ROMCODE_INDEX: mt76's MT7927 init polls this for 0x1d1e ("MCU idle");
+	 * 0x81021604 is BAR 0xc1604 through the 0x81020000 window in this
+	 * file's remap table.  Likely what mt7961HalPollWfsysSwInitDone checks
+	 * (that function isn't in the uploads, so unverified). */
+	HAL_MCR_RD(prAdapter, 0x81021604, &romidx);
+	/* PCIE_MAC_IREG ISTATUS_HOST (hal_wfsys_reset_mt7961.h): bit 8 = WFSYS
+	 * watchdog.  If it sets after the first command, the MCU reset itself. */
+	HAL_MCR_RD(prAdapter, 0x7403018c, &wdt);
+	DBGLOG(INIT, ERROR,
+	       "[CONN_ON_MISC %s] @0x%08x=0x%08x fw_state=0x%x (want 0x%x) | WFSYS_RST@0x7c000140=0x%08x bit4=%u | ROMCODE_INDEX@0x81021604=0x%08x (idle=0x1d1e) | PCIE_ISTATUS@0x7403018c=0x%08x wdt(bit8)=%u\n",
+	       tag, (uint32_t)MT7902_CONN_ON_MISC_ADDR, v,
+	       v & MT7902_TOP_MISC_FW_STATE_MASK,
+	       (uint32_t)MT7902_TOP_MISC_FW_PWR_ON, rst, (rst >> 4) & 1,
+	       romidx, wdt, (wdt >> 8) & 1);
+}
+
+/* Poll CONN_ON_MISC until FW state == PWR_ON.  Non-fatal: logs every value
+ * change with the elapsed ms so the log shows what the ROM actually reports
+ * even if the expected value assumed above is wrong. */
+uint32_t mt79xx_wait_mcu_ready(struct ADAPTER *prAdapter, uint32_t u4TimeoutMs)
+{
+	uint32_t v = 0, last = 0xffffffff, i;
+
+	for (i = 0; i <= u4TimeoutMs; i++) {
+		HAL_MCR_RD(prAdapter, MT7902_CONN_ON_MISC_ADDR, &v);
+		if (v != last) {
+			DBGLOG(INIT, ERROR,
+			       "[MCU-READY] t=%ums CONN_ON_MISC=0x%08x fw_state=0x%x\n",
+			       i, v, v & MT7902_TOP_MISC_FW_STATE_MASK);
+			last = v;
+		}
+		/* 0x1 = ROM up (pre-FWDL), 0x3 = RAM FW running (seen in dmesg
+		 * after FWDL; mt76 polls FW_N9_RDY = GENMASK(1,0)).  Accept both
+		 * so the post-FWDL / SER reinit paths don't busy-wait 20 ms in
+		 * softirq context. */
+		if ((v & MT7902_TOP_MISC_FW_STATE_MASK) ==
+		    MT7902_TOP_MISC_FW_PWR_ON ||
+		    (v & MT7902_TOP_MISC_FW_STATE_MASK) == 0x3) {
+			DBGLOG(INIT, ERROR, "[MCU-READY] ready after %u ms\n", i);
+			return WLAN_STATUS_SUCCESS;
+		}
+		kalMdelay(1);
+	}
+	DBGLOG(INIT, ERROR,
+	       "[MCU-READY] TIMEOUT %u ms, last CONN_ON_MISC=0x%08x (continuing)\n",
+	       u4TimeoutMs, v);
+	return WLAN_STATUS_FAILURE;
+}
+
+/* ---- Debug/behaviour toggles (override with -D on the build line) ----
+ * MT7902_CLEAR_LBK_RX_Q_SEL: clear GLO_CFG bit 20 (CSR_LBK_RX_Q_SEL_EN) before
+ *   enabling TX/RX DMA.  mt76 never sets it; vendor code left it set from
+ *   reset/ROM (GLO_CFG reads 0x5030ba7d).  Default ON: top lead.
+ */
+/* mt76 final GLO_CFG = 0x5030b875: bit20 set, bit9 clear. */
+#ifndef MT7902_SET_FWDL_BYPASS_BIT
+#define MT7902_SET_FWDL_BYPASS_BIT	0
+#endif
+#ifndef MT7902_CLEAR_LBK_RX_Q_SEL
+#define MT7902_CLEAR_LBK_RX_Q_SEL	0
+#endif
+#define MT7902_GLO_CFG_LBK_RX_Q_SEL_EN	BIT(20)
+
+/* One-shot dump of every non-zero WFDMA0 (0x7c024000..+0x7ff) and DMASHDL
+ * (0x7c026000..+0xff) word, for a register-by-register diff against a
+ * working mt76 (see mt76_regdump.py).  Read-only. */
+static void mt79xx_wfdma_regblock_dump(struct ADAPTER *prAdapter, const char *tag)
+{
+	static bool done;
+	static const struct { uint32_t base, len; } blk[] = {
+		{ 0x7c024000, 0x800 }, { 0x7c026000, 0x100 },
+		{ 0x7c027000, 0x100 }, { 0x7c060000, 0x100 }, { 0x74030000, 0x200 },
+	};
+	unsigned int b, o;
+	uint32_t v;
+
+	if (done)
+		return;
+	done = true;
+	for (b = 0; b < ARRAY_SIZE(blk); b++)
+		for (o = 0; o < blk[b].len; o += 4) {
+			v = 0;
+			HAL_MCR_RD(prAdapter, blk[b].base + o, &v);
+			if (v)
+				DBGLOG(INIT, ERROR, "[REGDUMP %s] 0x%08x=0x%08x\n",
+				       tag, blk[b].base + o, v);
+		}
+}
+
+/* After a command timeout: is the ROM trying to tell us something through the
+ * MCU->host software interrupt / mailbox path?  Read-only. */
+void mt79xx_mcu2host_dump(struct ADAPTER *prAdapter, const char *tag)
+{
+	mt79xx_wfdma_regblock_dump(prAdapter, tag);
+	uint32_t sw_sta = 0, sw_msk = 0, h_sta = 0, h_ena = 0, mbox = 0;
+	uint32_t glo = 0, romidx = 0;
+
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_BASE + 0x1f0, &sw_sta);
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_BASE + 0x1f4, &sw_msk);
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_HOST_INT_STA_ADDR, &h_sta);
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_HOST_INT_ENA_ADDR, &h_ena);
+	HAL_MCR_RD(prAdapter, 0x7c0600fc, &mbox);
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+	HAL_MCR_RD(prAdapter, 0x81021604, &romidx);
+	DBGLOG(INIT, ERROR,
+	       "[MCU2HOST %s] SW_INT_STA@0x7c0241f0=0x%08x SW_INT_MASK@0x7c0241f4=0x%08x | HOST_INT_STA=0x%08x ENA=0x%08x | MBOX@0x7c0600fc=0x%08x | GLO_CFG=0x%08x lbk(b20)=%u | ROMCODE_INDEX=0x%08x\n",
+	       tag, sw_sta, sw_msk, h_sta, h_ena, mbox, glo,
+	       (glo >> 20) & 1, romidx);
+}
+
 void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 {
 	struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
 	uint32_t glo = 0;
+	static unsigned int u4PrefetchCalls;
 
-	DBGLOG(INIT, ERROR, "%s: ADAPTER_FLAG_HW_ERR=%d fgIsBusAccessFailed=%d\n",
-		__func__,
+	u4PrefetchCalls++;
+	DBGLOG(INIT, ERROR, "%s: call #%u ADAPTER_FLAG_HW_ERR=%d fgIsBusAccessFailed=%d\n",
+		__func__, u4PrefetchCalls,
 		(int)HAL_TEST_FLAG(prAdapter, ADAPTER_FLAG_HW_ERR),
 		(int)fgIsBusAccessFailed);
+	if (u4PrefetchCalls >= 2)
+		dump_stack();	/* who re-enters prefetch between ECO reads and SEMA? */
+
+	mt79xx_conn_on_misc_log(prAdapter, "prefetch-entry");
 
 	/* Local aliases for GLO_CFG bits not in vendor headers.
 	 * Values verified against mt792x_regs.h and hw datasheet. */
+#ifndef MT7902_GLO_CFG_FW_DWLD_BYPASS_DMASHDL
+#define MT7902_GLO_CFG_FW_DWLD_BYPASS_DMASHDL	BIT(9)
+#endif
 #ifndef MT7902_GLO_CFG_TX_WB_DDONE
 #define MT7902_GLO_CFG_TX_WB_DDONE		BIT(6)
 #endif
@@ -673,6 +820,56 @@ void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 		DBGLOG(INIT, ERROR, "%s: WFDMA logic reset done\n", __func__);
 	}
 
+	/* The logic reset above also clears every ring BASE/CNT/CIDX/DIDX CSR
+	 * (seen in dmesg: R0/R15/R16 base 0x0126.... -> 0x0, cnt 0x800 -> 0x200).
+	 * halWpdmaInitRing() programmed them BEFORE calling us, so without this
+	 * DMA would be enabled below with base=0.  mt76 orders it
+	 * disable/reset -> queue_reset (ring CSRs) -> prefetch -> enable.
+	 * Re-program the ring CSRs here, after the reset and before enable.
+	 */
+	{
+		extern void halWpdmaInitTxRing(struct GLUE_INFO *prGlueInfo);
+		extern void halWpdmaInitRxRing(struct GLUE_INFO *prGlueInfo);
+
+		halWpdmaInitTxRing(prGlueInfo);
+		halWpdmaInitRxRing(prGlueInfo);
+#ifndef MT7902_RX_DIDX_RESET
+#define MT7902_RX_DIDX_RESET 1
+#endif
+#if MT7902_RX_DIDX_RESET
+		/* mt76 queue reset writes RX ring 0 and 2 DIDX <- 0 */
+		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_BASE + 0x50c, 0);
+		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_BASE + 0x52c, 0);
+#endif
+		mt79xx_wfdma_dump(prAdapter, "prefetch-after-ring-reprogram");
+	}
+
+	mt79xx_wfdma_dump(prAdapter, "prefetch-after-logic-reset");
+
+	/* Diagnostic: can TX_RING0_EXT_CTRL hold an arbitrary value at all?
+	 * Write a throwaway pattern via the macro address and via the raw
+	 * mt76 offset (WFDMA0 + 0x600) and read both back.  A pattern that
+	 * sticks at one address but not the other means a wrong macro; a
+	 * pattern that sticks nowhere means the block is gated/unclocked.
+	 */
+	{
+		uint32_t rb_m = 0xbad0bad0, rb_r = 0xbad0bad0;
+		const uint32_t raw = WF_WFDMA_HOST_DMA0_BASE + 0x600;
+
+		HAL_MCR_WR(prAdapter,
+			   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR,
+			   0x5a5a0004);
+		HAL_MCR_RD(prAdapter,
+			   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR, &rb_m);
+		HAL_MCR_WR(prAdapter, raw, 0x5a5a0004);
+		HAL_MCR_RD(prAdapter, raw, &rb_r);
+		DBGLOG(INIT, ERROR,
+		       "%s: EXT_CTRL pattern test macro@0x%08x rb=0x%08x raw@0x%08x rb=0x%08x (wrote 0x5a5a0004)\n",
+		       __func__,
+		       (uint32_t)WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR,
+		       rb_m, raw, rb_r);
+	}
+
 	/* Step 1: write EXT_CTRL prefetch registers. */
 
 	/* RX rings */
@@ -723,6 +920,9 @@ void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 	 * Ensures hardware latches the prefetch config cleanly. */
 	HAL_MCR_WR(prAdapter, MT7902_WFDMA0_RST_DTX_PTR, 0xffffffff);
 	wmb();
+	/* mt76 order (good trace): PRI_DLY_INT_CFG0 cleared right after
+	 * RST_DTX_PTR and before GLO_CFG is written/enabled. */
+	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_BASE + 0x2f0, 0x0);
 
 	/* Step 3: readback TX_RING0_EXT_CTRL to confirm writes stuck */
 	{
@@ -733,10 +933,45 @@ void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 		DBGLOG(INIT, INFO,
 		       "%s: TX_RING0_EXT_CTRL after prefetch=0x%08x\n",
 		       __func__, ext);
+		DBGLOG(INIT, ERROR,
+		       "%s: TX_RING0_EXT_CTRL readback=0x%08x (want 0x01000004)\n",
+		       __func__, ext);
 		if (ext == 0x0)
 			DBGLOG(INIT, ERROR,
 			       "%s: EXT_CTRL still ghosting after RST_DTX_PTR\n",
 			       __func__);
+		mt79xx_wfdma_dump(prAdapter, "prefetch-after-writes");
+	}
+
+	/* DMASHDL bypass, as mt792x_dma_disable() does and as the vendor
+	 * FWDL path does (cmm_asic_connac2x.c ~1500-1536).  The logic reset above
+	 * also resets DMASHDL (RST bit 5), wiping what DmaShdlInit programmed, so
+	 * with the scheduler enabled but unconfigured the MCU/FWDL TX rings stall:
+	 * dmesg shows TX_DMA_BUSY set (GLO_CFG bit1), R15 CIDX=1, DIDX stuck at 0.
+	 * Addresses are mt76's: GLO_CFG_EXT0 = WFDMA0+0x2b0 (bit6 = DMASHDL
+	 * enable), DMASHDL_SW_CONTROL = DMASHDL base (WFDMA0+0x2000) + 4 (bit28
+	 * = bypass).  Verify against your headers; raw values are logged.
+	 */
+	{
+		const uint32_t ext0_addr = WF_WFDMA_HOST_DMA0_BASE + 0x2b0;
+		const uint32_t swc_addr  = WF_WFDMA_HOST_DMA0_BASE + 0x2000 + 0x04;
+		uint32_t ext0 = 0xbad0bad0, swc = 0xbad0bad0;
+		uint32_t ext0_b, swc_b;
+
+		HAL_MCR_RD(prAdapter, ext0_addr, &ext0);
+		HAL_MCR_RD(prAdapter, swc_addr, &swc);
+		ext0_b = ext0;
+		swc_b = swc;
+		ext0 &= ~BIT(6);
+		swc |= BIT(28);
+		HAL_MCR_WR(prAdapter, ext0_addr, ext0);
+		HAL_MCR_WR(prAdapter, swc_addr, swc);
+		ext0 = swc = 0xbad0bad0;
+		HAL_MCR_RD(prAdapter, ext0_addr, &ext0);
+		HAL_MCR_RD(prAdapter, swc_addr, &swc);
+		DBGLOG(INIT, ERROR,
+		       "%s: DMASHDL bypass EXT0@0x%08x 0x%08x->0x%08x  SW_CTRL@0x%08x 0x%08x->0x%08x\n",
+		       __func__, ext0_addr, ext0_b, ext0, swc_addr, swc_b, swc);
 	}
 
 	/* Step 4: set GLO_CFG config bits (no TX/RX_DMA_EN yet).
@@ -750,18 +985,133 @@ void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 	       MT7902_GLO_CFG_FIFO_DIS_CHECK      |
 	       MT7902_GLO_CFG_RX_WB_DDONE         |
 	       MT_WFDMA0_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN |
-	       MT7902_GLO_CFG_OMIT_RX_INFO_PFET2;
+	       MT7902_GLO_CFG_OMIT_RX_INFO_PFET2  |
+	       (MT7902_SET_FWDL_BYPASS_BIT ? MT7902_GLO_CFG_FW_DWLD_BYPASS_DMASHDL : 0);
+#if MT7902_CLEAR_LBK_RX_Q_SEL
+	glo &= ~MT7902_GLO_CFG_LBK_RX_Q_SEL_EN;
+#endif
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, glo);
 
 	/* Step 5: enable DMA engines separately, matching mt76 two-write
 	 * sequence which ensures config bits are posted before DMA starts. */
 	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+#if MT7902_CLEAR_LBK_RX_Q_SEL
+	glo &= ~MT7902_GLO_CFG_LBK_RX_Q_SEL_EN;
+#endif
 	glo |= MT_WFDMA0_GLO_CFG_TX_DMA_EN | MT_WFDMA0_GLO_CFG_RX_DMA_EN;
 	HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, glo);
 
 	/* Step 6: final readback for log confirmation */
 	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-	DBGLOG(INIT, INFO, "%s: GLO_CFG after enable=0x%08x\n", __func__, glo);
+	DBGLOG(INIT, ERROR,
+	       "%s: GLO_CFG after enable=0x%08x lbk_rx_q_sel(b20)=%u (clear_enabled=%d)\n",
+	       __func__, glo, (glo >> 20) & 1, MT7902_CLEAR_LBK_RX_Q_SEL);
+	mt79xx_wfdma_dump(prAdapter, "prefetch-after-enable");
+
+	/* Writes seen in the mt76 mmiotrace (mt76-mmio-good.txt) between DMA
+	 * enable and the first MCU command that this driver never issued:
+	 *   0x7c0241f4 <- 1          (WFDMA0 + 0x1f4, MCU2HOST SW INT mask)
+	 *   0x74030194 |= 0x100      (PCIE_MAC_IREG, read-modify-write)
+	 * Addresses and values are trace-verified; the register names are not.
+	 * Without the MCU2HOST SW INT unmasked, a ROM reply may never be
+	 * signalled to the host.  Disable with -DMT7902_MT76_EXTRA_WRITES=0. */
+#ifndef MT7902_MT76_EXTRA_WRITES
+#define MT7902_MT76_EXTRA_WRITES	1
+#endif
+#if MT7902_MT76_EXTRA_WRITES
+	{
+		uint32_t sw_msk = 0xbad0bad0, pm = 0xbad0bad0, lp = 0xbad0bad0;
+		const uint32_t sw_msk_addr = WF_WFDMA_HOST_DMA0_BASE + 0x1f4;
+
+		/* Tail in the exact order of the good mt76 trace (good_1.txt):
+		 *   0x54000120 |= NEED_REINIT (0xffff0002)
+		 *   0x7c0241f4 = 1
+		 *   INT_ENA = 0, INT_STA = 0, INT_ENA = 0x2807fff5
+		 *   0x41f23c = 0
+		 *   0x7c00e24c = 0x18451806
+		 *   LPCTL = 2 (CLR_OWN)  -> first command ~20 us later
+		 * -DMT7902_GOOD_INT_ENA=0 skips the INT_ENA part (IRQ-handler race);
+		 * -DMT7902_E24C_SEQ=0 skips the 0x7c00e24c write. */
+#ifndef MT7902_GOOD_INT_ENA
+#define MT7902_GOOD_INT_ENA	1
+#endif
+#ifndef MT7902_E24C_SEQ
+#define MT7902_E24C_SEQ	1
+#endif
+		{
+			uint32_t dummy = 0;
+
+			HAL_MCR_RD(prAdapter, 0x54000120, &dummy);
+			HAL_MCR_WR(prAdapter, 0x54000120, dummy | BIT(1));
+		}
+		HAL_MCR_WR(prAdapter, sw_msk_addr, 0x1);
+#if MT7902_GOOD_INT_ENA
+		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_HOST_INT_ENA_ADDR, 0x0);
+		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_HOST_INT_STA_ADDR, 0x0);
+		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_HOST_INT_ENA_ADDR, 0x2807fff5);
+#endif
+		HAL_MCR_WR(prAdapter, 0x0041f23c, 0x0);
+#if MT7902_E24C_SEQ
+		HAL_MCR_WR(prAdapter, 0x7c00e24c, 0x18451806);
+#endif
+#ifndef MT7902_SET_OWN_FIRST
+#define MT7902_SET_OWN_FIRST 1
+#endif
+#if MT7902_SET_OWN_FIRST
+		/* good trace: LPCTL(0x7c060010) <- 1 (SET_OWN) before <- 2 (CLR_OWN). */
+		HAL_MCR_WR(prAdapter, CONNAC2X_BN0_LPCTL_ADDR, 0x1);
+#endif
+		HAL_MCR_WR(prAdapter, CONNAC2X_BN0_LPCTL_ADDR, 0x2);
+		kalMdelay(5);
+		HAL_MCR_RD(prAdapter, CONNAC2X_BN0_LPCTL_ADDR, &lp);
+		/* mt76 does this after CLR_OWN (not in the first 54 writes) */
+		HAL_MCR_RD(prAdapter, 0x74030194, &pm);
+		pm |= BIT(8);
+		HAL_MCR_WR(prAdapter, 0x74030194, pm);
+		HAL_MCR_RD(prAdapter, sw_msk_addr, &sw_msk);
+		HAL_MCR_RD(prAdapter, 0x74030194, &pm);
+		DBGLOG(INIT, ERROR,
+		       "%s: mt76 tail: SW_INT_MASK=0x%08x (want 1) LPCTL after CLR_OWN=0x%08x PCIE_PM=0x%08x\n",
+		       __func__, sw_msk, lp, pm);
+
+		/* Experiment (inference from the trace, unconfirmed): mt76 acks
+		 * INT_STA bit 27 (0x08000000, MCU2HOST SW INT) right after
+		 * CLR_OWN with INT_ENA=0 around it, then re-enables INT_ENA.
+		 * Here INT_STA stays 0x08000000 forever and RX0 DIDX never moves. */
+#ifndef MT7902_ACK_MCU2HOST
+#define MT7902_ACK_MCU2HOST	0	/* disproved: INT_STA b27 is TX-done(ring15), not MCU2HOST */
+#endif
+#ifndef MT7902_MT76_INT_ENA
+#define MT7902_MT76_INT_ENA	0	/* 1: write INT_ENA=0x2807fff5 like mt76 (races with IRQ handler) */
+#endif
+#if MT7902_ACK_MCU2HOST
+		{
+			uint32_t sta0 = 0, sta1 = 0, cmd0 = 0, cmd1 = 0, ena = 0;
+			const uint32_t cmd_addr = WF_WFDMA_HOST_DMA0_BASE + 0x1f0;
+
+			HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_HOST_INT_STA_ADDR, &sta0);
+			HAL_MCR_RD(prAdapter, cmd_addr, &cmd0);
+			HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_HOST_INT_ENA_ADDR, 0x0);
+			HAL_MCR_WR(prAdapter, cmd_addr, cmd0);
+			HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_HOST_INT_STA_ADDR,
+				   sta0 ? sta0 : 0x08000000);
+			HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_HOST_INT_STA_ADDR, &sta1);
+			HAL_MCR_RD(prAdapter, cmd_addr, &cmd1);
+#if MT7902_MT76_INT_ENA
+			HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_HOST_INT_ENA_ADDR, 0x2807fff5);
+#endif
+			HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_HOST_INT_ENA_ADDR, &ena);
+			DBGLOG(INIT, ERROR,
+			       "%s: ack: INT_STA 0x%08x->0x%08x MCU_CMD(0x1f0) 0x%08x->0x%08x INT_ENA=0x%08x\n",
+			       __func__, sta0, sta1, cmd0, cmd1, ena);
+		}
+#endif
+	}
+#endif
+
+	/* Upstream waits for the MCU to report ready before the first ROM
+	 * command.  Non-fatal here so the log shows what the ROM reports. */
+	mt79xx_wait_mcu_ready(prAdapter, 20);
 
 #undef PREFETCH
 #undef MT7902_WFDMA0_RST_DTX_PTR
@@ -1884,6 +2234,25 @@ struct RX_DESC_OPS_T mt7902RxDescOps = {
 	
 };
 
+
+/* Wrapper: the chip's SOP dump kills ROMCODE_INDEX/bus (0x1d1e -> 0xdead0003)
+ * when run pre-FW, and it is reached from paths in nic_rx.c that the hal_pdma.c
+ * guard does not cover.  Skip it until firmware is downloaded. */
+#ifndef MT7902_SKIP_SOP_DUMP_PREFW
+#define MT7902_SKIP_SOP_DUMP_PREFW 1
+#endif
+static u_int8_t mt7902_show_debug_sop_info_guarded(struct ADAPTER *prAdapter,
+						   uint8_t ucCase)
+{
+#if MT7902_SKIP_SOP_DUMP_PREFW
+	if (!prAdapter->fgIsFwDownloaded) {
+		printk(KERN_ERR "[mt7902] [SOP-GUARD] pre-FW: skipping show_debug_sop_info\n");
+		return 0;
+	}
+#endif
+	return mt7902_show_debug_sop_info(prAdapter, ucCase);
+}
+
 struct CHIP_DBG_OPS mt7902DebugOps = {
 	.showPdmaInfo = mt7902_show_wfdma_info,
 	.showPseInfo = mt7961_show_pse_info,
@@ -1910,7 +2279,7 @@ struct CHIP_DBG_OPS mt7902DebugOps = {
 #endif
 	.show_conninfra_debug_info = NULL,
 #if (CFG_SUPPORT_DEBUG_SOP == 1)
-	.show_debug_sop_info = mt7902_show_debug_sop_info,
+	.show_debug_sop_info = mt7902_show_debug_sop_info_guarded,
 #endif
 };
 

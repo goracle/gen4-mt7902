@@ -625,101 +625,101 @@ int mtk_cfg80211_nla_put_type(struct sk_buff *skb,
 			      const void *value);
 
 int mtk_cfg80211_vendor_get_capabilities(struct wiphy
-		*wiphy, struct wireless_dev *wdev,
+		*wiphy, struct net_device *ndev,
 		const void *data, int data_len);
 
 int mtk_cfg80211_vendor_set_config(struct wiphy *wiphy,
-				   struct wireless_dev *wdev,
+				   struct net_device *ndev,
 				   const void *data, int data_len);
 
 int mtk_cfg80211_vendor_set_scan_config(struct wiphy *wiphy,
-					struct wireless_dev *wdev,
+					struct net_device *ndev,
 					const void *data, int data_len);
 
 int mtk_cfg80211_vendor_set_significant_change(
-	struct wiphy *wiphy, struct wireless_dev *wdev,
+	struct wiphy *wiphy, struct net_device *ndev,
 	const void *data, int data_len);
 
 int mtk_cfg80211_vendor_set_hotlist(struct wiphy *wiphy,
-				    struct wireless_dev *wdev,
+				    struct net_device *ndev,
 				    const void *data, int data_len);
 
 int mtk_cfg80211_vendor_enable_scan(struct wiphy *wiphy,
-				    struct wireless_dev *wdev,
+				    struct net_device *ndev,
 				    const void *data, int data_len);
 
 int mtk_cfg80211_vendor_enable_full_scan_results(
-	struct wiphy *wiphy, struct wireless_dev *wdev,
+	struct wiphy *wiphy, struct net_device *ndev,
 	const void *data, int data_len);
 
 int mtk_cfg80211_vendor_get_scan_results(struct wiphy
-		*wiphy, struct wireless_dev *wdev,
+		*wiphy, struct net_device *ndev,
 		const void *data, int data_len);
 
 int mtk_cfg80211_vendor_get_channel_list(struct wiphy
-		*wiphy, struct wireless_dev *wdev,
+		*wiphy, struct net_device *ndev,
 		const void *data, int data_len);
 
 int mtk_cfg80211_vendor_set_country_code(struct wiphy
-		*wiphy, struct wireless_dev *wdev,
+		*wiphy, struct net_device *ndev,
 		const void *data, int data_len);
 
 int mtk_cfg80211_vendor_get_rtt_capabilities(
-	struct wiphy *wiphy, struct wireless_dev *wdev,
+	struct wiphy *wiphy, struct net_device *ndev,
 	const void *data, int data_len);
 
 int mtk_cfg80211_vendor_llstats_get_info(struct wiphy
-		*wiphy, struct wireless_dev *wdev,
+		*wiphy, struct net_device *ndev,
 		const void *data, int data_len);
 
 int mtk_cfg80211_vendor_set_band(struct wiphy *wiphy,
-				 struct wireless_dev *wdev,
+				 struct net_device *ndev,
 				 const void *data, int data_len);
 
 int mtk_cfg80211_vendor_set_scan_mac_oui(struct wiphy *wiphy,
-				 struct wireless_dev *wdev,
+				 struct net_device *ndev,
 				 const void *data, int data_len);
 
 int mtk_cfg80211_vendor_set_roaming_policy(
-	struct wiphy *wiphy, struct wireless_dev *wdev,
+	struct wiphy *wiphy, struct net_device *ndev,
 	const void *data, int data_len);
 
 int mtk_cfg80211_vendor_get_roaming_capabilities(
 	struct wiphy *wiphy,
-	struct wireless_dev *wdev, const void *data, int data_len);
+	struct net_device *ndev, const void *data, int data_len);
 
 int mtk_cfg80211_vendor_config_roaming(struct wiphy *wiphy,
-				       struct wireless_dev *wdev,
+				       struct net_device *ndev,
 				       const void *data,
 				       int data_len);
 
 int mtk_cfg80211_vendor_enable_roaming(struct wiphy *wiphy,
-				       struct wireless_dev *wdev,
+				       struct net_device *ndev,
 				       const void *data,
 				       int data_len);
 
 int mtk_cfg80211_vendor_set_rssi_monitoring(
 	struct wiphy *wiphy,
-	struct wireless_dev *wdev, const void *data, int data_len);
+	struct net_device *ndev, const void *data, int data_len);
 
 int mtk_cfg80211_vendor_packet_keep_alive_start(
 	struct wiphy *wiphy,
-	struct wireless_dev *wdev, const void *data, int data_len);
+	struct net_device *ndev, const void *data, int data_len);
 
 int mtk_cfg80211_vendor_packet_keep_alive_stop(
 	struct wiphy *wiphy,
-	struct wireless_dev *wdev, const void *data, int data_len);
+	struct net_device *ndev, const void *data, int data_len);
 
 int mtk_cfg80211_vendor_get_version(struct wiphy *wiphy,
-				    struct wireless_dev *wdev,
+				    struct net_device *ndev,
 				    const void *data, int data_len);
 
 int mtk_cfg80211_vendor_event_rssi_beyond_range(
 	struct wiphy *wiphy,
-	struct wireless_dev *wdev, int rssi);
+	struct net_device *ndev, int rssi);
 
 int mtk_cfg80211_vendor_get_preferred_freq_list(struct wiphy
-		*wiphy, struct wireless_dev *wdev, const void *data,
+		*wiphy, struct net_device *ndev, const void *data,
 		int data_len);
 #endif
 #endif /* _GL_VENDOR_H */

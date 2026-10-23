@@ -137,7 +137,7 @@ nanNdiCreateRspEvent(struct ADAPTER *prAdapter,
 		struct NdiIfaceCreate rNdiInterfaceCreate) {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	uint16_t u2CreateRspLen;
 
 	if (prAdapter == NULL) {
@@ -224,7 +224,7 @@ nanNdiDeleteRspEvent(struct ADAPTER *prAdapter,
 		struct NdiIfaceDelete rNdiInterfaceDelete) {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	uint16_t u2CreateRspLen;
 
 	if (prAdapter == NULL) {
@@ -310,7 +310,7 @@ nanNdpInitiatorRspEvent(struct ADAPTER *prAdapter,
 			uint32_t rTxDoneStatus) {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	uint16_t u2InitiatorRspLen;
 
 	if (prAdapter == NULL) {
@@ -408,7 +408,7 @@ nanNdpResponderRspEvent(struct ADAPTER *prAdapter,
 			uint32_t rTxDoneStatus) {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	uint16_t u2ResponderRspLen;
 
 	if (prAdapter == NULL) {
@@ -498,7 +498,7 @@ nanNdpEndRspEvent(struct ADAPTER *prAdapter, struct _NAN_NDP_INSTANCE_T *prNDP,
 		  uint32_t rTxDoneStatus) {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	uint16_t u2EndRspLen;
 
 	if (prAdapter == NULL) {
@@ -1087,7 +1087,7 @@ nanNdpDataIndEvent(IN struct ADAPTER *prAdapter,
 		   struct _NAN_NDL_INSTANCE_T *prNDL) {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	uint16_t u2IndiEventLen;
 
 	if (prNDP == NULL) {
@@ -1217,7 +1217,7 @@ nanNdpDataConfirmEvent(IN struct ADAPTER *prAdapter,
 		       struct _NAN_NDP_INSTANCE_T *prNDP) {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	uint32_t u2ConfirmEventLen;
 
 	if (prNDP == NULL) {
@@ -1335,7 +1335,7 @@ nanNdpDataTerminationEvent(IN struct ADAPTER *prAdapter,
 			   struct _NAN_NDP_INSTANCE_T *prNDP) {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	uint32_t u2ConfirmEventLen;
 	uint32_t *pu2NDPInstance;
 
@@ -1404,7 +1404,7 @@ nanNdpDataTerminationEvent(IN struct ADAPTER *prAdapter,
  */
 /*----------------------------------------------------------------------------*/
 int
-mtk_cfg80211_vendor_ndp(struct wiphy *wiphy, struct wireless_dev *wdev,
+mtk_cfg80211_vendor_ndp(struct wiphy *wiphy, struct net_device *ndev,
 			const void *data, int data_len) {
 	struct GLUE_INFO *prGlueInfo = NULL;
 	struct nlattr *tb[MTK_WLAN_VENDOR_ATTR_NDP_PARAMS_MAX + 1];

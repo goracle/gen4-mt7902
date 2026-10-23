@@ -400,11 +400,13 @@ static int32_t HQA_OpenAdapter(struct net_device *prNetDev,
 			       IN union iwreq_data *prIwReqData,
 			       struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_OpenAdapter\n");
 
-	i4Ret = MT_ATEStart(prNetDev, "ATESTART");
+	i4Ret = MT_ATEStart(prWdev, "ATESTART");
 
 	/* For SA Buffer Mode Temp Solution */
 	g_BufferDownload = FALSE;
@@ -430,11 +432,13 @@ static int32_t HQA_CloseAdapter(struct net_device *prNetDev,
 				IN union iwreq_data *prIwReqData,
 				struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_CloseAdapter\n");
 
-	i4Ret = MT_ATEStop(prNetDev, "ATESTOP");
+	i4Ret = MT_ATEStop(prWdev, "ATESTOP");
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -457,6 +461,8 @@ static int32_t HQA_StartTx(struct net_device *prNetDev,
 			   IN union iwreq_data *prIwReqData,
 			   struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t TxCount;
 	uint16_t TxLength;
@@ -473,9 +479,9 @@ static int32_t HQA_StartTx(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_StartTx TxLength = %d\n",
 	       TxLength);
 
-	i4Ret = MT_ATESetTxCount(prNetDev, TxCount);
-	i4Ret = MT_ATESetTxLength(prNetDev, (uint32_t) TxLength);
-	i4Ret = MT_ATEStartTX(prNetDev, "TXFRAME");
+	i4Ret = MT_ATESetTxCount(prWdev, TxCount);
+	i4Ret = MT_ATESetTxLength(prWdev, (uint32_t) TxLength);
+	i4Ret = MT_ATEStartTX(prWdev, "TXFRAME");
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -578,12 +584,14 @@ static int32_t HQA_StartRx(struct net_device *prNetDev,
 			   IN union iwreq_data *prIwReqData,
 			   struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_StartRx\n");
 
-	MT_ATESetDBDCBandIndex(prNetDev, 0);
-	MT_ATEStartRX(prNetDev, "RXFRAME");
+	MT_ATESetDBDCBandIndex(prWdev, 0);
+	MT_ATEStartRX(prWdev, "RXFRAME");
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -606,12 +614,14 @@ static int32_t HQA_StopTx(struct net_device *prNetDev,
 			  IN union iwreq_data *prIwReqData,
 			  struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_StopTx\n");
 
-	MT_ATESetDBDCBandIndex(prNetDev, 0);
-	MT_ATEStopRX(prNetDev, "RXSTOP");
+	MT_ATESetDBDCBandIndex(prWdev, 0);
+	MT_ATEStopRX(prWdev, "RXSTOP");
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -685,12 +695,14 @@ static int32_t HQA_StopRx(struct net_device *prNetDev,
 			  IN union iwreq_data *prIwReqData,
 			  struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_StopRx\n");
 
-	MT_ATESetDBDCBandIndex(prNetDev, 0);
-	MT_ATEStopRX(prNetDev, "RXSTOP");
+	MT_ATESetDBDCBandIndex(prWdev, 0);
+	MT_ATEStopRX(prWdev, "RXSTOP");
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -794,6 +806,8 @@ static int32_t HQA_SetTxIPG(struct net_device *prNetDev,
 			    IN union iwreq_data *prIwReqData,
 			    struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Aifs = 0;
 
@@ -805,7 +819,7 @@ static int32_t HQA_SetTxIPG(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_SetTxIPG u4Aifs : %d\n",
 	       u4Aifs);
 
-	MT_ATESetTxIPG(prNetDev, u4Aifs);
+	MT_ATESetTxIPG(prWdev, u4Aifs);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -879,6 +893,8 @@ static int32_t HQA_SetTxPowerExt(struct net_device
 				 IN union iwreq_data *prIwReqData,
 				 struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Power = 0;
 	uint32_t u4Channel = 0;
@@ -901,11 +917,11 @@ static int32_t HQA_SetTxPowerExt(struct net_device
 		" QA_AGENT HQA_SetTxPowerExt u4Power : %u,u4Dbdc_idx:%u, u4Channel:%u,u4Band_idx:%u, u4Ant_idx:%u\n",
 		u4Power, u4Dbdc_idx, u4Channel, u4Band_idx, u4Ant_idx);
 
-	MT_ATESetDBDCBandIndex(prNetDev, u4Dbdc_idx);
-	MT_ATESetTxPower0(prNetDev, u4Power);
+	MT_ATESetDBDCBandIndex(prWdev, u4Dbdc_idx);
+	MT_ATESetTxPower0(prWdev, u4Power);
 	/* u4Freq = nicChannelNum2Freq(u4Channel); */
-	/* i4Ret = MT_ATESetChannel(prNetDev, 0, u4Freq); */
-	/* MT_ATESetBand(prNetDev, u4Band_idx); */
+	/* i4Ret = MT_ATESetChannel(prWdev, 0, u4Freq); */
+	/* MT_ATESetBand(prWdev, u4Band_idx); */
 	/* Antenna?? */
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
@@ -1031,6 +1047,8 @@ static int32_t HQA_SetChannel(struct net_device *prNetDev,
 			      IN union iwreq_data *prIwReqData,
 			      struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	uint32_t i4SetFreq = 0, i4SetChan = 0;
 	int32_t i4Ret = 0;
 
@@ -1043,7 +1061,7 @@ static int32_t HQA_SetChannel(struct net_device *prNetDev,
 	       "QA_AGENT HQA_SetChannel Channel = %d\n", i4SetChan);
 
 	i4SetFreq = nicChannelNum2Freq(i4SetChan, BAND_NULL);
-	i4Ret = MT_ATESetChannel(prNetDev, 0, i4SetFreq);
+	i4Ret = MT_ATESetChannel(prWdev, 0, i4SetFreq);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -1066,6 +1084,8 @@ static int32_t HQA_SetPreamble(struct net_device *prNetDev,
 			       IN union iwreq_data *prIwReqData,
 			       struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Mode = 0;
 	int32_t i4Ret = 0;
 
@@ -1077,7 +1097,7 @@ static int32_t HQA_SetPreamble(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_SetPreamble Mode = %d\n",
 	       i4Mode);
 
-	i4Ret = MT_ATESetPreamble(prNetDev, i4Mode);
+	i4Ret = MT_ATESetPreamble(prWdev, i4Mode);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -1151,6 +1171,8 @@ static int32_t HQA_SetSystemBW(struct net_device *prNetDev,
 			       IN union iwreq_data *prIwReqData,
 			       struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	uint32_t i4BW;
 	int32_t i4Ret = 0;
 
@@ -1162,7 +1184,7 @@ static int32_t HQA_SetSystemBW(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_SetSystemBW BW = %d\n",
 	       i4BW);
 
-	i4Ret = MT_ATESetSystemBW(prNetDev, i4BW);
+	i4Ret = MT_ATESetSystemBW(prWdev, i4BW);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -1185,6 +1207,8 @@ static int32_t HQA_SetPerPktBW(struct net_device *prNetDev,
 			       IN union iwreq_data *prIwReqData,
 			       struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Perpkt_bw;
 
@@ -1196,7 +1220,7 @@ static int32_t HQA_SetPerPktBW(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO,
 	       "QA_AGENT HQA_SetPerPktBW u4Perpkt_bw = %d\n", u4Perpkt_bw);
 
-	i4Ret = MT_ATESetPerPacketBW(prNetDev, u4Perpkt_bw);
+	i4Ret = MT_ATESetPerPacketBW(prWdev, u4Perpkt_bw);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -1219,6 +1243,8 @@ static int32_t HQA_SetPrimaryBW(struct net_device *prNetDev,
 				IN union iwreq_data *prIwReqData,
 				struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t               u4Pri_sel = 0;
 
@@ -1228,7 +1254,7 @@ static int32_t HQA_SetPrimaryBW(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO,
 	       "QA_AGENT HQA_SetPrimaryBW u4Pri_sel : %d\n", u4Pri_sel);
 
-	i4Ret = MT_ATEPrimarySetting(prNetDev, u4Pri_sel);
+	i4Ret = MT_ATEPrimarySetting(prWdev, u4Pri_sel);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -1458,6 +1484,8 @@ static int32_t HQA_SetAntSwap(struct net_device *prNetDev,
 			    IN union iwreq_data *prIwReqData,
 			    struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Ant = 0, u4Band = 0;
 
@@ -1467,7 +1495,7 @@ static int32_t HQA_SetAntSwap(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, INFO, "Band = %d, Ant = %d\n", u4Band, u4Ant);
 
-	i4Ret = MT_ATESetAntSwap(prNetDev, u4Ant);
+	i4Ret = MT_ATESetAntSwap(prWdev, u4Ant);
 	if (i4Ret != WLAN_STATUS_SUCCESS)
 		return -EFAULT;
 
@@ -1516,11 +1544,12 @@ static int32_t HQA_ResetTxRxCounter(struct net_device
 				    IN union iwreq_data *prIwReqData,
 				    struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+
 	uint32_t i4Status;
 
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_ResetTxRxCounter\n");
 
-	i4Status = MT_ATEResetTXRXCounter(prNetDev);
+	i4Status = MT_ATEResetTXRXCounter(prNetDev->ieee80211_ptr);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Status);
 
@@ -1723,6 +1752,8 @@ static int32_t HQA_CalibrationBypassExt(struct net_device
 					IN union iwreq_data *prIwReqData,
 					struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Status = 0;
 	uint32_t u4Item = 0;
 	uint32_t u4Band_idx = 0;
@@ -1744,7 +1775,7 @@ static int32_t HQA_CalibrationBypassExt(struct net_device
 	       "QA_AGENT HQA_CalibrationBypassExt u4Band_idx : %d\n",
 	       u4Band_idx);
 
-	MT_ATESetDBDCBandIndex(prNetDev, u4Band_idx);
+	MT_ATESetDBDCBandIndex(prWdev, u4Band_idx);
 
 	rRfATInfo.u4FuncIndex = RF_AT_FUNCID_SET_BYPASS_CAL_STEP;
 	rRfATInfo.u4FuncData = u4Item;
@@ -3147,6 +3178,8 @@ static int32_t HQA_DBDCTXTone(struct net_device *prNetDev,
 			      IN union iwreq_data *prIwReqData,
 			      struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 
 	int32_t i4BandIdx = 0, i4Control = 0, i4AntIndex = 0,
@@ -3201,30 +3234,30 @@ static int32_t HQA_DBDCTXTone(struct net_device *prNetDev,
 	 * RF_Power: (1db) 0~15
 	 * Digi_Power: (0.25db) -32~31
 	 */
-	MT_ATESetDBDCTxTonePower(prNetDev, i4AntIndex, i4RF_Power,
+	MT_ATESetDBDCTxTonePower(prWdev, i4AntIndex, i4RF_Power,
 				 i4Digi_Power);
 
 	/* DBDC Band Index : Band0, Band1 */
-	MT_ATESetDBDCBandIndex(prNetDev, i4BandIdx);
+	MT_ATESetDBDCBandIndex(prWdev, i4BandIdx);
 
 	if (i4Control) {
 		/* Band : 2.4G/5G */
-		MT_ATESetBand(prNetDev, i4Band);
+		MT_ATESetBand(prWdev, i4Band);
 
 		/* ToneType : Single or Two */
-		MT_ATESetTxToneType(prNetDev, i4ToneType);
+		MT_ATESetTxToneType(prWdev, i4ToneType);
 
 		/* ToneFreq: DC/5M/10M/20M/40M */
-		MT_ATESetTxToneBW(prNetDev, i4ToneFreq);
+		MT_ATESetTxToneBW(prWdev, i4ToneFreq);
 
 		/* DC Offset I, DC Offset Q */
-		MT_ATESetTxToneDCOffset(prNetDev, i4DcOffsetI, i4DcOffsetQ);
+		MT_ATESetTxToneDCOffset(prWdev, i4DcOffsetI, i4DcOffsetQ);
 
 		/* Control TX Tone Start and Stop */
-		MT_ATEDBDCTxTone(prNetDev, i4Control);
+		MT_ATEDBDCTxTone(prWdev, i4Control);
 	} else {
 		/* Control TX Tone Start and Stop */
-		MT_ATEDBDCTxTone(prNetDev, i4Control);
+		MT_ATEDBDCTxTone(prWdev, i4Control);
 	}
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
@@ -3279,6 +3312,8 @@ static int32_t HQA_DBDCContinuousTX(struct net_device
 				    IN union iwreq_data *prIwReqData,
 				    struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Band = 0, u4Control = 0, u4AntMask = 0,
 		 u4Phymode = 0, u4BW = 0;
@@ -3339,16 +3374,16 @@ static int32_t HQA_DBDCContinuousTX(struct net_device
 	       u4TxfdMode);	/* ok */
 
 	if (u4Control) {
-		MT_ATESetDBDCBandIndex(prNetDev, u4Band);
+		MT_ATESetDBDCBandIndex(prWdev, u4Band);
 		u4Freq = nicChannelNum2Freq(u4Central_Ch, u4Band);
-		MT_ATESetChannel(prNetDev, 0, u4Freq);
+		MT_ATESetChannel(prWdev, 0, u4Freq);
 		ucPriChOffset = _whPhyGetPrimChOffset(u4BW,
 						      u4Pri_Ch,
 						      u4Central_Ch);
 		DBGLOG(RFTEST, INFO,
 		       "QA_AGENT HQA_DBDCContinuousTX ucPriChOffset : %d\n",
 		       ucPriChOffset);	/* ok */
-		MT_ATEPrimarySetting(prNetDev, ucPriChOffset);
+		MT_ATEPrimarySetting(prWdev, ucPriChOffset);
 
 		if (u4Phymode == 1) {
 			u4Phymode = 0;
@@ -3356,7 +3391,7 @@ static int32_t HQA_DBDCContinuousTX(struct net_device
 		} else if ((u4Phymode == 0) &&
 			   ((u4Rate == 9) || (u4Rate == 10) || (u4Rate == 11)))
 			u4Phymode = 1;
-		MT_ATESetPreamble(prNetDev, u4Phymode);
+		MT_ATESetPreamble(prWdev, u4Phymode);
 
 		if (u4Phymode == 0) {
 			u4Rate |= 0x00000000;
@@ -3365,7 +3400,7 @@ static int32_t HQA_DBDCContinuousTX(struct net_device
 			       "QA_AGENT CCK/OFDM (normal preamble) rate : %d\n",
 			       u4Rate);
 
-			MT_ATESetRate(prNetDev, u4Rate);
+			MT_ATESetRate(prWdev, u4Rate);
 		} else if (u4Phymode == 1) {
 			if (u4Rate == 9)
 				u4Rate = 1;
@@ -3379,17 +3414,17 @@ static int32_t HQA_DBDCContinuousTX(struct net_device
 			       "QA_AGENT CCK (short preamble) rate : %d\n",
 			       u4Rate);
 
-			MT_ATESetRate(prNetDev, u4Rate);
+			MT_ATESetRate(prWdev, u4Rate);
 		} else if (u4Phymode >= 2 && u4Phymode <= 4) {
 			u4Rate |= 0x80000000;
 
 			DBGLOG(RFTEST, INFO, "QA_AGENT HT/VHT rate : %d\n",
 			       u4Rate);
 
-			MT_ATESetRate(prNetDev, u4Rate);
+			MT_ATESetRate(prWdev, u4Rate);
 		}
 
-		MT_ATESetSystemBW(prNetDev, u4BW);
+		MT_ATESetSystemBW(prWdev, u4BW);
 
 		rRfATInfo.u4FuncIndex = RF_AT_FUNCID_SET_CW_MODE;
 		rRfATInfo.u4FuncData = u4TxfdMode;
@@ -3890,6 +3925,8 @@ static int32_t HQA_SetShortGI(struct net_device *prNetDev,
 			      IN union iwreq_data *prIwReqData,
 			      struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4ShortGi;
 
@@ -3899,7 +3936,7 @@ static int32_t HQA_SetShortGI(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO,
 	       "QA_AGENT HQA_SetShortGI u4ShortGi = %d\n", u4ShortGi);
 
-	i4Ret = MT_ATESetTxGi(prNetDev, u4ShortGi);
+	i4Ret = MT_ATESetTxGi(prWdev, u4ShortGi);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -4047,6 +4084,8 @@ static int32_t HQA_CalibrationTestMode(struct net_device
 				       IN union iwreq_data *prIwReqData,
 				       struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Mode = 0;
 	uint32_t u4IcapLen = 0;
@@ -4059,7 +4098,7 @@ static int32_t HQA_CalibrationTestMode(struct net_device
 	u4IcapLen = ntohl(u4IcapLen);
 
 	if (u4Mode == 2)
-		i4Ret = MT_ICAPStart(prNetDev, "ICAPSTART");
+		i4Ret = MT_ICAPStart(prWdev, "ICAPSTART");
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -4083,6 +4122,8 @@ static int32_t HQA_DoCalibrationTestItem(struct net_device
 		IN union iwreq_data *prIwReqData,
 		struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Status = 0;
 	uint32_t u4Item = 0;
 	uint32_t u4Band_idx = 0;
@@ -4109,7 +4150,7 @@ static int32_t HQA_DoCalibrationTestItem(struct net_device
 	       "QA_AGENT HQA_DoCalibrationTestItem band_idx : %d\n",
 	       u4Band_idx);
 
-	MT_ATESetDBDCBandIndex(prNetDev, u4Band_idx);
+	MT_ATESetDBDCBandIndex(prWdev, u4Band_idx);
 
 	rRfATInfo.u4FuncIndex = RF_AT_FUNCID_SET_RECAL_CAL_STEP;
 	rRfATInfo.u4FuncData = u4Item;
@@ -4254,6 +4295,8 @@ static int32_t HQA_TMRSetting(struct net_device *prNetDev,
 			      IN union iwreq_data *prIwReqData,
 			      struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Setting;
 	uint32_t u4Version;
@@ -4278,7 +4321,7 @@ static int32_t HQA_TMRSetting(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO,
 	       "QA_AGENT HQA_TMRSetting u4MPIter : %d\n", u4MPIter);
 
-	i4Ret = MT_ATE_TMRSetting(prNetDev, u4Setting, u4Version,
+	i4Ret = MT_ATE_TMRSetting(prWdev, u4Setting, u4Version,
 				  u4MPThres, u4MPIter);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
@@ -4600,6 +4643,8 @@ static int32_t HQA_MPSSetSeqData(struct net_device
 				 IN union iwreq_data *prIwReqData,
 				 struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t		i4Ret = 0;
 	uint32_t		*mps_setting = NULL;
 	uint32_t		u4Band_idx = 0;
@@ -4685,7 +4730,7 @@ static int32_t HQA_MPSSetSeqData(struct net_device
 
 	}
 
-	i4Ret = MT_ATEMPSSetSeqData(prNetDev, u4Len, mps_setting,
+	i4Ret = MT_ATEMPSSetSeqData(prWdev, u4Len, mps_setting,
 				    u4Band_idx);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
@@ -4712,6 +4757,8 @@ static int32_t HQA_MPSSetPayloadLength(struct net_device
 				       IN union iwreq_data *prIwReqData,
 				       struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t		i4Ret = 0;
 	uint32_t		*mps_setting = NULL;
 	uint32_t		u4Band_idx = 0;
@@ -4749,7 +4796,7 @@ static int32_t HQA_MPSSetPayloadLength(struct net_device
 		       i, mps_setting[i]);
 	}
 
-	i4Ret = MT_ATEMPSSetPayloadLength(prNetDev, u4Len,
+	i4Ret = MT_ATEMPSSetPayloadLength(prWdev, u4Len,
 					  mps_setting, u4Band_idx);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
@@ -4776,6 +4823,8 @@ static int32_t HQA_MPSSetPacketCount(struct net_device
 				     IN union iwreq_data *prIwReqData,
 				     struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t		i4Ret = 0;
 	uint32_t		*mps_setting = NULL;
 	uint32_t		u4Band_idx = 0;
@@ -4813,7 +4862,7 @@ static int32_t HQA_MPSSetPacketCount(struct net_device
 		       i, mps_setting[i]);
 	}
 
-	i4Ret = MT_ATEMPSSetPacketCount(prNetDev, u4Len,
+	i4Ret = MT_ATEMPSSetPacketCount(prWdev, u4Len,
 					mps_setting, u4Band_idx);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
@@ -4840,6 +4889,8 @@ static int32_t HQA_MPSSetPowerGain(struct net_device
 				   IN union iwreq_data *prIwReqData,
 				   struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t		i4Ret = 0;
 	uint32_t		*mps_setting = NULL;
 	uint32_t		u4Band_idx = 0;
@@ -4877,7 +4928,7 @@ static int32_t HQA_MPSSetPowerGain(struct net_device
 		       i, mps_setting[i]);
 	}
 
-	i4Ret = MT_ATEMPSSetPowerGain(prNetDev, u4Len, mps_setting,
+	i4Ret = MT_ATEMPSSetPowerGain(prWdev, u4Len, mps_setting,
 				      u4Band_idx);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
@@ -4903,6 +4954,8 @@ static int32_t HQA_MPSStart(struct net_device *prNetDev,
 			    IN union iwreq_data *prIwReqData,
 			    struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t		i4Ret = 0;
 	uint32_t		u4Band_idx = 0;
 
@@ -4911,8 +4964,8 @@ static int32_t HQA_MPSStart(struct net_device *prNetDev,
 	memcpy(&u4Band_idx, HqaCmdFrame->Data + 4 * 0, 4);
 	u4Band_idx = ntohl(u4Band_idx);
 
-	MT_ATESetDBDCBandIndex(prNetDev, u4Band_idx);
-	MT_ATEStartTX(prNetDev, "TXFRAME");
+	MT_ATESetDBDCBandIndex(prWdev, u4Band_idx);
+	MT_ATEStartTX(prWdev, "TXFRAME");
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -4966,6 +5019,8 @@ static int32_t HQA_MPSSetNss(struct net_device *prNetDev,
 			     IN union iwreq_data *prIwReqData,
 			     struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t		i4Ret = 0;
 	uint32_t		*mps_setting = NULL;
 	uint32_t		u4Band_idx = 0;
@@ -5002,7 +5057,7 @@ static int32_t HQA_MPSSetNss(struct net_device *prNetDev,
 		       i, mps_setting[i]);
 	}
 
-	i4Ret = MT_ATEMPSSetNss(prNetDev, u4Len, mps_setting,
+	i4Ret = MT_ATEMPSSetNss(prWdev, u4Len, mps_setting,
 				u4Band_idx);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
@@ -5029,6 +5084,8 @@ static int32_t HQA_MPSSetPerpacketBW(
 	IN union iwreq_data *prIwReqData,
 	struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t		i4Ret = 0;
 	uint32_t		*mps_setting = NULL;
 	uint32_t		u4Band_idx = 0;
@@ -5066,7 +5123,7 @@ static int32_t HQA_MPSSetPerpacketBW(
 		       i, mps_setting[i]);
 	}
 
-	i4Ret = MT_ATEMPSSetPerpacketBW(prNetDev, u4Len,
+	i4Ret = MT_ATEMPSSetPerpacketBW(prWdev, u4Len,
 					mps_setting, u4Band_idx);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
@@ -5093,6 +5150,8 @@ static int32_t HQA_SetAIFS(struct net_device *prNetDev,
 			   IN union iwreq_data *prIwReqData,
 			   struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t SlotTime = 0;
 	uint32_t SifsTime = 0;
@@ -5107,7 +5166,7 @@ static int32_t HQA_SetAIFS(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_SetAIFS SifsTime = %d\n",
 	       SifsTime);
 
-	i4Ret = MT_ATESetTxIPG(prNetDev, SifsTime);
+	i4Ret = MT_ATESetTxIPG(prWdev, SifsTime);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -5308,13 +5367,15 @@ static int32_t HQA_RDDStartExt(struct net_device *prNetDev,
 			       IN union iwreq_data *prIwReqData,
 			       struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_RDDStartExt\n");
 
 	DBGLOG(RFTEST, INFO, "[RDD DUMP START]\n");
 
-	i4Ret = MT_ATERDDStart(prNetDev, "RDDSTART");
+	i4Ret = MT_ATERDDStart(prWdev, "RDDSTART");
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -5337,11 +5398,13 @@ static int32_t HQA_RDDStopExt(struct net_device *prNetDev,
 			      IN union iwreq_data *prIwReqData,
 			      struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_RDDStopExt\n");
 
-	i4Ret = MT_ATERDDStop(prNetDev, "RDDSTOP");
+	i4Ret = MT_ATERDDStop(prWdev, "RDDSTOP");
 
 	DBGLOG(RFTEST, INFO, "[RDD DUMP END]\n");
 
@@ -5400,7 +5463,7 @@ static int32_t HQA_BssInfoUpdate(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_BssInfoUpdate(prNetDev, prInBuf);
+	i4Ret = Set_BssInfoUpdate(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -5453,7 +5516,7 @@ static int32_t HQA_DevInfoUpdate(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_DevInfoUpdate(prNetDev, prInBuf);
+	i4Ret = Set_DevInfoUpdate(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -5478,6 +5541,8 @@ static int32_t HQA_LogOnOff(struct net_device *prNetDev,
 			    IN union iwreq_data *prIwReqData,
 			    struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Band_idx = 0;
 	uint32_t u4Log_type = 0;
@@ -5502,7 +5567,7 @@ static int32_t HQA_LogOnOff(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO,
 	       "QA_AGENT HQA_LogOnOff log_size : %d\n", u4Log_size);
 
-	i4Ret = MT_ATELogOnOff(prNetDev, u4Log_type, u4Log_ctrl,
+	i4Ret = MT_ATELogOnOff(prWdev, u4Log_type, u4Log_ctrl,
 			       u4Log_size);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
@@ -5580,9 +5645,11 @@ static int32_t HQA_GetDumpRXV(struct net_device *prNetDev,
 			      IN union iwreq_data *prIwReqData,
 			      struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Count = 0, i4Ret = 0;
 
-	i4Ret = MT_ATEGetDumpRXV(prNetDev, HqaCmdFrame->Data, &i4Count);
+	i4Ret = MT_ATEGetDumpRXV(prWdev, HqaCmdFrame->Data, &i4Count);
 	ResponseToQA(HqaCmdFrame, prIwReqData, 6 + i4Count, i4Ret);
 	return i4Ret;
 }
@@ -5685,7 +5752,7 @@ static int32_t HQA_TxBfProfileTagInValid(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_InValid(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_InValid(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -5716,7 +5783,7 @@ static int32_t HQA_TxBfProfileTagPfmuIdx(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_PfmuIdx(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_PfmuIdx(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -5746,7 +5813,7 @@ static int32_t HQA_TxBfProfileTagBfType(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_BfType(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_BfType(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -5776,7 +5843,7 @@ static int32_t HQA_TxBfProfileTagBw(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_DBW(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_DBW(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -5806,7 +5873,7 @@ static int32_t HQA_TxBfProfileTagSuMu(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_SuMu(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_SuMu(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -5856,7 +5923,7 @@ static int32_t HQA_TxBfProfileTagMemAlloc(
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_Mem(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_Mem(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -5898,7 +5965,7 @@ static int32_t HQA_TxBfProfileTagMatrix(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_Matrix(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_Matrix(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -5936,7 +6003,7 @@ static int32_t HQA_TxBfProfileTagSnr(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_SNR(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_SNR(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -5966,7 +6033,7 @@ static int32_t HQA_TxBfProfileTagSmtAnt(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_SmartAnt(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_SmartAnt(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -5996,7 +6063,7 @@ static int32_t HQA_TxBfProfileTagSeIdx(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_SeIdx(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_SeIdx(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6027,7 +6094,7 @@ static int32_t HQA_TxBfProfileTagRmsdThrd(
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_RmsdThrd(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_RmsdThrd(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6072,7 +6139,7 @@ static int32_t HQA_TxBfProfileTagMcsThrd(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_McsThrd(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_McsThrd(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6103,7 +6170,7 @@ static int32_t HQA_TxBfProfileTagTimeOut(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_TimeOut(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_TimeOut(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6134,7 +6201,7 @@ static int32_t HQA_TxBfProfileTagDesiredBw(
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_DesiredBW(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_DesiredBW(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6165,7 +6232,7 @@ static int32_t HQA_TxBfProfileTagDesiredNc(
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_DesiredNc(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_DesiredNc(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6196,7 +6263,7 @@ static int32_t HQA_TxBfProfileTagDesiredNr(
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTag_DesiredNr(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTag_DesiredNr(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6226,7 +6293,7 @@ static int32_t HQA_TxBfProfileTagWrite(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTagWrite(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTagWrite(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6261,7 +6328,7 @@ static int32_t HQA_TxBfProfileTagRead(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileTagRead(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileTagRead(prNetDev->ieee80211_ptr, prInBuf);
 
 	rPfmuTag1.au4RawData[0] = ntohl(g_rPfmuTag1.au4RawData[0]);
 	rPfmuTag1.au4RawData[1] = ntohl(g_rPfmuTag1.au4RawData[1]);
@@ -6319,7 +6386,7 @@ static int32_t HQA_StaRecCmmUpdate(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_StaRecCmmUpdate(prNetDev, prInBuf);
+	i4Ret = Set_StaRecCmmUpdate(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6427,7 +6494,7 @@ static int32_t HQA_StaRecBfUpdate(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_StaRecBfUpdate(prNetDev, prInBuf);
+	i4Ret = Set_StaRecBfUpdate(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6480,7 +6547,7 @@ static int32_t HQA_BFProfileDataRead(struct net_device
 
 		DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-		i4Ret = Set_TxBfProfileDataRead(prNetDev, prInBuf);
+		i4Ret = Set_TxBfProfileDataRead(prNetDev->ieee80211_ptr, prInBuf);
 
 		rPfmuData.au4RawData[0] = ntohl(g_rPfmuData.au4RawData[0]);
 		rPfmuData.au4RawData[1] = ntohl(g_rPfmuData.au4RawData[1]);
@@ -6564,7 +6631,7 @@ static int32_t HQA_BFProfileDataWrite(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfProfileDataWrite(prNetDev, prInBuf);
+	i4Ret = Set_TxBfProfileDataWrite(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6611,7 +6678,7 @@ static int32_t HQA_BFSounding(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_Trigger_Sounding_Proc(prNetDev, prInBuf);
+	i4Ret = Set_Trigger_Sounding_Proc(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6628,7 +6695,7 @@ static int32_t HQA_TXBFSoundingStop(struct net_device
 
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_TXBFSoundingStop\n");
 
-	i4Ret = Set_Stop_Sounding_Proc(prNetDev, NULL);
+	i4Ret = Set_Stop_Sounding_Proc(prNetDev->ieee80211_ptr, NULL);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -6679,7 +6746,7 @@ static int32_t HQA_TxBfTxApply(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfTxApply(prNetDev, prInBuf);
+	i4Ret = Set_TxBfTxApply(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6744,7 +6811,7 @@ static int32_t HQA_ManualAssoc(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_TxBfManualAssoc(prNetDev, prInBuf);
+	i4Ret = Set_TxBfManualAssoc(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6809,7 +6876,7 @@ static int32_t HQA_MUGetInitMCS(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_MUGetInitMCS(prNetDev, prInBuf);
+	i4Ret = Set_MUGetInitMCS(prNetDev->ieee80211_ptr, prInBuf);
 
 	u4User0InitMCS = ntohl(u4User0InitMCS);
 	u4User1InitMCS = ntohl(u4User1InitMCS);
@@ -6893,7 +6960,7 @@ static int32_t HQA_MUCalInitMCS(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_MUCalInitMCS(prNetDev, prInBuf);
+	i4Ret = Set_MUCalInitMCS(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6966,7 +7033,7 @@ static int32_t HQA_MUCalLQ(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_MUCalLQ(prNetDev, prInBuf);
+	i4Ret = Set_MUCalLQ(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -6989,7 +7056,7 @@ static int32_t HQA_MUGetLQ(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_MUGetLQ\n");
 
-	i4Ret = Set_MUGetLQ(prNetDev, prInBuf);
+	i4Ret = Set_MUGetLQ(prNetDev->ieee80211_ptr, prInBuf);
 
 	for (i = 0; i < NUM_OF_USER * NUM_OF_MODUL; i++) {
 		u4LqReport[i] = ntohl(u4LqReport[i]);
@@ -7026,7 +7093,7 @@ static int32_t HQA_MUSetSNROffset(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_MUSetSNROffset(prNetDev, prInBuf);
+	i4Ret = Set_MUSetSNROffset(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -7056,7 +7123,7 @@ static int32_t HQA_MUSetZeroNss(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_MUSetZeroNss(prNetDev, prInBuf);
+	i4Ret = Set_MUSetZeroNss(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -7087,7 +7154,7 @@ static int32_t HQA_MUSetSpeedUpLQ(struct net_device
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_MUSetSpeedUpLQ(prNetDev, prInBuf);
+	i4Ret = Set_MUSetSpeedUpLQ(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -7120,7 +7187,7 @@ static int32_t HQA_MUSetMUTable(struct net_device *prNetDev,
 
 	memcpy(prTable, HqaCmdFrame->Data + 4, u2Len);
 
-	i4Ret = Set_MUSetMUTable(prNetDev, prTable);
+	i4Ret = Set_MUSetMUTable(prNetDev->ieee80211_ptr, prTable);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 
@@ -7223,7 +7290,7 @@ static int32_t HQA_MUSetGroup(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_MUSetGroup(prNetDev, prInBuf);
+	i4Ret = Set_MUSetGroup(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -7260,7 +7327,7 @@ static int32_t HQA_MUGetQD(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_MUGetQD(prNetDev, prInBuf);
+	i4Ret = Set_MUGetQD(prNetDev->ieee80211_ptr, prInBuf);
 
 	/* TODO */
 	u4User0InitMCS = ntohl(u4User0InitMCS);
@@ -7305,7 +7372,7 @@ static int32_t HQA_MUSetEnable(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_MUSetEnable(prNetDev, prInBuf);
+	i4Ret = Set_MUSetEnable(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -7348,7 +7415,7 @@ static int32_t HQA_MUSetGID_UP(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_MUSetGID_UP(prNetDev, prInBuf);
+	i4Ret = Set_MUSetGID_UP(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -7408,7 +7475,7 @@ static int32_t HQA_MUTriggerTx(struct net_device *prNetDev,
 
 	DBGLOG(RFTEST, ERROR, "prInBuf = %s\n", prInBuf);
 
-	i4Ret = Set_MUTriggerTx(prNetDev, prInBuf);
+	i4Ret = Set_MUTriggerTx(prNetDev->ieee80211_ptr, prInBuf);
 
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2, i4Ret);
 	kfree(prInBuf);
@@ -8075,6 +8142,8 @@ static int32_t hqa_set_channel_ext(struct net_device
 				   IN union iwreq_data *prIwReqData,
 				   struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Ext_id = 0;
 	uint32_t u4Param_num = 0;
@@ -8161,7 +8230,7 @@ static int32_t hqa_set_channel_ext(struct net_device
 		goto exit;
 	}
 
-	MT_ATESetDBDCBandIndex(prNetDev, u4Band_idx);
+	MT_ATESetDBDCBandIndex(prWdev, u4Band_idx);
 	if ((u4Central_ch0 >= 7 && u4Central_ch0 <= 16)
 	    && u4Ch_band == 1) {
 		/*Ch7 - Ch12, 5G (5035-5060)*/
@@ -8171,24 +8240,24 @@ static int32_t hqa_set_channel_ext(struct net_device
 	} else {
 		u4SetFreq = nicChannelNum2Freq(u4Central_ch0, BAND_NULL);
 	}
-	MT_ATESetChannel(prNetDev, 0, u4SetFreq);
+	MT_ATESetChannel(prWdev, 0, u4SetFreq);
 
 	if (u4Sys_bw == 6) {
 		u4SetFreq = nicChannelNum2Freq(u4Central_ch1, BAND_NULL);
-		MT_ATESetChannel(prNetDev, 1, u4SetFreq);
+		MT_ATESetChannel(prWdev, 1, u4SetFreq);
 	}
 
-	MT_ATESetSystemBW(prNetDev, u4Sys_bw);
+	MT_ATESetSystemBW(prWdev, u4Sys_bw);
 
 	/* For POR Cal Setting - 20160601 */
 	if ((u4Sys_bw == 6) && (u4Perpkt_bw == 6))
-		MT_ATESetPerPacketBW(prNetDev, 5);
+		MT_ATESetPerPacketBW(prWdev, 5);
 	else
-		MT_ATESetPerPacketBW(prNetDev, u4Perpkt_bw);
+		MT_ATESetPerPacketBW(prWdev, u4Perpkt_bw);
 
-	MT_ATEPrimarySetting(prNetDev, u4Pri_sel);
+	MT_ATEPrimarySetting(prWdev, u4Pri_sel);
 	/* PeiHsuan Memo : No Set Reason ? */
-	MT_ATESetBand(prNetDev, u4Ch_band);
+	MT_ATESetBand(prWdev, u4Ch_band);
 
 exit:
 	u4Ext_id = ntohl(u4Ext_id);
@@ -8216,6 +8285,8 @@ static int32_t hqa_set_txcontent_ext(struct net_device
 				     IN union iwreq_data *prIwReqData,
 				     struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Len = 0;
 	uint32_t u4Ext_id = 0;
@@ -8298,13 +8369,13 @@ static int32_t hqa_set_txcontent_ext(struct net_device
 	DBGLOG(RFTEST, INFO,
 	       "QA_AGENT hqa_start_tx_ext payload : 0x%x\n", ucPayload);
 
-	MT_ATESetDBDCBandIndex(prNetDev, u4Band_idx);
-	MT_ATESetMacHeader(prNetDev, u4FC, u4Dur, u4Seq);
-	MT_ATESetTxPayLoad(prNetDev, u4Gen_payload_rule, ucPayload);
-	MT_ATESetTxLength(prNetDev, u4Txlen);
-	MT_ATESetMACAddress(prNetDev, RF_AT_FUNCID_SET_MAC_ADDRESS,
+	MT_ATESetDBDCBandIndex(prWdev, u4Band_idx);
+	MT_ATESetMacHeader(prWdev, u4FC, u4Dur, u4Seq);
+	MT_ATESetTxPayLoad(prWdev, u4Gen_payload_rule, ucPayload);
+	MT_ATESetTxLength(prWdev, u4Txlen);
+	MT_ATESetMACAddress(prWdev, RF_AT_FUNCID_SET_MAC_ADDRESS,
 			    ucAddr1);
-	MT_ATESetMACAddress(prNetDev, RF_AT_FUNCID_SET_TA, ucAddr2);
+	MT_ATESetMACAddress(prWdev, RF_AT_FUNCID_SET_TA, ucAddr2);
 	/* PeiHsuan Memo : No Set Addr3 */
 
 	u4Ext_id = ntohl(u4Ext_id);
@@ -8332,6 +8403,8 @@ static int32_t hqa_start_tx_ext(struct net_device *prNetDev,
 				IN union iwreq_data *prIwReqData,
 				struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Ext_id = 0;
 	uint32_t u4Param_num = 0;
@@ -8416,8 +8489,8 @@ static int32_t hqa_start_tx_ext(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO, "QA_AGENT hqa_start_tx_ext nss : %d\n",
 	       u4Nss);
 
-	MT_ATESetDBDCBandIndex(prNetDev, u4Band_idx);
-	MT_ATESetTxCount(prNetDev, u4Pkt_cnt);
+	MT_ATESetDBDCBandIndex(prWdev, u4Band_idx);
+	MT_ATESetTxCount(prWdev, u4Pkt_cnt);
 
 #if 1
 	if (u4Phymode == 1) {
@@ -8426,7 +8499,7 @@ static int32_t hqa_start_tx_ext(struct net_device *prNetDev,
 	} else if ((u4Phymode == 0) && ((u4Rate == 9)
 					|| (u4Rate == 10) || (u4Rate == 11)))
 		u4Phymode = 1;
-	MT_ATESetPreamble(prNetDev, u4Phymode);
+	MT_ATESetPreamble(prWdev, u4Phymode);
 
 	if (u4Phymode == 0) {
 		u4Rate |= 0x00000000;
@@ -8435,7 +8508,7 @@ static int32_t hqa_start_tx_ext(struct net_device *prNetDev,
 		       "QA_AGENT CCK/OFDM (normal preamble) rate : %d\n",
 		       u4Rate);
 
-		MT_ATESetRate(prNetDev, u4Rate);
+		MT_ATESetRate(prWdev, u4Rate);
 	} else if (u4Phymode == 1) {
 		if (u4Rate == 9)
 			u4Rate = 1;
@@ -8448,27 +8521,27 @@ static int32_t hqa_start_tx_ext(struct net_device *prNetDev,
 		DBGLOG(RFTEST, INFO,
 		       "QA_AGENT CCK (short preamble) rate : %d\n", u4Rate);
 
-		MT_ATESetRate(prNetDev, u4Rate);
+		MT_ATESetRate(prWdev, u4Rate);
 	} else if (u4Phymode >= 2 && u4Phymode <= 4) {
 		u4Rate |= 0x80000000;
 
 		DBGLOG(RFTEST, INFO, "QA_AGENT HT/VHT rate : %d\n", u4Rate);
 
-		MT_ATESetRate(prNetDev, u4Rate);
+		MT_ATESetRate(prWdev, u4Rate);
 	}
 #endif
 
-	MT_ATESetTxPower0(prNetDev, u4Pwr);
-	MT_ATESetTxSTBC(prNetDev, u4Stbc);
-	MT_ATESetEncodeMode(prNetDev, u4Ldpc);
-	MT_ATESetiBFEnable(prNetDev, u4iBF);
-	MT_ATESeteBFEnable(prNetDev, u4eBF);
+	MT_ATESetTxPower0(prWdev, u4Pwr);
+	MT_ATESetTxSTBC(prWdev, u4Stbc);
+	MT_ATESetEncodeMode(prWdev, u4Ldpc);
+	MT_ATESetiBFEnable(prWdev, u4iBF);
+	MT_ATESeteBFEnable(prWdev, u4eBF);
 	/* PeiHsuan Memo : No Set Wlan ID */
-	MT_ATESetTxIPG(prNetDev, u4Aifs);
-	MT_ATESetTxGi(prNetDev, u4Gi);
-	MT_ATESetTxVhtNss(prNetDev, u4Nss);
-	MT_ATESetTxPath(prNetDev, u4Tx_path);
-	MT_ATEStartTX(prNetDev, "TXFRAME");
+	MT_ATESetTxIPG(prWdev, u4Aifs);
+	MT_ATESetTxGi(prWdev, u4Gi);
+	MT_ATESetTxVhtNss(prWdev, u4Nss);
+	MT_ATESetTxPath(prWdev, u4Tx_path);
+	MT_ATEStartTX(prWdev, "TXFRAME");
 
 	u4Ext_id = ntohl(u4Ext_id);
 	memcpy(HqaCmdFrame->Data + 2, (uint8_t *) &u4Ext_id,
@@ -8495,6 +8568,8 @@ static int32_t hqa_start_rx_ext(struct net_device *prNetDev,
 				IN union iwreq_data *prIwReqData,
 				struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Ext_id = 0;
 	uint32_t u4Param_num = 0;
@@ -8534,7 +8609,7 @@ static int32_t hqa_start_rx_ext(struct net_device *prNetDev,
 
 	u4RxStatSeqNum = 0;
 
-	MT_ATESetDBDCBandIndex(prNetDev, u4Band_idx);
+	MT_ATESetDBDCBandIndex(prWdev, u4Band_idx);
 
 	rRfATInfo.u4FuncIndex = RF_AT_FUNCID_SET_RX_PATH;
 	rRfATInfo.u4FuncData = u4Rx_path << 16 | u4Band_idx;
@@ -8551,7 +8626,7 @@ static int32_t hqa_start_rx_ext(struct net_device *prNetDev,
 	if (i4Ret != WLAN_STATUS_SUCCESS)
 		return -EFAULT;
 	/* PeiHsuan Memo : No Set Own MAC Address */
-	MT_ATEStartRX(prNetDev, "RXFRAME");
+	MT_ATEStartRX(prWdev, "RXFRAME");
 
 	u4Ext_id = ntohl(u4Ext_id);
 	memcpy(HqaCmdFrame->Data + 2, (uint8_t *) &u4Ext_id,
@@ -8578,6 +8653,8 @@ static int32_t hqa_stop_tx_ext(struct net_device *prNetDev,
 			       IN union iwreq_data *prIwReqData,
 			       struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Ext_id = 0;
 	uint32_t u4Param_num = 0;
@@ -8597,8 +8674,8 @@ static int32_t hqa_stop_tx_ext(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO,
 	       "QA_AGENT hqa_stop_tx_ext band_idx : %d\n", u4Band_idx);
 
-	MT_ATESetDBDCBandIndex(prNetDev, u4Band_idx);
-	MT_ATEStopTX(prNetDev, "TXSTOP");
+	MT_ATESetDBDCBandIndex(prWdev, u4Band_idx);
+	MT_ATEStopTX(prWdev, "TXSTOP");
 
 	u4Ext_id = ntohl(u4Ext_id);
 	memcpy(HqaCmdFrame->Data + 2, (uint8_t *) &u4Ext_id,
@@ -8624,6 +8701,8 @@ static int32_t hqa_stop_rx_ext(struct net_device *prNetDev,
 			       IN union iwreq_data *prIwReqData,
 			       struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Ext_id = 0;
 	uint32_t u4Param_num = 0;
@@ -8643,8 +8722,8 @@ static int32_t hqa_stop_rx_ext(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO,
 	       "QA_AGENT hqa_stop_rx_ext band_idx : %d\n", u4Band_idx);
 
-	MT_ATESetDBDCBandIndex(prNetDev, u4Band_idx);
-	MT_ATEStopRX(prNetDev, "RXSTOP");
+	MT_ATESetDBDCBandIndex(prWdev, u4Band_idx);
+	MT_ATEStopRX(prWdev, "RXSTOP");
 
 	u4Ext_id = ntohl(u4Ext_id);
 	memcpy(HqaCmdFrame->Data + 2, (uint8_t *) &u4Ext_id,
@@ -8725,6 +8804,8 @@ static int32_t HQA_IRRSetADC(struct net_device *prNetDev,
 			     IN union iwreq_data *prIwReqData,
 			     struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4WFIdx;
 	uint32_t u4ChFreq;
@@ -8771,7 +8852,7 @@ static int32_t HQA_IRRSetADC(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO,
 	       "QA_AGENT HQA_IRRSetADC u4FType : %d\n", u4FType);
 
-	i4Ret = MT_ATE_IRRSetADC(prNetDev, u4WFIdx, u4ChFreq, u4BW,
+	i4Ret = MT_ATE_IRRSetADC(prWdev, u4WFIdx, u4ChFreq, u4BW,
 				 u4Sx, u4Band, u4RunType, u4FType);
 
 	u4Ext_id = ntohl(u4Ext_id);
@@ -8786,6 +8867,8 @@ static int32_t HQA_IRRSetRxGain(struct net_device *prNetDev,
 				IN union iwreq_data *prIwReqData,
 				struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4PgaLpfg;
 	uint32_t u4Lna;
@@ -8825,7 +8908,7 @@ static int32_t HQA_IRRSetRxGain(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO,
 	       "QA_AGENT HQA_IRRSetRxGain u4Rfdgc : %d\n", u4Rfdgc);
 
-	i4Ret = MT_ATE_IRRSetRxGain(prNetDev, u4PgaLpfg, u4Lna,
+	i4Ret = MT_ATE_IRRSetRxGain(prWdev, u4PgaLpfg, u4Lna,
 				    u4Band, u4WF_inx, u4Rfdgc);
 
 	u4Ext_id = ntohl(u4Ext_id);
@@ -8840,6 +8923,8 @@ static int32_t HQA_IRRSetTTG(struct net_device *prNetDev,
 			     IN union iwreq_data *prIwReqData,
 			     struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Ext_id;
 	uint32_t u4TTGPwrIdx;
@@ -8875,7 +8960,7 @@ static int32_t HQA_IRRSetTTG(struct net_device *prNetDev,
 	DBGLOG(RFTEST, INFO, "QA_AGENT HQA_IRRSetTTG u4Band : %d\n",
 	       u4Band);
 
-	i4Ret = MT_ATE_IRRSetTTG(prNetDev, u4TTGPwrIdx, u4ChFreq,
+	i4Ret = MT_ATE_IRRSetTTG(prWdev, u4TTGPwrIdx, u4ChFreq,
 				 u4FIToneFreq, u4Band);
 
 	u4Ext_id = ntohl(u4Ext_id);
@@ -8891,6 +8976,8 @@ static int32_t HQA_IRRSetTrunOnTTG(struct net_device
 				   IN union iwreq_data *prIwReqData,
 				   struct HQA_CMD_FRAME *HqaCmdFrame)
 {
+	struct wireless_dev *prWdev = prNetDev->ieee80211_ptr;
+
 	int32_t i4Ret = 0;
 	uint32_t u4Ext_id;
 	uint32_t u4TTGOnOff;
@@ -8917,7 +9004,7 @@ static int32_t HQA_IRRSetTrunOnTTG(struct net_device
 	DBGLOG(RFTEST, INFO,
 	       "QA_AGENT HQA_IRRSetTrunOnTTG u4WF_inx : %d\n", u4WF_inx);
 
-	i4Ret = MT_ATE_IRRSetTrunOnTTG(prNetDev, u4TTGOnOff, u4Band,
+	i4Ret = MT_ATE_IRRSetTrunOnTTG(prWdev, u4TTGOnOff, u4Band,
 				       u4WF_inx);
 
 	u4Ext_id = ntohl(u4Ext_id);

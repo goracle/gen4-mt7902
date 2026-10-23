@@ -970,7 +970,7 @@ int dmashdl_dvt_check_pass(
 * echo "DVT PASS" if result is passed
 */
 int dmashdl_dvt_result(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen,
 	struct DMASHDL_DVT_CMD_T *tDvtCmd)
@@ -1047,7 +1047,7 @@ int8_t cmd_atoi(uint8_t ch)
 * PS. Item 0 is stop DVT and then check result
 */
 int priv_driver_dmashdl_dvt_item(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen)
 {
@@ -1111,7 +1111,7 @@ int priv_driver_dmashdl_dvt_item(
 * iwpriv wlan0 driver "DMASHDL_DUMP_MEM"
 */
 int priv_driver_show_dmashdl_allcr(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen)
 {

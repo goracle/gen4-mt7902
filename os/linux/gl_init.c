@@ -2198,7 +2198,7 @@ void p2pSetMulticastListWorkQueueWrapper(struct GLUE_INFO
 /*----------------------------------------------------------------------------*/
 netdev_tx_t wlanHardStartXmit(struct sk_buff *prSkb, struct net_device *prDev)
 {
-	struct NETDEV_PRIVATE_GLUE_INFO *prNetDevPrivate =
+	struct NETDEV_PRIVATE_GLUE_INFO *prNetDevPrivate __attribute__((unused)) =
 		(struct NETDEV_PRIVATE_GLUE_INFO *) NULL;
 	struct GLUE_INFO *prGlueInfo = *((struct GLUE_INFO **)
 					 netdev_priv(prDev));
@@ -3328,7 +3328,7 @@ void wlanWakeLockUninit(struct GLUE_INFO *prGlueInfo)
  * \retval NULL          Fail to create wireless_dev object
  */
 /*----------------------------------------------------------------------------*/
-static struct lock_class_key rSpinKey[SPIN_LOCK_NUM];
+static struct lock_class_key rSpinKey[SPIN_LOCK_NUM] __attribute__((unused));
 static struct wireless_dev *wlanNetCreate(void *pvData,
 		void *pvDriverData)
 {
@@ -3337,14 +3337,14 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 	struct ADAPTER *prAdapter = NULL;
 	uint32_t i;
 	struct device *prDev;
-	struct NETDEV_PRIVATE_GLUE_INFO *prNetDevPrivate =
+	struct NETDEV_PRIVATE_GLUE_INFO *prNetDevPrivate __attribute__((unused)) =
 		(struct NETDEV_PRIVATE_GLUE_INFO *) NULL;
-	struct mt66xx_chip_info *prChipInfo;
+	struct mt66xx_chip_info *prChipInfo __attribute__((unused));
 #if CFG_ENABLE_UNIFY_WIPHY
 	struct wiphy *prWiphy = NULL;
 #endif
 
-	uint8_t *prInfName = NULL;
+	uint8_t *prInfName __attribute__((unused)) = NULL;
 
 	if (prWdev == NULL) {
 		DBGLOG(INIT, ERROR,
@@ -3397,45 +3397,29 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 	kalMemZero(prGlueInfo, sizeof(struct GLUE_INFO));
 
 	/* 4 <2.1> Create Adapter structure */
-	prAdapter = (struct ADAPTER *) wlanAdapterCreate(
-			    prGlueInfo);
-
-	/* RIGHT HERE is where you plug in the PCIe logic */
-/* ONLY link here if prAdapter is valid */
-    if (prAdapter) {
-        prAdapter->prHalOps = mtk_pcie_get_ops();
-        DBGLOG(INIT, INFO, "HAL operations linked to Adapter\n");
-    }
-
-
-/* After: prAdapter = (struct ADAPTER *) wlanAdapterCreate(prGlueInfo); */
-if (prAdapter) {
-    DBGLOG(INIT, WARN, "SAA: [NET_CREATE] Adapter born. Initial rWifiVar MAC=" MACSTR "\n",
-           MAC2STR(prAdapter->rWifiVar.aucMacAddress));
-}
-
+	prAdapter = (struct ADAPTER *) wlanAdapterCreate(prGlueInfo);
 	if (!prAdapter) {
-		DBGLOG(INIT, ERROR,
-		       "Allocating memory to adapter failed\n");
-		glClearHifInfo(prGlueInfo);
-		return NULL;
+		DBGLOG(INIT, ERROR, "Allocating memory to adapter failed\n");
+		goto netcreate_err;
 	}
 
-	prChipInfo = ((struct mt66xx_hif_driver_data *)
-		      pvDriverData)->chip_info;
+	if (!pvDriverData ||
+	    !((struct mt66xx_hif_driver_data *)pvDriverData)->chip_info) {
+		DBGLOG(INIT, ERROR, "wlanNetCreate: no chip_info in driver data\n");
+		goto netcreate_err;
+	}
+	prChipInfo = ((struct mt66xx_hif_driver_data *)pvDriverData)->chip_info;
 	prAdapter->chip_info = prChipInfo;
 	prGlueInfo->prAdapter = prAdapter;
+	prAdapter->prHalOps = mtk_pcie_get_ops();
+	DBGLOG(INIT, INFO, "HAL operations linked to Adapter\n");
 
-	if (regd_is_single_sku_en()) {
-	  rlmDomainInitSkuDatabase(prAdapter);
-	}
-
+	if (regd_is_single_sku_en())
+		rlmDomainInitSkuDatabase(prAdapter);
 
 	/* 4 <3> Initialize Glue structure */
 	/* 4 <3.1> Create net device */
-
 #ifdef CFG_DRIVER_INF_NAME_CHANGE
-
 	if (kalStrLen(gprifnamesta) > 0) {
 		prInfName = kalStrCat(gprifnamesta, "%d");
 		DBGLOG(INIT, WARN, "Station ifname customized, use %s\n",
@@ -3469,13 +3453,7 @@ if (prAdapter) {
 #endif
 			ether_setup,
 			CFG_MAX_TXQ_NUM);
-#endif /* end of CFG_SUPPORT_PERSIST_NETDEV */
-
-/* After: prDevHandler = alloc_netdev_mq(...) */
-if (prDevHandler) {
-    DBGLOG(INIT, WARN, "SAA: [NET_CREATE] NetDev %d allocated. Linux default MAC=" MACSTR "\n",
-           i, MAC2STR(prDevHandler->dev_addr));
-}
+#endif /* CFG_SUPPORT_PERSIST_NETDEV */
 
 		if (!prDevHandler) {
 			DBGLOG(INIT, ERROR,
@@ -3500,8 +3478,7 @@ if (prDevHandler) {
 			prChipInfo->txd_append_size;
 		prDevHandler->netdev_ops = &wlan_netdev_ops;
 #ifdef CONFIG_WIRELESS_EXT
-		prDevHandler->wireless_handlers =
-			&wext_handler_def;
+		prDevHandler->wireless_handlers = &wext_handler_def;
 #endif
 		netif_carrier_off(prDevHandler);
 		netif_tx_stop_all_queues(prDevHandler);
@@ -3509,23 +3486,18 @@ if (prDevHandler) {
 
 		/* 4 <3.1.2> co-relate with wiphy bi-directionally */
 		prDevHandler->ieee80211_ptr = gprWdev[i];
-
 		gprWdev[i]->netdev = prDevHandler;
 
 		/* 4 <3.1.3> co-relate net device & prDev */
-		SET_NETDEV_DEV(prDevHandler,
-				wiphy_dev(prWdev->wiphy));
+		SET_NETDEV_DEV(prDevHandler, wiphy_dev(prWdev->wiphy));
 
 		/* 4 <3.1.4> set device to glue */
 		prGlueInfo->prDev = prDev;
 
 		/* 4 <3.2> Initialize glue variables */
 		kalSetMediaStateIndicated(prGlueInfo,
-			MEDIA_STATE_DISCONNECTED,
-			i);
+			MEDIA_STATE_DISCONNECTED, i);
 	}
-
-
 
 	prGlueInfo->prDevHandler = gprWdev[0]->netdev;
 
@@ -3535,7 +3507,6 @@ if (prDevHandler) {
 #endif
 	prGlueInfo->prScanRequest = NULL;
 	prGlueInfo->prSchedScanRequest = NULL;
-
 
 #if CFG_SUPPORT_PASSPOINT
 	/* Init DAD */
@@ -3548,12 +3519,10 @@ if (prDevHandler) {
 	init_completion(&prGlueInfo->rScanComp);
 	init_completion(&prGlueInfo->rHaltComp);
 	init_completion(&prGlueInfo->rPendComp);
-
 #if CFG_SUPPORT_MULTITHREAD
 	init_completion(&prGlueInfo->rHifHaltComp);
 	init_completion(&prGlueInfo->rRxHaltComp);
 #endif
-
 #if CFG_SUPPORT_NCHO
 	init_completion(&prGlueInfo->rAisChGrntComp);
 #endif
@@ -3565,7 +3534,6 @@ if (prDevHandler) {
 		spin_lock_init(&prGlueInfo->rSpinLock[i]);
 		lockdep_set_class(&prGlueInfo->rSpinLock[i], &rSpinKey[i]);
 	}
-
 	for (i = 0; i < MUTEX_NUM; i++) {
 		mutex_init(&prGlueInfo->arMutex[i]);
 		lockdep_set_subclass(&prGlueInfo->arMutex[i], i);
@@ -3575,7 +3543,6 @@ if (prDevHandler) {
 	sema_init(&prGlueInfo->ioctl_sem, 1);
 
 #if CFG_SUPPORT_SDIO_READ_WRITE_PATTERN
-	/* initialize SDIO read-write pattern control */
 	prGlueInfo->fgEnSdioTestPattern = FALSE;
 	prGlueInfo->fgIsSdioTestInitialized = FALSE;
 #endif
@@ -3590,7 +3557,6 @@ if (prDevHandler) {
 	/* Init wakelock */
 	wlanWakeLockInit(prGlueInfo);
 
-	/* main thread is created in this function */
 #if CFG_SUPPORT_MULTITHREAD
 	init_waitqueue_head(&prGlueInfo->waitq_rx);
 	init_waitqueue_head(&prGlueInfo->waitq_hif);
@@ -3601,35 +3567,24 @@ if (prDevHandler) {
 #endif
 
 #if CFG_SUPPORT_CSI
-	/* init CSI wait queue  */
 	init_waitqueue_head(&(prGlueInfo->prAdapter->rCSIInfo.waitq));
 #endif
-
 
 #if CFG_ASSERT_DUMP
 	init_waitqueue_head(&(prGlueInfo->waitq_fwdump));
 	skb_queue_head_init(&(prGlueInfo->rFwDumpSkbQueue));
 #endif
 
+	/* Inject config MAC into the main net_device */
+	if (!is_zero_ether_addr(prAdapter->rWifiVar.aucMacAddress)) {
+		uint8_t *pucCfgMac = prAdapter->rWifiVar.aucMacAddress;
 
-/* 🧬 FORCE CONFIG MAC INJECTION - KERNEL 6.18 COMPLIANT 🧬 */
-if (prAdapter && prGlueInfo->prDevHandler) {
-    uint8_t *pucCfgMac = prAdapter->rWifiVar.aucMacAddress;
-    struct net_device *prNetDev = prGlueInfo->prDevHandler;
-
-    /* Use the standard Linux helper instead of the missing utils function */
-    if (!is_zero_ether_addr(pucCfgMac)) {
-        DBGLOG(INIT, WARN, "SAA: Injecting Config MAC %pM into net_device\n", pucCfgMac);
-        
-        /* 1. Use the proper kernel helper for const dev_addr (Fixes Error 3565) */
-        eth_hw_addr_set(prNetDev, pucCfgMac);
-        
-        /* 2. Sync internal driver state */
-        kalMemCopy(prAdapter->rMyMacAddr, pucCfgMac, 6);
-    } else {
-        DBGLOG(INIT, ERROR, "SAA: Config MAC is zero! NetDev will use random/HW MAC.\n");
-    }
-}
+		DBGLOG(INIT, WARN, "SAA: Injecting Config MAC %pM into net_device\n", pucCfgMac);
+		eth_hw_addr_set(prGlueInfo->prDevHandler, pucCfgMac);
+		kalMemCopy(prAdapter->rMyMacAddr, pucCfgMac, 6);
+	} else {
+		DBGLOG(INIT, ERROR, "SAA: Config MAC is zero! NetDev will use random/HW MAC.\n");
+	}
 
 	return prWdev;
 
@@ -3639,8 +3594,7 @@ netcreate_err:
 		prGlueInfo->prAdapter = NULL;
 	}
 	prGlueInfo->prDevHandler = NULL;
-
-	return prWdev;
+	return NULL;
 }				/* end of wlanNetCreate() */
 
 /*----------------------------------------------------------------------------*/
@@ -4096,7 +4050,7 @@ uint32_t wlanDownloadBufferBin(struct ADAPTER *prAdapter)
 			= NULL;
 	uint32_t u4ContentLen;
 	uint8_t *pucConfigBuf = NULL;
-	struct mt66xx_chip_info *prChipInfo;
+	struct mt66xx_chip_info *prChipInfo __attribute__((unused));
 	uint32_t chip_id;
 	uint8_t aucEeprom[32];
 	uint32_t retWlanStat = WLAN_STATUS_FAILURE;
@@ -4281,7 +4235,7 @@ uint32_t wlanConnacDownloadBufferBin(struct ADAPTER
 		*prSetEfuseBufModeInfo = NULL;
 	uint32_t u4ContentLen;
 	uint8_t *pucConfigBuf = NULL;
-	struct mt66xx_chip_info *prChipInfo;
+	struct mt66xx_chip_info *prChipInfo __attribute__((unused));
 	uint32_t chip_id;
 	uint8_t aucEeprom[32];
 	uint32_t retWlanStat = WLAN_STATUS_FAILURE;
@@ -4470,7 +4424,7 @@ uint32_t wlanServiceInit(struct GLUE_INFO *prGlueInfo)
 
 	struct service_test *prServiceTest;
 	struct test_wlan_info *winfos;
-	struct mt66xx_chip_info *prChipInfo;
+	struct mt66xx_chip_info *prChipInfo __attribute__((unused));
 	uint32_t rStatus = WLAN_STATUS_SUCCESS;
 
 	DBGLOG(INIT, TRACE, "%s enter!\n", __func__);
@@ -6095,10 +6049,224 @@ int32_t wlanOnAtReset(void)
  * \retval negative value Failed
  */
 /*----------------------------------------------------------------------------*/
+#ifndef MT79XX_WFSYS_RST_ADDR
+#define MT79XX_WFSYS_RST_ADDR 0x7c000140 /* mt76 mt792x_wfsys_reset, non-7921 */
+#endif
+
+/* Experiment: request driver-own BEFORE the cold boot (mt76 order:
+ * fw_pmctrl -> drv_pmctrl -> wfsys_reset). Set to 0 to disable. */
+#ifndef MT79XX_PROBE_OWN_PRE_RESET
+#define MT79XX_PROBE_OWN_PRE_RESET 1
+#endif
+
+/* Stage-boundary check: log LPCTL + GLO_CFG and flag dead-bus values.
+ * Non-static: also called from asicConnac2xLowPowerOwnClear.
+ * lpctl/glo are pre-seeded with a sentinel so a HAL_MCR_RD that
+ * short-circuits (ADAPTER_FLAG_HW_ERR) shows up as 0xbad0bad0 rather
+ * than a misleading 0.
+ */
+void mt79xx_stage_check(struct ADAPTER *prAdapter, const char *stage)
+{
+    uint32_t lpctl = 0xbad0bad0, glo = 0xbad0bad0;
+
+    if (!prAdapter)
+        return;
+
+    HAL_MCR_RD(prAdapter, CONNAC2X_BN0_LPCTL_ADDR, &lpctl);
+    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+    {
+        /* Dead-bus trace: raw BAR0[0] and ROMCODE_INDEX at every stage so the
+         * first stage where they go 0xdead0003 is visible. */
+        uint32_t rom = 0xbad0bad0, bar0 = 0xbad0bad0;
+        void __iomem *bar = prAdapter->prGlueInfo ?
+            prAdapter->prGlueInfo->rHifInfo.CSRBaseAddress : NULL;
+
+        if (bar)
+            bar0 = readl_relaxed(bar);
+        HAL_MCR_RD(prAdapter, 0x81021604, &rom);
+        DBGLOG(INIT, ERROR,
+               "[STAGE %s] BAR0[0]=0x%08x ROMCODE_INDEX=0x%08x\n",
+               stage, bar0, rom);
+    }
+    DBGLOG(INIT, ERROR,
+           "[STAGE %s] LPCTL=0x%08x own_sync=%u GLO_CFG=0x%08x dma_en(tx=%u rx=%u)\n",
+           stage, lpctl, !!(lpctl & PCIE_LPCR_AP_HOST_OWNER_STATE_SYNC), glo,
+           !!(glo & BIT(0)), !!(glo & BIT(2)));
+    WARN_ON_ONCE(lpctl == 0xdead0003 || lpctl == 0xffffffff ||
+                 lpctl == 0xbad0bad0);
+}
+
+
+void mt79xx_wfdma_dump_rx(struct ADAPTER *prAdapter, const char *tag);
+
+/* WFDMA state dump. Raw offsets follow mt76 (WFDMA0 + 0x300 + 0x10*ring for
+ * BASE/CNT/CIDX/DIDX, EXT_CTRL at WFDMA0 + 0x600 + 4*ring) so a wrong vendor
+ * macro shows up as macro-address != raw-address.  Non-static: used from
+ * hal_pdma.c and mt7902.c.
+ */
+void mt79xx_wfdma_dump(struct ADAPTER *prAdapter, const char *tag)
+{
+    uint32_t glo = 0xbad0bad0, ext_m = 0xbad0bad0, ext_r = 0xbad0bad0;
+    uint32_t b0 = 0xbad0bad0, c0 = 0xbad0bad0, b15 = 0xbad0bad0;
+    uint32_t c15 = 0xbad0bad0, ci15 = 0xbad0bad0, di15 = 0xbad0bad0;
+    uint32_t b16 = 0xbad0bad0, c16 = 0xbad0bad0;
+    const uint32_t base = WF_WFDMA_HOST_DMA0_BASE;
+
+    if (!prAdapter)
+        return;
+
+    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR, &ext_m);
+    HAL_MCR_RD(prAdapter, base + 0x600, &ext_r);
+    HAL_MCR_RD(prAdapter, base + 0x300, &b0);
+    HAL_MCR_RD(prAdapter, base + 0x304, &c0);
+    HAL_MCR_RD(prAdapter, base + 0x300 + 15 * 0x10, &b15);
+    HAL_MCR_RD(prAdapter, base + 0x304 + 15 * 0x10, &c15);
+    HAL_MCR_RD(prAdapter, base + 0x308 + 15 * 0x10, &ci15);
+    HAL_MCR_RD(prAdapter, base + 0x30c + 15 * 0x10, &di15);
+    HAL_MCR_RD(prAdapter, base + 0x300 + 16 * 0x10, &b16);
+    HAL_MCR_RD(prAdapter, base + 0x304 + 16 * 0x10, &c16);
+
+    DBGLOG(INIT, ERROR,
+           "[WFDMA %s] GLO=0x%08x dma_en(tx=%u rx=%u) EXT0 macro@0x%08x=0x%08x raw@0x%08x=0x%08x\n",
+           tag, glo, !!(glo & BIT(0)), !!(glo & BIT(2)),
+           (uint32_t)WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR, ext_m,
+           base + 0x600, ext_r);
+    DBGLOG(INIT, ERROR,
+           "[WFDMA %s] R0 base=0x%08x cnt=0x%08x | R15 base=0x%08x cnt=0x%08x cidx=0x%08x didx=0x%08x | R16 base=0x%08x cnt=0x%08x\n",
+           tag, b0, c0, b15, c15, ci15, di15, b16, c16);
+    mt79xx_wfdma_dump_rx(prAdapter, tag);
+}
+
+/* RX-side / interrupt / prefetch-bank dump.  Offsets are mt76's WFDMA0 map:
+ * HOST_INT_STA 0x200, HOST_INT_ENA 0x204, RX ring n at 0x500 + 0x10*n
+ * (BASE/CNT/CIDX/DIDX), TX EXT_CTRL n at 0x600 + 4*n, RX EXT_CTRL n at
+ * 0x680 + 4*n.  Raw reads only; check against your coda header.
+ */
+void mt79xx_wfdma_dump_rx(struct ADAPTER *prAdapter, const char *tag)
+{
+    const uint32_t base = WF_WFDMA_HOST_DMA0_BASE;
+    uint32_t sta = 0xbad0bad0, ena = 0xbad0bad0;
+    uint32_t r[8][4];
+    uint32_t tx16c = 0xbad0bad0, tx16d = 0xbad0bad0;
+    uint32_t txe[9], rxe[8];
+    static const uint8_t txe_idx[9] = { 0, 1, 2, 3, 4, 5, 6, 15, 16 };
+    int i, j;
+
+    if (!prAdapter)
+        return;
+
+    HAL_MCR_RD(prAdapter, base + 0x200, &sta);
+    HAL_MCR_RD(prAdapter, base + 0x204, &ena);
+    for (i = 0; i < 8; i++)
+        for (j = 0; j < 4; j++) {
+            r[i][j] = 0xbad0bad0;
+            HAL_MCR_RD(prAdapter, base + 0x500 + i * 0x10 + j * 4, &r[i][j]);
+        }
+    HAL_MCR_RD(prAdapter, base + 0x308 + 16 * 0x10, &tx16c);
+    HAL_MCR_RD(prAdapter, base + 0x30c + 16 * 0x10, &tx16d);
+    for (i = 0; i < 9; i++) {
+        txe[i] = 0xbad0bad0;
+        HAL_MCR_RD(prAdapter, base + 0x600 + txe_idx[i] * 4, &txe[i]);
+    }
+    for (i = 0; i < 8; i++) {
+        rxe[i] = 0xbad0bad0;
+        HAL_MCR_RD(prAdapter, base + 0x680 + i * 4, &rxe[i]);
+    }
+
+    DBGLOG(INIT, ERROR,
+           "[WFDMA-RX %s] INT_STA=0x%08x INT_ENA=0x%08x | TX16 cidx=0x%08x didx=0x%08x\n",
+           tag, sta, ena, tx16c, tx16d);
+    for (i = 0; i < 8; i++)
+        DBGLOG(INIT, ERROR,
+               "[WFDMA-RX %s] RXring%d @0x%08x base=0x%08x cnt=0x%08x cidx=0x%08x didx=0x%08x\n",
+               tag, i, base + 0x500 + i * 0x10,
+               r[i][0], r[i][1], r[i][2], r[i][3]);
+    DBGLOG(INIT, ERROR,
+           "[WFDMA-RX %s] TX_EXT[0,1,2,3,4,5,6,15,16]=%08x %08x %08x %08x %08x %08x %08x %08x %08x | RX_EXT[0..7]=%08x %08x %08x %08x %08x %08x %08x %08x\n",
+           tag, txe[0], txe[1], txe[2], txe[3], txe[4], txe[5], txe[6], txe[7],
+           txe[8], rxe[0], rxe[1], rxe[2], rxe[3], rxe[4], rxe[5], rxe[6],
+           rxe[7]);
+}
+
+extern void mt79xx_conn_on_misc_log(struct ADAPTER *prAdapter, const char *tag);
+
+/* Snapshot taken the moment the firmware raises SER (STOP_PDMA).  At that
+ * point the host has not touched the rings yet, so a TX ring with
+ * CIDX != DIDX identifies the queue the firmware stalled on.  ERROR level so
+ * it shows with the default HAL mask (HAL INFO lines are hidden).
+ */
+void mt79xx_ser_snapshot(struct ADAPTER *prAdapter, uint32_t u4Status,
+			 const char *tag)
+{
+	const uint32_t base = WF_WFDMA_HOST_DMA0_BASE;
+	static const uint8_t q[] = { 0, 1, 2, 3, 15, 16 };
+	uint32_t ci[ARRAY_SIZE(q)], di[ARRAY_SIZE(q)], glo = 0xbad0bad0;
+	unsigned int i;
+
+	if (!prAdapter)
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(q); i++) {
+		ci[i] = di[i] = 0xbad0bad0;
+		HAL_MCR_RD(prAdapter, base + 0x308 + q[i] * 0x10, &ci[i]);
+		HAL_MCR_RD(prAdapter, base + 0x30c + q[i] * 0x10, &di[i]);
+	}
+	HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+
+	DBGLOG(HAL, ERROR,
+	       "[SER-SNAP %s] mcu2host=0x%08x GLO=0x%08x tx_busy=%u rx_busy=%u | TX cidx/didx: r0=%x/%x r1=%x/%x r2=%x/%x r3=%x/%x r15=%x/%x r16=%x/%x\n",
+	       tag, u4Status, glo, !!(glo & BIT(1)), !!(glo & BIT(3)),
+	       ci[0], di[0], ci[1], di[1], ci[2], di[2],
+	       ci[3], di[3], ci[4], di[4], ci[5], di[5]);
+	mt79xx_wfdma_dump(prAdapter, tag);
+	mt79xx_conn_on_misc_log(prAdapter, tag);
+}
+
+/* Failure-path quiesce: stop WFDMA and hand ownership back to the firmware
+ * (HOST_SET_OWN), mirroring mt76's fw_pmctrl on teardown.  Without this a
+ * failed probe leaves OWN_SYNC set and DMA enabled, which survives a warm
+ * reboot and makes the next CLR_OWN go unanswered.
+ */
+#ifndef MT79XX_QUIESCE_SET_OWN
+#define MT79XX_QUIESCE_SET_OWN 0
+#endif
+#ifndef MT79XX_PROBE_PCI_RESET
+#define MT79XX_PROBE_PCI_RESET 1
+#endif
+
+void mt79xx_probe_quiesce(struct ADAPTER *prAdapter, const char *why)
+{
+    uint32_t glo = 0;
+    u_int8_t fgOwn = FALSE;
+
+    if (!prAdapter)
+        return;
+
+    DBGLOG(INIT, ERROR, "[QUIESCE] %s\n", why);
+    mt79xx_stage_check(prAdapter, "quiesce-before");
+
+    HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
+    glo &= ~(BIT(0) | BIT(2));		/* TX_DMA_EN | RX_DMA_EN */
+    HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, glo);
+
+#if MT79XX_QUIESCE_SET_OWN
+    HAL_LP_OWN_SET(prAdapter, &fgOwn);
+    DBGLOG(INIT, ERROR, "[QUIESCE] set-own result=%u\n", fgOwn);
+#else
+    /* SET_OWN with no firmware running wedges the chip: LPCTL goes to 0x4
+     * and the ROM never answers the next CLR_OWN (own-clear timeouts, WFSYS
+     * reset not landing).  Leave the host owning the chip. */
+    (void)fgOwn;
+    DBGLOG(INIT, ERROR, "[QUIESCE] leaving host-owned (no set-own)\n");
+#endif
+    mt79xx_stage_check(prAdapter, "quiesce-after");
+}
+
 /* helper: try to cold-boot WFSYS MCU and verify it comes up */
 int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter)
 {
-    struct mt66xx_chip_info *prChipInfo;
+    struct mt66xx_chip_info *prChipInfo __attribute__((unused));
     struct GL_HIF_INFO      *prHifInfo;
     void __iomem            *bar;
     int  attempts = 2;
@@ -6142,7 +6310,7 @@ int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter)
         bool     ok   = false;
         uint32_t bar0 = 0;
 
-        DBGLOG(INIT, INFO, "WFSYS cold-boot attempt %d of 2\n", 2 - attempts);
+        DBGLOG(INIT, ERROR, "WFSYS cold-boot attempt %d of 2\n", 2 - attempts);
 
         /* ----------------------------------------------------------
          * BAR blind-check: raw readl, no HAL indirection.
@@ -6152,7 +6320,7 @@ int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter)
          * ----------------------------------------------------------
          */
         bar0 = readl_relaxed(bar);
-        DBGLOG(INIT, INFO, "  BAR0[0] pre-reset = 0x%08x\n", bar0);
+        DBGLOG(INIT, ERROR, "  BAR0[0] pre-reset = 0x%08x\n", bar0);
         if (bar0 == 0xffffffff) {
             DBGLOG(INIT, ERROR,
                    "  BAR blind (0xffffffff) - bus is dead, aborting cold boot\n");
@@ -6169,16 +6337,88 @@ int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter)
         {
             uint32_t pre_rev = 0;
             HAL_MCR_RD(prAdapter, CONNINFRA_INFRACON_REV_ADDR, &pre_rev);
-            DBGLOG(INIT, INFO, "  CONNINFRA rev pre-reset: 0x%08x\n", pre_rev);
+            DBGLOG(INIT, ERROR, "  CONNINFRA rev pre-reset: 0x%08x\n", pre_rev);
         }
 #endif
 
-        /* Assert reset (hold MCU) */
-        prChipInfo->asicWfsysRst(prAdapter, TRUE);
-        mdelay(5);   /* 5 ms settle for reset to propagate */
+        /* Stage asserts: raw reset-reg (mt76: 0x7c000140, RST_B=BIT0,
+         * INIT_DONE=BIT4 - bit positions from mt76, raw value is logged
+         * so they can be checked) before / during / after the reset.
+         */
+        {
+            uint32_t r_pre = 0xbad0bad0, r_held = 0xbad0bad0;
+
+            HAL_MCR_RD(prAdapter, MT79XX_WFSYS_RST_ADDR, &r_pre);
+            DBGLOG(INIT, ERROR, "  [RST] pre-assert   0x%08x\n", r_pre);
+
+#ifndef MT79XX_MT76_STYLE_WFSYS_RESET
+#define MT79XX_MT76_STYLE_WFSYS_RESET 1
+#endif
+#ifndef MT7902_E24C_SEQ
+#define MT7902_E24C_SEQ 1
+#endif
+#if MT7902_E24C_SEQ
+            /* Test 3: CONN_INFRA 0x7c00e24c writes seen in the mt76 trace
+             * before the WFSYS reset assert (good_1.txt lines 3-5). */
+            HAL_MCR_WR(prAdapter, 0x7c00e24c, 0x18457001);
+            HAL_MCR_WR(prAdapter, 0x7c00e24c, 0x18457001);
+            HAL_MCR_WR(prAdapter, 0x7c00e24c, 0x18451800);
+#endif
+#if MT79XX_MT76_STYLE_WFSYS_RESET
+            /* mt792x_wfsys_reset(): clear WFSYS_SW_RST_B (bit0) at 0x7c000140,
+             * hold 50 ms, set it again, poll WFSYS_SW_INIT_DONE (bit4).  The
+             * vendor asicWfsysRst() toggles a different (CBTOP RGU) register;
+             * mt76 never touches that one on mt7902. */
+            {
+                uint32_t v = 0;
+
+                HAL_MCR_RD(prAdapter, MT79XX_WFSYS_RST_ADDR, &v);
+                HAL_MCR_WR(prAdapter, MT79XX_WFSYS_RST_ADDR, v & ~BIT(0));
+            }
+            msleep(50);
+#else
+            /* Assert reset (hold MCU) */
+            prChipInfo->asicWfsysRst(prAdapter, TRUE);
+            mdelay(50);   /* mt76 holds 50 ms; was 5 ms */
+#endif
+
+#if MT7902_E24C_SEQ
+            HAL_MCR_WR(prAdapter, 0x7c00e24c, 0x18451800);	/* end of 50 ms hold */
+#endif
+            HAL_MCR_RD(prAdapter, MT79XX_WFSYS_RST_ADDR, &r_held);
+            DBGLOG(INIT, ERROR, "  [RST] while held   0x%08x (changed=%d)\n",
+                   r_held, r_held != r_pre);
+            WARN_ON_ONCE(r_held == r_pre);
+        }
 
         /* Deassert reset - MCU ROM starts executing */
+#if MT79XX_MT76_STYLE_WFSYS_RESET
+        {
+            uint32_t v = 0, t;
+
+            HAL_MCR_RD(prAdapter, MT79XX_WFSYS_RST_ADDR, &v);
+            HAL_MCR_WR(prAdapter, MT79XX_WFSYS_RST_ADDR, v | BIT(0));
+            for (t = 0; t < 500; t++) {
+                HAL_MCR_RD(prAdapter, MT79XX_WFSYS_RST_ADDR, &v);
+                if (v & BIT(4))
+                    break;
+                msleep(1);
+            }
+            DBGLOG(INIT, ERROR, "  [RST] mt76-style release: 0x%08x after %u ms (init_done=%u)\n",
+                   v, t, !!(v & BIT(4)));
+        }
+#else
         prChipInfo->asicWfsysRst(prAdapter, FALSE);
+#endif
+#if MT7902_E24C_SEQ
+        HAL_MCR_WR(prAdapter, 0x7c00e24c, 0x18451800);	/* just after release */
+#endif
+        {
+            uint32_t r_rel = 0xbad0bad0;
+
+            HAL_MCR_RD(prAdapter, MT79XX_WFSYS_RST_ADDR, &r_rel);
+            DBGLOG(INIT, ERROR, "  [RST] just released 0x%08x\n", r_rel);
+        }
 
         /* ----------------------------------------------------------
          * Poll for init-done: up to 1000 ms in 10 ms steps.
@@ -6214,12 +6454,15 @@ int32_t mt79xx_wfsys_cold_boot_and_wait(struct ADAPTER *prAdapter)
         }
 
         if (ok) {
-            DBGLOG(INIT, INFO, "  WFSYS MCU signaled init-done at iter %d\n", i);
+#if MT7902_E24C_SEQ
+            HAL_MCR_WR(prAdapter, 0x7c00e24c, 0x18451800);	/* init-done seen */
+#endif
+            DBGLOG(INIT, ERROR, "  WFSYS MCU signaled init-done at iter %d\n", i);
 #ifdef CONNINFRA_INFRACON_REV_ADDR
             {
                 uint32_t post_rev = 0;
                 HAL_MCR_RD(prAdapter, CONNINFRA_INFRACON_REV_ADDR, &post_rev);
-                DBGLOG(INIT, INFO, "  CONNINFRA rev post-reset: 0x%08x\n", post_rev);
+                DBGLOG(INIT, ERROR, "  CONNINFRA rev post-reset: 0x%08x\n", post_rev);
             }
 #endif
             ret = 0;
@@ -6280,10 +6523,14 @@ static int wlanProbe_BusInit(void *pvData)
 }
 
 
+extern bool g_mt79xx_ring_inited;	/* hal_pdma.c */
+
 static int mt79xx_wfdma_early_init(struct ADAPTER *prAdapter)
 {
     struct GLUE_INFO *prGlueInfo;
     uint32_t glo;
+
+    g_mt79xx_ring_inited = false;	/* new probe: allow one pre-FW ring init */
 
     if (!prAdapter)
         return -EINVAL;
@@ -6294,7 +6541,7 @@ static int mt79xx_wfdma_early_init(struct ADAPTER *prAdapter)
 
     /* Diagnostic only — do not touch DMA config */
     HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-    DBGLOG(INIT, INFO, "%s: GLO_CFG pre-alloc=0x%08x\n", __func__, glo);
+    DBGLOG(INIT, ERROR, "%s: GLO_CFG pre-alloc=0x%08x\n", __func__, glo);
     if (glo == 0xffffffff) {
         DBGLOG(INIT, ERROR, "%s: bus dead pre-alloc\n", __func__);
         return -EIO;
@@ -6305,7 +6552,7 @@ static int mt79xx_wfdma_early_init(struct ADAPTER *prAdapter)
         return -ENOMEM;
     }
 
-    DBGLOG(INIT, INFO, "%s: ring memory allocated, deferring CSR init to post-FWDL\n", __func__);
+    DBGLOG(INIT, ERROR, "%s: ring memory allocated, deferring CSR init to post-FWDL\n", __func__);
     return 0;
 }
 
@@ -6322,62 +6569,139 @@ static int wlanProbe_AdapterBringup(struct GLUE_INFO *prGlueInfo,
 {
     int ret;
 
-    DBGLOG(INIT, INFO, "==> wlanProbe_AdapterBringup entered\n");
+    DBGLOG(INIT, ERROR, "==> wlanProbe_AdapterBringup entered\n");
+
+    mt79xx_stage_check(prAdapter, "pre-step1");
+
+#if MT79XX_PROBE_OWN_PRE_RESET
+    {
+        uint8_t fgOwn = FALSE;
+
+        asicConnac2xLowPowerOwnClear(prAdapter, &fgOwn);
+        DBGLOG(INIT, ERROR, "pre-reset driver-own result=%u\n", fgOwn);
+        mt79xx_stage_check(prAdapter, "post-pre-reset-own");
+
+#if MT79XX_PROBE_PCI_RESET
+        /* Stale FW-owned state (LPCTL=0x4) with no firmware running: neither
+         * CLR_OWN nor the WFSYS reset reg is honoured.  Try a PCIe-level
+         * reset (FLR / PM / bus, whichever the core picks).  The device
+         * lock is already held by the driver core during probe, so use the
+         * _locked variant.  Config space/BARs are saved and restored.
+         */
+        {
+            /* Also treat a dead-bus signature (left by a previous failed load,
+             * which survives rmmod/insmod) as needing the PCIe reset. */
+            uint32_t rom = 0, bar0 = 0;
+            void __iomem *bar = prGlueInfo->rHifInfo.CSRBaseAddress;
+
+            if (bar)
+                bar0 = readl_relaxed(bar);
+            HAL_MCR_RD(prAdapter, 0x81021604, &rom);
+            if (bar0 == 0xdead0003 || rom == 0xdead0003) {
+                DBGLOG(INIT, ERROR,
+                       "dead-bus signature at probe (BAR0=0x%08x ROMCODE=0x%08x): forcing PCI reset\n",
+                       bar0, rom);
+                fgOwn = FALSE;
+            }
+        }
+        if (!fgOwn) {
+            struct pci_dev *pdev = prGlueInfo->rHifInfo.pdev;
+            int rc = pci_reset_function_locked(pdev);
+
+            DBGLOG(INIT, ERROR, "pci_reset_function_locked rc=%d\n", rc);
+            msleep(200);
+            mt79xx_stage_check(prAdapter, "post-pci-reset");
+            fgOwn = FALSE;
+            asicConnac2xLowPowerOwnClear(prAdapter, &fgOwn);
+            DBGLOG(INIT, ERROR, "post-pci-reset driver-own result=%u\n", fgOwn);
+            mt79xx_stage_check(prAdapter, "post-pci-reset-own");
+        }
+#endif
+    }
+#endif
 
     /* Step 1: Cold boot WFSYS */
-    DBGLOG(INIT, INFO, "Step 1: Cold boot WFSYS\n");
+    DBGLOG(INIT, ERROR, "Step 1: Cold boot WFSYS\n");
     ret = mt79xx_wfsys_cold_boot_and_wait(prAdapter);
     if (ret != 0) {
         DBGLOG(INIT, ERROR,
                "wlanProbe: WFSYS cold boot failed - MCU unresponsive, ret=%d\n", ret);
+        mt79xx_probe_quiesce(prAdapter, "cold boot failed");
         return -EIO;
     }
-    DBGLOG(INIT, INFO, "WFSYS cold boot succeeded\n");
+    DBGLOG(INIT, ERROR, "WFSYS cold boot succeeded\n");
+    mt79xx_stage_check(prAdapter, "post-step1");
+
+    /* mt76 issues a second CLR_OWN (LPCTL <- PCIE_LPCR_HOST_CLR_OWN) after
+     * the WFSYS reset, before touching the rings and before its first MCU
+     * command (seen in mt76-mmio-good.txt).  This driver only did CLR_OWN
+     * pre-reset; after the reset CONN_ON_MISC stayed 0 and the ROM never
+     * answered.  Disable with -DMT79XX_POST_RESET_OWN=0. */
+#ifndef MT79XX_POST_RESET_OWN
+#define MT79XX_POST_RESET_OWN 0
+#endif
+#if MT79XX_POST_RESET_OWN
+    {
+        uint8_t fgOwn2 = FALSE;
+
+        asicConnac2xLowPowerOwnClear(prAdapter, &fgOwn2);
+        DBGLOG(INIT, ERROR, "post-reset driver-own result=%u\n", fgOwn2);
+        mt79xx_stage_check(prAdapter, "post-reset-own");
+    }
+#endif
 
     /* Step 2: Early WFDMA setup */
-    DBGLOG(INIT, INFO, "Step 2: Early WFDMA init\n");
+    DBGLOG(INIT, ERROR, "Step 2: Early WFDMA init\n");
     ret = mt79xx_wfdma_early_init(prAdapter);
     if (ret) {
         DBGLOG(INIT, ERROR, "wlanProbe: mt79xx_wfdma_early_init failed: %d\n", ret);
+        mt79xx_probe_quiesce(prAdapter, "early wfdma init failed");
         return ret;
     }
-    DBGLOG(INIT, INFO, "Early WFDMA init succeeded\n");
+    DBGLOG(INIT, ERROR, "Early WFDMA init succeeded\n");
+    mt79xx_stage_check(prAdapter, "post-step2");
+    mt79xx_wfdma_dump(prAdapter, "post-step2");
 
     /* Step 3: Log GLO_CFG for diagnostics */
     {
         uint32_t glo;
         HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &glo);
-        DBGLOG(INIT, INFO, "Step 3: EARLY WFDMA GLO_CFG=0x%08x\n", glo);
+        DBGLOG(INIT, ERROR, "Step 3: EARLY WFDMA GLO_CFG=0x%08x\n", glo);
     }
 
     /* Step 4: Set IRQ */
-    DBGLOG(INIT, INFO, "Step 4: glBusSetIrq\n");
+    DBGLOG(INIT, ERROR, "Step 4: glBusSetIrq\n");
     ret = glBusSetIrq(prWdev->netdev, NULL, prGlueInfo);
     if (ret != WLAN_STATUS_SUCCESS) {
         DBGLOG(INIT, ERROR, "wlanProbe: glBusSetIrq failed, ret=%d\n", ret);
+        mt79xx_probe_quiesce(prAdapter, "glBusSetIrq failed");
         return -EIO;
     }
-    DBGLOG(INIT, INFO, "IRQ set successfully\n");
+    DBGLOG(INIT, ERROR, "IRQ set successfully\n");
 
     /* Step 5: Start adapter */
-    DBGLOG(INIT, INFO, "Step 5: wlanAdapterStart\n");
+    DBGLOG(INIT, ERROR, "Step 5: wlanAdapterStart\n");
+    mt79xx_stage_check(prAdapter, "pre-step5");
+    mt79xx_wfdma_dump(prAdapter, "pre-step5");
     ret = wlanAdapterStart(prAdapter, prRegInfo, FALSE);
     if (ret != WLAN_STATUS_SUCCESS) {
         DBGLOG(INIT, ERROR,
                "wlanProbe: wlanAdapterStart failed (0x%x)\n", ret);
 
         /* Silence hardware and kill tasklet */
-        DBGLOG(INIT, INFO, "Disabling interrupts and halting adapter\n");
+        DBGLOG(INIT, ERROR, "Disabling interrupts and halting adapter\n");
         nicDisableInterrupt(prAdapter);
         set_bit(GLUE_FLAG_HALT_BIT, &prGlueInfo->ulFlag);
         tasklet_kill(&prGlueInfo->rRxTask);
 
-        DBGLOG(INIT, INFO, "Step 5: wlanAdapterStart aborted, returning -EIO\n");
+        mt79xx_probe_quiesce(prAdapter, "wlanAdapterStart failed");
+
+        DBGLOG(INIT, ERROR, "Step 5: wlanAdapterStart aborted, returning -EIO\n");
         return -EIO;
     }
-    DBGLOG(INIT, INFO, "wlanAdapterStart succeeded\n");
+    DBGLOG(INIT, ERROR, "wlanAdapterStart succeeded\n");
 
-    DBGLOG(INIT, INFO, "<== wlanProbe_AdapterBringup completed successfully\n");
+    DBGLOG(INIT, ERROR, "<== wlanProbe_AdapterBringup completed successfully\n");
     return 0;
 }
 

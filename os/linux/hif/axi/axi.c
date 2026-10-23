@@ -955,7 +955,7 @@ void glBusRelease(void *pvData)
 
 int32_t glBusSetIrq(void *pvData, void *pfnIsr, void *pvCookie)
 {
-	struct net_device *prNetDevice = NULL;
+	struct wireless_dev *prWdevice = NULL;
 	struct GLUE_INFO *prGlueInfo = NULL;
 	struct GL_HIF_INFO *prHifInfo = NULL;
 	struct platform_device *pdev = NULL;
@@ -1024,7 +1024,7 @@ int32_t glBusSetIrq(void *pvData, void *pfnIsr, void *pvCookie)
 /*----------------------------------------------------------------------------*/
 void glBusFreeIrq(void *pvData, void *pvCookie)
 {
-	struct net_device *prNetDevice = NULL;
+	struct wireless_dev *prWdevice = NULL;
 	struct GLUE_INFO *prGlueInfo = NULL;
 	struct GL_HIF_INFO *prHifInfo = NULL;
 	struct platform_device *pdev = NULL;

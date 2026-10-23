@@ -696,6 +696,10 @@ void nic_txd_v2_compose(struct ADAPTER *prAdapter,
     HAL_MAC_CONNAC2X_TXD_SET_WLAN_INDEX(prTxDesc, prMsduInfo->ucWlanIndex);
     HAL_MAC_CONNAC2X_TXD_SET_OWN_MAC_INDEX(prTxDesc, prBssInfo->ucOwnMacIndex);
 
+    /* Tx byte count: TXD(+padding) + frame, excluding TXP append */
+    HAL_MAC_CONNAC2X_TXD_SET_TX_BYTE_COUNT(prTxDesc,
+        u4TxDescAndPaddingLength + prMsduInfo->u2FrameLength);
+
     /* header format & header len */
     if (!nic_txd_set_header_format_and_validate(prMsduInfo, prTxDesc))
         return;

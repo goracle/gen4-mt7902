@@ -2969,7 +2969,7 @@ __priv_ate_set(IN struct net_device *prNetDev,
 		       "PRIV_QACMD_SET: priv_set_string=(%s)(%u,%d)\n",
 		       aucOidBuf, u4CopySize,
 		       (int32_t)prIwReqData->data.length);
-		i4Status = AteCmdSetHandle(prNetDev, &aucOidBuf[0],
+		i4Status = AteCmdSetHandle(netdev_priv(prNetDev), &aucOidBuf[0],
 					   u4CopySize);
 		break;
 	default:
@@ -15290,7 +15290,7 @@ static int priv_driver_get_wifi_type(IN struct net_device *prNetDev,
 	}
 
 	prGlueInfo = *((struct GLUE_INFO **) netdev_priv(prNetDev));
-	rParamGetWifiType.prNetDev = prNetDev;
+    /* rParamGetWifiType.prNetDev = prNetDev; */ // Removed for kernel compatibility
 	rStatus = kalIoctl(prGlueInfo,
 			   wlanoidGetWifiType,
 			   (void *)&rParamGetWifiType,

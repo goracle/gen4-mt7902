@@ -3290,7 +3290,7 @@ int _mtk_cfg80211_mgmt_tx_via_data_path(struct GLUE_INFO *prGlueInfo,
 
 /* Helper function to reduce duplication */
 static int mtk_tdls_mgmt_internal(struct wiphy *wiphy,
-                                   struct net_device *dev,
+                                   struct net_device *ndev,
                                    const u8 *peer,
                                    u8 action_code,
                                    u8 dialog_token,
@@ -4495,7 +4495,7 @@ nla_put_failure:
 int
 mtk_cfg80211_testmode_get_link_detection(IN struct wiphy
 		*wiphy,
-		IN struct wireless_dev *wdev,
+		IN struct net_device *ndev,
 		IN void *data, IN int len,
 		IN struct GLUE_INFO *prGlueInfo)
 {
@@ -4667,7 +4667,7 @@ nla_put_failure:
 }
 
 int mtk_cfg80211_testmode_sw_cmd(IN struct wiphy *wiphy,
-		IN struct wireless_dev *wdev,
+		IN struct net_device *ndev,
 		IN void *data, IN int len)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
@@ -6641,14 +6641,16 @@ int mtk_cfg_set_default_mgmt_key(struct wiphy *wiphy,
 
 #if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_get_station(struct wiphy *wiphy,
-			struct net_device *ndev,
+			struct wireless_dev *wdev,
 			const u8 *mac, struct station_info *sinfo)
 #else
 int mtk_cfg_get_station(struct wiphy *wiphy,
-			struct net_device *ndev,
+			struct wireless_dev *wdev,
 			u8 *mac, struct station_info *sinfo)
 #endif
 {
+	struct net_device *ndev = wdev->netdev;
+
 	struct GLUE_INFO *prGlueInfo = NULL;
 
 	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
@@ -6670,14 +6672,16 @@ int mtk_cfg_get_station(struct wiphy *wiphy,
 #if CFG_SUPPORT_TDLS
 #if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_change_station(struct wiphy *wiphy,
-			   struct net_device *ndev,
+			   struct wireless_dev *wdev,
 			   const u8 *mac, struct station_parameters *params)
 #else
 int mtk_cfg_change_station(struct wiphy *wiphy,
-			   struct net_device *ndev,
+			   struct wireless_dev *wdev,
 			   u8 *mac, struct station_parameters *params)
 #endif
 {
+	struct net_device *ndev = wdev->netdev;
+
 	struct GLUE_INFO *prGlueInfo = NULL;
 
 	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
@@ -6700,14 +6704,16 @@ int mtk_cfg_change_station(struct wiphy *wiphy,
 
 #if KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_add_station(struct wiphy *wiphy,
-			struct net_device *ndev,
+			struct wireless_dev *wdev,
 			const u8 *mac, struct station_parameters *params)
 #else
 int mtk_cfg_add_station(struct wiphy *wiphy,
-			struct net_device *ndev,
+			struct wireless_dev *wdev,
 			u8 *mac, struct station_parameters *params)
 #endif
 {
+	struct net_device *ndev = wdev->netdev;
+
 	struct GLUE_INFO *prGlueInfo = NULL;
 
 	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
@@ -6814,17 +6820,19 @@ int mtk_cfg_tdls_mgmt(struct wiphy *wiphy,
 
 #if KERNEL_VERSION(3, 19, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_del_station(struct wiphy *wiphy,
-			struct net_device *ndev,
+			struct wireless_dev *wdev,
 			struct station_del_parameters *params)
 #elif KERNEL_VERSION(3, 16, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg_del_station(struct wiphy *wiphy,
-			struct net_device *ndev,
+			struct wireless_dev *wdev,
 			const u8 *mac)
 #else
 int mtk_cfg_del_station(struct wiphy *wiphy,
-			struct net_device *ndev, u8 *mac)
+			struct wireless_dev *wdev, u8 *mac)
 #endif
 {
+	struct net_device *ndev = wdev->netdev;
+
 	struct GLUE_INFO *prGlueInfo = NULL;
 
 	prGlueInfo = (struct GLUE_INFO *) wiphy_priv(wiphy);
@@ -7335,7 +7343,7 @@ int mtk_cfg_assoc(struct wiphy *wiphy,
 int mtk_cfg_remain_on_channel(struct wiphy *wiphy,
 			      struct wireless_dev *wdev,
 			      struct ieee80211_channel *chan,
-			      unsigned int duration, u64 *cookie)
+			      unsigned int duration, u64 *cookie, const u8 *addr)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
 
@@ -8489,7 +8497,7 @@ int mtk_cfg80211_set_cqm_rssi_config(
 
 #if KERNEL_VERSION(4, 14, 0) <= CFG80211_VERSION_CODE
 int mtk_cfg80211_set_cqm_rssi_range_config(
-				struct wiphy *wiphy, struct net_device *dev,
+				struct wiphy *wiphy, struct net_device *ndev,
 				int32_t rssi_low, int32_t rssi_high)
 {
 	return 0;
@@ -8497,7 +8505,7 @@ int mtk_cfg80211_set_cqm_rssi_range_config(
 #endif
 
 int mtk_cfg80211_set_cqm_txe_config(
-				struct wiphy *wiphy, struct net_device *dev,
+				struct wiphy *wiphy, struct net_device *ndev,
 				uint32_t rate, uint32_t pkts, uint32_t intvl)
 {
 	return 0;

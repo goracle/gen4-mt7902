@@ -2966,7 +2966,7 @@ struct PARAM_WIFI_LOG_LEVEL {
 };
 
 struct PARAM_GET_WIFI_TYPE {
-	struct net_device *prNetDev;
+	struct wireless_dev *prWdev;
 	uint8_t arWifiTypeName[8];
 };
 

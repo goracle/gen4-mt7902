@@ -2576,14 +2576,12 @@ uint32_t fwDlGetFwdlInfo(struct ADAPTER *prAdapter,
 	prFwDlOps = prAdapter->chip_info->fw_dl_ops;
 
 	kalMemZero(aucBuf, sizeof(aucBuf));
-	kalStrnCpy(aucBuf, prVerInfo->aucFwBranchInfo,
-			sizeof(aucBuf));
-	aucBuf[sizeof(prVerInfo->aucFwBranchInfo)] = '\0';
+	kalMemCopy(aucBuf, prVerInfo->aucFwBranchInfo,
+		   min_t(size_t, sizeof(prVerInfo->aucFwBranchInfo), sizeof(aucBuf) - 1));
 
 	kalMemZero(aucDate, sizeof(aucDate));
-	kalStrnCpy(aucDate, prVerInfo->aucFwDateCode,
-			sizeof(aucDate));
-	aucDate[sizeof(prVerInfo->aucFwDateCode)] = '\0';
+	kalMemCopy(aucDate, prVerInfo->aucFwDateCode,
+		   min_t(size_t, sizeof(prVerInfo->aucFwDateCode), sizeof(aucDate) - 1));
 
 	u4Offset += snprintf(pcBuf + u4Offset,
 			i4TotalLen - u4Offset,
@@ -2607,12 +2605,10 @@ uint32_t fwDlGetFwdlInfo(struct ADAPTER *prAdapter,
 
 	kalMemZero(aucBuf, sizeof(aucBuf));
 	kalMemZero(aucDate, sizeof(aucDate));
-	kalStrnCpy(aucBuf, prVerInfo->rPatchHeader.aucPlatform,
-			sizeof(aucBuf));
-	aucBuf[sizeof(prVerInfo->rPatchHeader.aucPlatform)] = '\0';
-	kalStrnCpy(aucDate, prVerInfo->rPatchHeader.aucBuildDate,
-			sizeof(aucDate));
-	aucDate[sizeof(prVerInfo->rPatchHeader.aucBuildDate)] = '\0';
+	kalMemCopy(aucBuf, prVerInfo->rPatchHeader.aucPlatform,
+		   min_t(size_t, sizeof(prVerInfo->rPatchHeader.aucPlatform), sizeof(aucBuf) - 1));
+	kalMemCopy(aucDate, prVerInfo->rPatchHeader.aucBuildDate,
+		   min_t(size_t, sizeof(prVerInfo->rPatchHeader.aucBuildDate), sizeof(aucDate) - 1));
 	u4Offset += snprintf(pcBuf + u4Offset,
 			     i4TotalLen - u4Offset,
 			     "Patch platform %s version 0x%04X %s\n",

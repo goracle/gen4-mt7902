@@ -924,7 +924,7 @@ mtk_p2p_cfg80211_set_default_key(struct wiphy *wiphy,
  */
 /*---------------------------------------------------------------------------*/
 int mtk_p2p_cfg80211_set_mgmt_key(struct wiphy *wiphy,
-		struct net_device *dev, u8 key_index)
+		struct net_device *ndev, u8 key_index)
 {
 	DBGLOG(RSN, INFO, "mtk_p2p_cfg80211_set_mgmt_key, kid:%d\n", key_index);
 
@@ -1307,7 +1307,7 @@ int mtk_p2p_cfg80211_set_wiphy_params(struct wiphy *wiphy, u32 changed)
 }				/* mtk_p2p_cfg80211_set_wiphy_params */
 
 int mtk_p2p_cfg80211_join_ibss(struct wiphy *wiphy,
-		struct net_device *dev,
+		struct net_device *ndev,
 		struct cfg80211_ibss_params *params)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
@@ -1322,7 +1322,7 @@ int mtk_p2p_cfg80211_join_ibss(struct wiphy *wiphy,
 	return -EINVAL;
 }
 
-int mtk_p2p_cfg80211_leave_ibss(struct wiphy *wiphy, struct net_device *dev)
+int mtk_p2p_cfg80211_leave_ibss(struct wiphy *wiphy, struct net_device *ndev)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
 
@@ -2547,7 +2547,7 @@ int mtk_p2p_cfg80211_deauth(struct wiphy *wiphy,
 
 /* TODO: */
 int mtk_p2p_cfg80211_disassoc(struct wiphy *wiphy,
-		struct net_device *dev,
+		struct net_device *ndev,
 		struct cfg80211_disassoc_request *req)
 {
 	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *) NULL;
@@ -2894,7 +2894,7 @@ int mtk_p2p_cfg80211_mgmt_tx_cancel_wait(struct wiphy *wiphy,
 }				/* mtk_p2p_cfg80211_mgmt_tx_cancel_wait */
 
 int mtk_p2p_cfg80211_change_bss(struct wiphy *wiphy,
-		struct net_device *dev,
+		struct net_device *ndev,
 		struct bss_parameters *params)
 {
 	struct GLUE_INFO *prGlueInfo = (struct GLUE_INFO *) NULL;

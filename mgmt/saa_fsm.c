@@ -2259,9 +2259,9 @@ uint32_t saaFsmRunEventRxDisassoc(IN struct ADAPTER *prAdapter,
 	struct WLAN_DISASSOC_FRAME *prDisassocFrame;
 	uint8_t ucWlanIdx;
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
-	struct wireless_dev *wdev = NULL;
-	struct BSS_INFO *prBssInfo = NULL;
 	struct net_device *prNetDev = NULL;
+	struct BSS_INFO *prBssInfo = NULL;
+	struct wireless_dev *wdev = NULL;
 	uint8_t ucRoleIdx = 0;
 	struct CONNECTION_SETTINGS *prConnSettings = NULL;
 #endif

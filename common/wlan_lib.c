@@ -1399,6 +1399,27 @@ wlanAdapterStart_PowerAndHif(struct ADAPTER *prAdapter,
 
     HAL_ENABLE_FWDL(prAdapter, TRUE);
 
+#ifndef MT7902_TRY_MCU_RESTART
+#define MT7902_TRY_MCU_RESTART 0 /* pre-FW NIC_POWER_CTRL is not a ROM command; make SEMA the first command */
+#endif
+#if MT7902_TRY_MCU_RESTART
+    {
+        extern void mt79xx_conn_on_misc_log(struct ADAPTER *a, const char *t);
+        extern uint32_t mt79xx_wait_mcu_ready(struct ADAPTER *a, uint32_t ms);
+
+        /* Upstream mt76 (patch 07/11) does mt76_connac_mcu_restart() =
+         * NIC_POWER_CTRL(power_mode=1), fire-and-forget, then polls
+         * CONN_ON_MISC FW_STATE.  Vendor equivalent below.  Set
+         * MT7902_TRY_MCU_RESTART=0 to disable if it hangs or crashes. */
+        mt79xx_conn_on_misc_log(prAdapter, "pre-restart");
+        DBGLOG(INIT, ERROR, "[MCU-RESTART] sending NIC_POWER_CTRL(1)\n");
+        DBGLOG(INIT, ERROR, "[MCU-RESTART] cmd status=0x%x\n",
+               wlanSendNicPowerCtrlCmd(prAdapter, TRUE));
+        mt79xx_wait_mcu_ready(prAdapter, 1000);
+        mt79xx_conn_on_misc_log(prAdapter, "post-restart");
+    }
+#endif
+
     if (wlanSetChipEcoInfo(prAdapter) != WLAN_STATUS_SUCCESS) {
         DBGLOG(INIT, ERROR, "wlanSetChipEcoInfo failed\n");
         return WLAN_STATUS_FAILURE;
@@ -3811,6 +3832,15 @@ uint32_t wlanSetChipEcoInfo(IN struct ADAPTER *prAdapter)
 	/* * We still attempt the read, but we no longer treat failure as fatal.
 	 * This prevents the '0xdead0003' response from killing the probe.
 	 */
+#ifndef MT7902_SKIP_PREFW_ECO
+#define MT7902_SKIP_PREFW_ECO 1
+#endif
+#if MT7902_SKIP_PREFW_ECO
+	/* ACCESS_REG is an FW-level command; the ROM does not answer it and each
+	 * attempt costs a 3 s timeout plus a SOP dump.  Use defaults pre-FW. */
+	DBGLOG(INIT, ERROR, "[ECO] skipping pre-FW register reads, using defaults\n");
+	goto eco_apply;
+#endif
 	if (wlanAccessRegister(prAdapter, prChipInfo->top_hvr, &hw_version, 0, 0) != WLAN_STATUS_SUCCESS) {
 		DBGLOG(INIT, WARN, "TOP_HVR read failed (Bus Fenced). Using default E2 identity.\n");
 		hw_version = 0x00000102; 
@@ -3820,6 +3850,9 @@ uint32_t wlanSetChipEcoInfo(IN struct ADAPTER *prAdapter)
 		sw_version = 0x00000000;
 	}
 
+#if MT7902_SKIP_PREFW_ECO
+eco_apply:
+#endif
 	/* Force the driver to populate its internal structures with our identity data */
 	nicSetChipHwVer((uint8_t)(GET_HW_VER(hw_version) & 0xFF));
 	nicSetChipFactoryVer((uint8_t)((GET_HW_VER(hw_version) >> 8) & 0xF));
@@ -9210,7 +9243,7 @@ uint32_t wlanCfgParseToFW(int8_t **args, int8_t *args_size,
 	}
 
 	cmd_v1.itemStringLength = args_size[ED_STRING_SITE];
-	strncpy(cmd_v1.itemString, args[ED_STRING_SITE],
+	strscpy(cmd_v1.itemString, args[ED_STRING_SITE],
 		cmd_v1.itemStringLength);
 	DBGLOG(INIT, INFO, "itemString:");
 	for (i = 0; i <  cmd_v1.itemStringLength; i++)
@@ -9267,7 +9300,7 @@ uint32_t wlanCfgParseToFW(int8_t **args, int8_t *args_size,
 		cmd_v1.itemValueLength = bufferindex;
 	} else if (cmd_v1.itemType == ITEM_TYPE_STR) {
 		cmd_v1.itemValueLength = args_size[ED_VALUE_SITE];
-		strncpy(cmd_v1.itemValue, args[ED_VALUE_SITE],
+		strscpy(cmd_v1.itemValue, args[ED_VALUE_SITE],
 			cmd_v1.itemValueLength);
 	}
 

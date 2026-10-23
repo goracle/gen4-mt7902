@@ -345,7 +345,7 @@ int wext_support_ioctl(IN struct net_device *prDev,
 		       IN struct ifreq *prIfReq, IN int i4Cmd);
 
 int
-wext_set_rate(IN struct net_device *prNetDev,
+wext_set_rate(IN struct wireless_dev *prWdev,
 	      IN struct iw_request_info *prIwReqInfo,
 	      IN struct iw_param *prRate, IN char *pcExtra);
 

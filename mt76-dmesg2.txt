@@ -1,0 +1,20 @@
+[  165.506836] ... fixed-purpose bitmap:      0000000000000007
+[  165.506840] ... value mask:                0000ffffffffffff
+[  165.506844] ... max period:                00007fffffffffff
+[  165.506848] ... global_ctrl mask:          000000070000003f
+[  165.508592] mmiotrace: enabled CPU12.
+[  165.514080] smpboot: Booting Node 0 Processor 13 APIC 0x32
+[  165.534386] mmiotrace: enabled CPU13.
+[  165.542043] smpboot: Booting Node 0 Processor 14 APIC 0x34
+[  165.561800] mmiotrace: enabled CPU14.
+[  165.569144] smpboot: Booting Node 0 Processor 15 APIC 0x36
+[  165.588985] mmiotrace: enabled CPU15.
+[  165.600140] smpboot: Booting Node 0 Processor 16 APIC 0x38
+[  165.620510] mmiotrace: enabled CPU16.
+[  165.636009] smpboot: Booting Node 0 Processor 17 APIC 0x3a
+[  165.655653] mmiotrace: enabled CPU17.
+[  165.664002] smpboot: Booting Node 0 Processor 18 APIC 0x3c
+[  165.683736] mmiotrace: enabled CPU18.
+[  165.696104] smpboot: Booting Node 0 Processor 19 APIC 0x3e
+[  165.715693] mmiotrace: enabled CPU19.
+[  165.721932] mmiotrace: disabled.

@@ -1206,7 +1206,7 @@ struct GLUE_INFO *wlanGetGlueInfo(void);
 #define wlanDebugInit() \
 	KAL_NEED_IMPLEMENT(__FILE__, __func__, __LINE__)
 #else
-u16 wlanSelectQueue(struct net_device *dev,
+u16 wlanSelectQueue(struct net_device *ndev,
 		    struct sk_buff *skb);
 
 void wlanDebugInit(void);

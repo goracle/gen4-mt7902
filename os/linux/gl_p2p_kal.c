@@ -1319,7 +1319,7 @@ void kalP2PIndicateMgmtTxStatus(IN struct GLUE_INFO *prGlueInfo,
 		}
 
 		cfg80211_mgmt_tx_status(
-			/* struct net_device * dev, */
+			/* struct net_device *ndev, */
 			prNetdevice->ieee80211_ptr,
 			*pu8GlCookie,
 			(uint8_t *) ((unsigned long) prMsduInfo->prPacket +
@@ -1422,7 +1422,7 @@ kalP2PIndicateRxMgmtFrame(IN struct ADAPTER *prAdapter,
 
 #if (KERNEL_VERSION(3, 18, 0) <= CFG80211_VERSION_CODE)
 		cfg80211_rx_mgmt(
-			/* struct net_device * dev, */
+			/* struct net_device *ndev, */
 			prNetdevice->ieee80211_ptr,
 			i4Freq,
 			RCPI_TO_dBm(
@@ -1434,7 +1434,7 @@ kalP2PIndicateRxMgmtFrame(IN struct ADAPTER *prAdapter,
 			NL80211_RXMGMT_FLAG_ANSWERED);
 #elif (KERNEL_VERSION(3, 12, 0) <= CFG80211_VERSION_CODE)
 		cfg80211_rx_mgmt(
-			/* struct net_device * dev, */
+			/* struct net_device *ndev, */
 			prNetdevice->ieee80211_ptr,
 			i4Freq,
 			RCPI_TO_dBm(
@@ -1447,7 +1447,7 @@ kalP2PIndicateRxMgmtFrame(IN struct ADAPTER *prAdapter,
 			GFP_ATOMIC);
 #else
 		cfg80211_rx_mgmt(
-			/* struct net_device * dev, */
+			/* struct net_device *ndev, */
 			prNetdevice->ieee80211_ptr,
 			i4Freq,
 			RCPI_TO_dBm(
@@ -1500,7 +1500,7 @@ kalP2PGCIndicateConnectionStatus(IN struct GLUE_INFO *prGlueInfo,
 			netif_carrier_on(prGlueP2pInfo->aprRoleHandler);
 #if !CFG_SUPPORT_SUPPLICANT_SME
 			cfg80211_connect_result(prGlueP2pInfo->aprRoleHandler,
-				/* struct net_device * dev, */
+				/* struct net_device *ndev, */
 				prP2pConnInfo->aucBssid,
 				prP2pConnInfo->aucIEBuf,
 				prP2pConnInfo->u4BufLength,
@@ -1513,7 +1513,7 @@ kalP2PGCIndicateConnectionStatus(IN struct GLUE_INFO *prGlueInfo,
 		} else {
 			/* Disconnect, what if u2StatusReason == 0? */
 			cfg80211_disconnected(prGlueP2pInfo->aprRoleHandler,
-				/* struct net_device * dev, */
+				/* struct net_device *ndev, */
 				u2StatusReason,
 				pucRxIEBuf, u2RxIELen,
 				eStatus == WLAN_STATUS_MEDIA_DISCONNECT_LOCALLY,
@@ -1559,7 +1559,7 @@ kalP2PGCIndicateConnectionStatus(IN struct GLUE_INFO *prGlueInfo,
 			netif_carrier_on(prGlueP2pInfo->aprRoleHandler);
 
 			cfg80211_connect_result(prGlueP2pInfo->aprRoleHandler,
-				/* struct net_device * dev, */
+				/* struct net_device *ndev, */
 				prP2pConnInfo->aucBssid,
 				prP2pConnInfo->aucIEBuf,
 				prP2pConnInfo->u4BufLength,
@@ -1572,7 +1572,7 @@ kalP2PGCIndicateConnectionStatus(IN struct GLUE_INFO *prGlueInfo,
 		} else {
 			/* Disconnect, what if u2StatusReason == 0? */
 			cfg80211_disconnected(prGlueP2pInfo->aprRoleHandler,
-				/* struct net_device * dev, */
+				/* struct net_device *ndev, */
 				u2StatusReason, pucRxIEBuf,
 				u2RxIELen, GFP_KERNEL);
 		}
@@ -1622,8 +1622,8 @@ kalP2PGOStationUpdate(IN struct GLUE_INFO *prGlueInfo,
 			rStationInfo.assoc_req_ies_len =
 				prCliStaRec->u2AssocReqIeLen;
 
-			cfg80211_new_sta(prP2pGlueInfo->aprRoleHandler,
-				/* struct net_device * dev, */
+			cfg80211_new_sta(prP2pGlueInfo->aprRoleHandler->ieee80211_ptr,
+				/* struct net_device *ndev, */
 				prCliStaRec->aucMacAddr,
 				&rStationInfo, GFP_KERNEL);
 		} else {
@@ -1636,8 +1636,8 @@ kalP2PGOStationUpdate(IN struct GLUE_INFO *prGlueInfo,
 				if (prCliStaRec->fgIsConnected == FALSE)
 					break;
 				prCliStaRec->fgIsConnected = FALSE;
-				cfg80211_del_sta(prP2pGlueInfo->aprRoleHandler,
-					/* struct net_device * dev, */
+				cfg80211_del_sta(prP2pGlueInfo->aprRoleHandler->ieee80211_ptr,
+					/* struct net_device *ndev, */
 					prCliStaRec->aucMacAddr, GFP_KERNEL);
 			}
 		}
@@ -2109,7 +2109,7 @@ void kalP2pIndicateQueuedMgmtFrame(IN struct GLUE_INFO *prGlueInfo,
 
 #if (KERNEL_VERSION(3, 18, 0) <= CFG80211_VERSION_CODE)
 	cfg80211_rx_mgmt(
-		/* struct net_device * dev, */
+		/* struct net_device *ndev, */
 		prNetdevice->ieee80211_ptr,
 		prFrame->u4Freq,
 		0,
@@ -2118,7 +2118,7 @@ void kalP2pIndicateQueuedMgmtFrame(IN struct GLUE_INFO *prGlueInfo,
 		NL80211_RXMGMT_FLAG_ANSWERED);
 #elif (KERNEL_VERSION(3, 12, 0) <= CFG80211_VERSION_CODE)
 	cfg80211_rx_mgmt(
-		/* struct net_device * dev, */
+		/* struct net_device *ndev, */
 		prNetdevice->ieee80211_ptr,
 		prFrame->u4Freq,
 		0,
@@ -2128,7 +2128,7 @@ void kalP2pIndicateQueuedMgmtFrame(IN struct GLUE_INFO *prGlueInfo,
 		GFP_ATOMIC);
 #else
 	cfg80211_rx_mgmt(
-		/* struct net_device * dev, */
+		/* struct net_device *ndev, */
 		prNetdevice->ieee80211_ptr,
 		prFrame->u4Freq,
 		0,

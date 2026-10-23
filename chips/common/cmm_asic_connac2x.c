@@ -214,9 +214,15 @@ void asicConnac2xCapInit(
 		 */
 		prChipInfo->rx_event_port = WFDMA1_RX_RING_IDX_0;
 
+#ifndef MT7902_SKIP_BN0_IRQ_ENA
+#define MT7902_SKIP_BN0_IRQ_ENA 1
+#endif
+#if !MT7902_SKIP_BN0_IRQ_ENA
+		/* mt76 never writes 0x7c060018; good trace has no such write */
 		HAL_MCR_WR(prAdapter,
 				CONNAC2X_BN0_IRQ_ENA_ADDR,
 				BIT(0));
+#endif
 
 		break;
 #endif /* _HIF_PCIE */
@@ -1197,6 +1203,8 @@ void asicConnac2xLowPowerOwnSet(
 #define REBP_WFSYS_SW_OWN_ADDR                 0x18000030
 #endif
 
+extern void mt79xx_stage_check(struct ADAPTER *prAdapter, const char *stage);
+
 void asicConnac2xLowPowerOwnClear(struct ADAPTER *prAdapter, uint8_t *pucResult)
 {
 	uint32_t u4RegValue = 0;
@@ -1206,7 +1214,17 @@ void asicConnac2xLowPowerOwnClear(struct ADAPTER *prAdapter, uint8_t *pucResult)
 	if (!prAdapter)
 		return;
 
+	mt79xx_stage_check(prAdapter, "own-clear-before");
+
 	/* Write PCIE_LPCR_HOST_CLR_OWN to BN0_LPCTL to request driver ownership */
+#ifndef MT7902_OWN_SET_FIRST
+#define MT7902_OWN_SET_FIRST 1
+#endif
+#if MT7902_OWN_SET_FIRST
+	/* good mt76 trace begins with LPCTL <- 1 (SET_OWN) before <- 2 */
+	HAL_MCR_WR(prAdapter, CONNAC2X_BN0_LPCTL_ADDR, PCIE_LPCR_HOST_SET_OWN);
+	kalUdelay(100);
+#endif
 	HAL_MCR_WR(prAdapter, CONNAC2X_BN0_LPCTL_ADDR, PCIE_LPCR_HOST_CLR_OWN);
 
 	/* Poll BIT(2) going low = driver owns */
@@ -1217,6 +1235,13 @@ void asicConnac2xLowPowerOwnClear(struct ADAPTER *prAdapter, uint8_t *pucResult)
 			break;
 		}
 		kalMsleep(2);
+	}
+
+	if (!fgResult) {
+		DBGLOG(INIT, ERROR,
+		       "own-clear TIMEOUT: last LPCTL read=0x%08x after %u polls\n",
+		       u4RegValue, i);
+		mt79xx_stage_check(prAdapter, "own-clear-timeout");
 	}
 
 	if (pucResult)

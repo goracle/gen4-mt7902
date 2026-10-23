@@ -266,7 +266,7 @@ uint32_t nanNdpDataConfirmEvent(IN struct ADAPTER *prAdapter,
 uint32_t nanNdpDataTerminationEvent(IN struct ADAPTER *prAdapter,
 				    struct _NAN_NDP_INSTANCE_T *prNDP);
 
-int mtk_cfg80211_vendor_ndp(struct wiphy *wiphy, struct wireless_dev *wdev,
+int mtk_cfg80211_vendor_ndp(struct wiphy *wiphy, struct net_device *ndev,
 			    const void *data, int data_len);
 
 #endif /* CFG_SUPPORT_NAN */

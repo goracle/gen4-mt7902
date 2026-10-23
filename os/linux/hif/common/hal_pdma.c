@@ -81,6 +81,11 @@
 #include "mt66xx_reg.h"
 #include "chips/coda/mt7902/wf_wfdma_host_dma0.h"
 
+extern void mt79xx_wfdma_dump(struct ADAPTER *prAdapter, const char *tag);
+extern void mt79xx_conn_on_misc_log(struct ADAPTER *prAdapter, const char *tag);
+extern void mt79xx_ser_snapshot(struct ADAPTER *prAdapter, uint32_t u4Status,
+				const char *tag);
+
 /*******************************************************************************
  *                              C O N S T A N T S
  *******************************************************************************
@@ -257,6 +262,41 @@ u_int8_t halVerifyChipID(IN struct ADAPTER *prAdapter)
 	return TRUE;
 }
 
+extern void mt79xx_mcu2host_dump(struct ADAPTER *prAdapter, const char *tag);
+
+/* MT7902_SKIP_SOP_DUMP_PREFW: the chip's show_debug_sop_info appears to poison
+ * conninfra reads (ROMCODE_INDEX 0x1d1e -> 0xdead0003 right after it runs).
+ * Before firmware is up, skip it by default; ROMCODE_INDEX is logged either
+ * way so the effect is visible.  Build with -DMT7902_SKIP_SOP_DUMP_PREFW=0 to
+ * restore the original behaviour and compare. */
+#ifndef MT7902_SKIP_SOP_DUMP_PREFW
+#define MT7902_SKIP_SOP_DUMP_PREFW	1
+#endif
+
+static void halGuardedShowDebugSop(struct ADAPTER *prAdapter,
+				   struct CHIP_DBG_OPS *prDbgOps)
+{
+	uint32_t u4Before = 0, u4After = 0;
+
+	if (!prDbgOps || !prDbgOps->show_debug_sop_info)
+		return;
+
+	HAL_MCR_RD(prAdapter, 0x81021604, &u4Before);
+#if MT7902_SKIP_SOP_DUMP_PREFW
+	if (!prAdapter->fgIsFwDownloaded) {
+		DBGLOG(HAL, ERROR,
+		       "[SOP-GUARD] pre-FW: skipping show_debug_sop_info, ROMCODE_INDEX=0x%08x\n",
+		       u4Before);
+		return;
+	}
+#endif
+	prDbgOps->show_debug_sop_info(prAdapter, SLAVENORESP);
+	HAL_MCR_RD(prAdapter, 0x81021604, &u4After);
+	DBGLOG(HAL, ERROR,
+	       "[SOP-GUARD] ROMCODE_INDEX before=0x%08x after=0x%08x\n",
+	       u4Before, u4After);
+}
+
 uint32_t halRxWaitResponse(IN struct ADAPTER *prAdapter, IN uint8_t ucPortIdx,
 						   OUT uint8_t *pucRspBuffer, IN uint32_t u4MaxRespBufferLen,
 						   OUT uint32_t *pu4Length)
@@ -289,6 +329,16 @@ uint32_t halRxWaitResponse(IN struct ADAPTER *prAdapter, IN uint8_t ucPortIdx,
 	u4Time = kalGetTimeTick();
 	u4PktLen = u4MaxRespBufferLen;
 
+	{
+		static int s_rxwait_dumps;
+
+		if (s_rxwait_dumps < 4) {
+			s_rxwait_dumps++;
+			mt79xx_wfdma_dump(prAdapter, "rxwait-entry");
+			mt79xx_conn_on_misc_log(prAdapter, "rxwait-entry");
+		}
+	}
+
 #if CFG_SUPPORT_HOST_RX_WM_EVENT_FROM_PSE
 	prBusInfo = prAdapter->chip_info->bus_info;
 	if (prBusInfo->checkPortForRxEventFromPse != NULL) {
@@ -304,8 +354,20 @@ uint32_t halRxWaitResponse(IN struct ADAPTER *prAdapter, IN uint8_t ucPortIdx,
 	uint32_t u4DmaIdx = 0;
 	kalDevRegRead(prAdapter->prGlueInfo,
 				  prRxRing->hw_didx_addr, &u4DmaIdx);
+#ifndef MT7902_RXWAIT_DIDX_OVERRIDE
+#define MT7902_RXWAIT_DIDX_OVERRIDE 0
+#endif
+#if MT7902_RXWAIT_DIDX_OVERRIDE
+	/* Old hack.  halWpdmaGetRxDmaDoneCnt() computes
+	 * done = DIDX - (CIDX + 1), so forcing CIDX = DIDX - 1 makes done == 0
+	 * and kalDevPortRead() can never read anything.  The wait only worked
+	 * when the reply landed AFTER this read of DIDX (a race against the
+	 * mt79xx_wfdma_dump above).  Leave RxCpuIdx as the ring maintains it. */
 	prRxRing->RxCpuIdx = (u4DmaIdx == 0) ?
 		(prRxRing->u4RingSize - 1) : (u4DmaIdx - 1);
+#else
+	(void)u4DmaIdx;
+#endif
 
 	do {
 		if (wlanIsChipNoAck(prAdapter)) {
@@ -333,6 +395,41 @@ uint32_t halRxWaitResponse(IN struct ADAPTER *prAdapter, IN uint8_t ucPortIdx,
 						  &u4Value);
 			DBGLOG(HAL, ERROR, "CONN_HIF_ON_DBGCR01[0x%x]\n",
 			       u4Value);
+			{
+				static bool s_stack_once;
+
+				mt79xx_wfdma_dump(prAdapter, "rxwait-timeout");
+				mt79xx_conn_on_misc_log(prAdapter, "rxwait-timeout");
+				mt79xx_mcu2host_dump(prAdapter, "rxwait-timeout");
+				{
+					static bool s_rxd_once;
+
+					if (!s_rxd_once) {
+						uint32_t i, *d;
+						uint32_t idx[3] = { 0, 1, prRxRing->u4RingSize - 1 };
+
+						s_rxd_once = true;
+						for (i = 0; i < 3; i++) {
+							d = (uint32_t *)prRxRing->Cell[idx[i]].AllocVa;
+							DBGLOG(HAL, ERROR,
+							       "[RXD port=%u idx=%u] va=%p pa=0x%llx: %08x %08x %08x %08x (want ctrl bit31 clear, SDLen0!=0, SDPtr0!=0)\n",
+							       ucNewPort, idx[i], d,
+							       (unsigned long long)prRxRing->Cell[idx[i]].AllocPa,
+							       d ? d[0] : 0, d ? d[1] : 0,
+							       d ? d[2] : 0, d ? d[3] : 0);
+						}
+					}
+				}
+				DBGLOG(HAL, ERROR,
+				       "[RXWAIT] port=%u cidx_addr=0x%08x didx_addr=0x%08x RxCpuIdx=%u ringsize=%u\n",
+				       ucNewPort, prRxRing->hw_cidx_addr,
+				       prRxRing->hw_didx_addr, prRxRing->RxCpuIdx,
+				       prRxRing->u4RingSize);
+				if (!s_stack_once) {
+					s_stack_once = true;
+					dump_stack();
+				}
+			}
 			return WLAN_STATUS_FAILURE;
 		}
 
@@ -636,7 +733,7 @@ u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 			DBGLOG(INIT, INFO,
 				   "Driver own return due to chip reset and chip no response.\n");
 #if (CFG_SUPPORT_DEBUG_SOP == 1)
-			prChipInfo->prDebugOps->show_debug_sop_info(prAdapter, SLAVENORESP);
+			halGuardedShowDebugSop(prAdapter, prChipInfo->prDebugOps);
 #endif
 			fgStatus = FALSE;
 			break;
@@ -732,8 +829,7 @@ u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 		if (prChipInfo->prDebugOps->show_mcu_debug_info)
 			prChipInfo->prDebugOps->show_mcu_debug_info(prAdapter, NULL, 0, DBG_MCU_DBG_ALL, NULL);
 #if (CFG_SUPPORT_DEBUG_SOP == 1)
-		if (prChipInfo->prDebugOps->show_debug_sop_info)
-			prChipInfo->prDebugOps->show_debug_sop_info(prAdapter, SLAVENORESP);
+		halGuardedShowDebugSop(prAdapter, prChipInfo->prDebugOps);
 #endif
 		if (prChipInfo->prDebugOps->showCsrInfo)
 			prChipInfo->prDebugOps->showCsrInfo(prAdapter);
@@ -804,6 +900,14 @@ void halSetFWOwn(IN struct ADAPTER *prAdapter, IN u_int8_t fgEnableGlobalInt)
 
 	if (prAdapter->fgIsFwOwn == TRUE)
 		goto unlock;
+
+	/* No firmware running: the ROM does not answer CLR_OWN afterwards, so
+	 * never SET_OWN in that state (leaves LPCTL=0x4, survives warm reboot).
+	 */
+	if (!prAdapter->fgIsFwDownloaded) {
+		DBGLOG(INIT, WARN, "Skip FW OWN: firmware not downloaded\n");
+		goto unlock;
+	}
 
 	if (nicProcessIST(prAdapter) != WLAN_STATUS_NOT_INDICATING) {
 		DBGLOG(INIT, STATE, "Skip FW OWN due to pending INT\n");
@@ -1451,6 +1555,16 @@ bool halHifSwInfoInit(IN struct ADAPTER *prAdapter)
 		   "[HALSWINFO] eWfsysResetState=%d fgAllocMem will be=%d\n",
 		   prAdapter->eWfsysResetState,
 		   (prAdapter->eWfsysResetState != WFSYS_RESET_STATE_IDLE) ? 0 : 1);
+#ifndef MT7902_E24C_SEQ
+#define MT7902_E24C_SEQ	1
+#endif
+#if MT7902_E24C_SEQ
+	/* Test 3: mt76 restores CONN_INFRA 0x7c00e24c to 0x18457001 right
+	 * before it programs GLO_CFG / rings (good trace 160.230205). */
+	if (!prAdapter->fgIsFwDownloaded &&
+	    prAdapter->eWfsysResetState == WFSYS_RESET_STATE_IDLE)
+		HAL_MCR_WR(prAdapter, 0x7c00e24c, 0x18457001);
+#endif
 	if (prBusInfo->DmaShdlInit)
 		prBusInfo->DmaShdlInit(prAdapter);
 
@@ -1471,7 +1585,11 @@ bool halHifSwInfoInit(IN struct ADAPTER *prAdapter)
 			if (!halWpdmaAllocRing(prAdapter->prGlueInfo, true))
 				return false;
 
-			halWpdmaInitRing(prAdapter->prGlueInfo, FALSE);
+			/* TRUE: ManualPrefetch + DMA enable must happen before the
+			 * first command (wlanSetChipEcoInfo / patch SEMA), or every
+			 * command times out with DIDX stuck at 0.
+			 */
+			halWpdmaInitRing(prAdapter->prGlueInfo, TRUE);
 			halInitMsduTokenInfo(prAdapter);
 		}
 
@@ -2930,6 +3048,16 @@ int fgHalInitTrace = 0;
 #endif
 
 
+/* Test 1: pre-FW, run the ring/prefetch/enable sequence exactly once.
+ * The trace showed a 2nd call (from wlanAdapterStart) doing a WFDMA logic
+ * reset AFTER CLR_OWN, which mt76 never does.  The flag is cleared in
+ * mt79xx_wfdma_early_init() at each probe.  Build with
+ * -DMT7902_RING_INIT_ONCE=0 to restore the old behaviour. */
+#ifndef MT7902_RING_INIT_ONCE
+#define MT7902_RING_INIT_ONCE	1
+#endif
+bool g_mt79xx_ring_inited;
+
 void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo, u_int8_t fgEnableDma)
 {
 	struct GL_HIF_INFO *prHifInfo;
@@ -2954,6 +3082,17 @@ void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo, u_int8_t fgEnableDma)
 		DBGLOG(HAL, ERROR, "halWpdmaInitRing: prBusInfo == NULL\n");
 		return;
 	}
+
+#if MT7902_RING_INIT_ONCE
+	if (fgEnableDma && !prGlueInfo->prAdapter->fgIsFwDownloaded) {
+		if (g_mt79xx_ring_inited) {
+			DBGLOG(INIT, ERROR,
+			       "halWpdmaInitRing: SKIP repeat pre-FW init (ring/prefetch/logic-reset already done)\n");
+			return;
+		}
+		g_mt79xx_ring_inited = true;
+	}
+#endif
 
 	/* friendly start log */
 	DBGLOG(HAL, INFO, "halWpdmaInitRing: start\n");
@@ -3068,6 +3207,8 @@ void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo, u_int8_t fgEnableDma)
 	if (prBusInfo->setDummyReg)
 		prBusInfo->setDummyReg(prGlueInfo);
 
+	mt79xx_wfdma_dump(prGlueInfo->prAdapter, fgEnableDma ?
+			  "initring-TRUE-done" : "initring-FALSE-done");
 	DBGLOG(HAL, INFO, "halWpdmaInitRing: complete\n");
 
 #ifdef CFG_HAL_INIT_STACKTRACE
@@ -3252,7 +3393,16 @@ void halWpdmaInitRxRing(IN struct GLUE_INFO *prGlueInfo)
 					   "-->RX_RING_%d[%d]: DMADONE !=0 \n", i, j);
 				pRxD->DMADONE = 0;
 			}
+			/* WFDMA writes the RECEIVED length back into SDLen0.  After a
+			 * logic reset the ring restarts at slot 0 and the DMA treats
+			 * SDLen0 as buffer capacity, so a stale short length splits the
+			 * next event into 40+496-byte "segmented" packets that
+			 * kalDevPortRead() drops.  Restore full capacity. */
+			pRxD->SDLen0 = prRxRing->u4BufSize;
+			pRxD->LastSec0 = 0;
 		}
+		dma_wmb();
+		prRxRing->fgRxSegPkt = FALSE;
 
 		if (prBusInfo->rx_ring_ext_ctrl)
 			prBusInfo->rx_ring_ext_ctrl(prGlueInfo, prRxRing, i);
@@ -3575,16 +3725,51 @@ bool halWpdmaWriteCmd(IN struct GLUE_INFO *prGlueInfo,
 	pTxD->Burst    = 0;
 	pTxD->DMADONE  = 0;
 
+	{
+		/* Cmd-path trace (first 6 cmds): DMAD words and first bytes of the
+		 * payload the DMA will fetch, to check the ROM gets a well-formed
+		 * packet. */
+		static int iCmdTrace;
+		u32 *pu4D = (u32 *)pTxD;
+
+		if (iCmdTrace < 6) {
+			iCmdTrace++;
+			printk(KERN_ERR "[mt7902] [CMD-TRACE #%d] CID=0x%02x slot=%u len=%u txd=%u txp=%u PacketPa=%pa DMAD=%08x %08x %08x %08x\n",
+			       iCmdTrace, prCmdInfo->ucCID, prTxRing->TxCpuIdx,
+			       u4TotalLen, prCmdInfo->u4TxdLen, prCmdInfo->u4TxpLen,
+			       &pTxCell->PacketPa, pu4D[0], pu4D[1], pu4D[2], pu4D[3]);
+			if (pucSrc)
+				print_hex_dump(KERN_ERR, "[mt7902] [CMD-TRACE] buf: ",
+					       DUMP_PREFIX_OFFSET, 16, 1, pucSrc,
+					       min_t(u32, u4TotalLen, 64), false);
+		}
+	}
+
 	INC_RING_INDEX(prTxRing->TxCpuIdx, TX_RING_SIZE);
 	prTxRing->u4UsedCnt++;
 
+	wmb();
 	kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr, prTxRing->TxCpuIdx);
 
 	spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
 
+	{
+		static int iCmdPost;
+
+		if (iCmdPost < 6) {
+			u32 *pu4D = (u32 *)pTxD;
+
+			iCmdPost++;
+			udelay(300);
+			rmb();
+			printk(KERN_ERR "[mt7902] [CMD-TRACE post #%d] DMAD=%08x %08x %08x %08x (DDONE is ctrl bit31)\n",
+			       iCmdPost, pu4D[0], pu4D[1], pu4D[2], pu4D[3]);
+		}
+	}
+
 	DBGLOG(HAL, WARN,
-		   "%s: CmdInfo[%p], TxD[%p/%u] TxP[%p/%u] CPU idx[%u] Used[%u]\n",
-		   __func__, prCmdInfo, prCmdInfo->pucTxd, prCmdInfo->u4TxdLen,
+		   "%s: CID=0x%02x CmdInfo[%p], TxD[%p/%u] TxP[%p/%u] CPU idx[%u] Used[%u]\n",
+		   __func__, prCmdInfo->ucCID, prCmdInfo, prCmdInfo->pucTxd, prCmdInfo->u4TxdLen,
 		   prCmdInfo->pucTxp, prCmdInfo->u4TxpLen,
 		   prTxRing->TxCpuIdx, prTxRing->u4UsedCnt);
 
@@ -4586,6 +4771,7 @@ void halHwRecoveryFromError(IN struct ADAPTER *prAdapter)
 	switch (prErrRecoveryCtrl->eErrRecovState) {
 	case ERR_RECOV_STOP_IDLE:
 		if (u4Status & ERROR_DETECT_STOP_PDMA) {
+			mt79xx_ser_snapshot(prAdapter, u4Status, "ser-stop-pdma");
 			if (prChipInfo->asicDumpSerDummyCR)
 				prChipInfo->asicDumpSerDummyCR(prAdapter);
 			halStartSerTimer(prAdapter);
@@ -4778,6 +4964,23 @@ uint32_t halHifPowerOffWifi(IN struct ADAPTER *prAdapter)
 	uint32_t rStatus = WLAN_STATUS_SUCCESS;
 
 	prHifInfo = &prAdapter->prGlueInfo->rHifInfo;
+
+#ifndef MT7902_SKIP_PREFW_POWEROFF
+#define MT7902_SKIP_PREFW_POWEROFF 1
+#endif
+#if MT7902_SKIP_PREFW_POWEROFF
+	/* wlanWakeUpWiFi() runs from wlanAdapterStart() before the CMD buffer
+	 * pool exists and before any firmware is loaded.  Sending the NIC
+	 * power-off command then (a) has nothing to talk to and (b) falls into
+	 * the dynamic-alloc path ("Static pool exhausted. Free=0"), whose
+	 * CMD_INFO is later released through cnmMemFree() -> page fault.
+	 * Nothing to power off before FW download, so skip. */
+	if (!prAdapter->fgIsFwDownloaded) {
+		DBGLOG(INIT, ERROR,
+		       "halHifPowerOffWifi: FW not downloaded, skipping power-off cmd\n");
+		return WLAN_STATUS_SUCCESS;
+	}
+#endif
 
 	DBGLOG(INIT, INFO, "Power off Wi-Fi!\n");
 

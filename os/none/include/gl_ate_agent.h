@@ -146,58 +146,58 @@ struct ATE_OPS_T {
  *******************************************************************************
  */
 
-int Set_ResetStatCounter_Proc(struct net_device *prNetDev,
+int Set_ResetStatCounter_Proc(struct wireless_dev *prWdev,
 			      uint8_t *prInBuf);
-int SetATE(struct net_device *prNetDev, uint8_t *prInBuf);
-int SetATEDa(struct net_device *prNetDev, uint8_t *prInBuf);
-int SetATESa(struct net_device *prNetDev, uint8_t *prInBuf);
-int SetATEChannel(struct net_device *prNetDev,
+int SetATE(struct wireless_dev *prWdev, uint8_t *prInBuf);
+int SetATEDa(struct wireless_dev *prWdev, uint8_t *prInBuf);
+int SetATESa(struct wireless_dev *prWdev, uint8_t *prInBuf);
+int SetATEChannel(struct wireless_dev *prWdev,
 		  uint8_t *prInBuf);
-int SetATETxPower0(struct net_device *prNetDev,
+int SetATETxPower0(struct wireless_dev *prWdev,
 		   uint8_t *prInBuf);
-int SetATETxGi(struct net_device *prNetDev,
+int SetATETxGi(struct wireless_dev *prWdev,
 	       uint8_t *prInBuf);
-int SetATETxBw(struct net_device *prNetDev,
+int SetATETxBw(struct wireless_dev *prWdev,
 	       uint8_t *prInBuf);
-int SetATETxMode(struct net_device *prNetDev,
+int SetATETxMode(struct wireless_dev *prWdev,
 		 uint8_t *prInBuf);
-int SetATETxLength(struct net_device *prNetDev,
+int SetATETxLength(struct wireless_dev *prWdev,
 		   uint8_t *prInBuf);
-int SetATETxCount(struct net_device *prNetDev,
+int SetATETxCount(struct wireless_dev *prWdev,
 		  uint8_t *prInBuf);
-int SetATETxMcs(struct net_device *prNetDev,
+int SetATETxMcs(struct wireless_dev *prWdev,
 		uint8_t *prInBuf);
-int SetATEIpg(struct net_device *prNetDev,
+int SetATEIpg(struct wireless_dev *prWdev,
 	      uint8_t *prInBuf);
 
 #if CFG_SUPPORT_TX_BF
-int Set_TxBfProfileTag_Help(struct net_device *prNetDev,
+int Set_TxBfProfileTag_Help(struct wireless_dev *prWdev,
 			    uint8_t *prInBuf);
-int Set_TxBfProfileTag_InValid(struct net_device *prNetDev,
+int Set_TxBfProfileTag_InValid(struct wireless_dev *prWdev,
 			       uint8_t *prInBuf);
-int Set_TxBfProfileTag_PfmuIdx(struct net_device *prNetDev,
+int Set_TxBfProfileTag_PfmuIdx(struct wireless_dev *prWdev,
 			       uint8_t *prInBuf);
-int Set_TxBfProfileTag_BfType(struct net_device *prNetDev,
+int Set_TxBfProfileTag_BfType(struct wireless_dev *prWdev,
 			      uint8_t *prInBuf);
-int Set_TxBfProfileTag_DBW(struct net_device *prNetDev,
+int Set_TxBfProfileTag_DBW(struct wireless_dev *prWdev,
 			   uint8_t *prInBuf);
-int Set_TxBfProfileTag_SuMu(struct net_device *prNetDev,
+int Set_TxBfProfileTag_SuMu(struct wireless_dev *prWdev,
 			    uint8_t *prInBuf);
-int Set_TxBfProfileTag_Mem(struct net_device *prNetDev,
+int Set_TxBfProfileTag_Mem(struct wireless_dev *prWdev,
 			   uint8_t *prInBuf);
-int Set_TxBfProfileTag_Matrix(struct net_device *prNetDev,
+int Set_TxBfProfileTag_Matrix(struct wireless_dev *prWdev,
 			      uint8_t *prInBuf);
-int Set_TxBfProfileTag_SNR(struct net_device *prNetDev,
+int Set_TxBfProfileTag_SNR(struct wireless_dev *prWdev,
 			   uint8_t *prInBuf);
-int Set_TxBfProfileTag_SmartAnt(struct net_device *prNetDev,
+int Set_TxBfProfileTag_SmartAnt(struct wireless_dev *prWdev,
 				uint8_t *prInBuf);
-int Set_TxBfProfileTag_SeIdx(struct net_device *prNetDev,
+int Set_TxBfProfileTag_SeIdx(struct wireless_dev *prWdev,
 			     uint8_t *prInBuf);
-int Set_TxBfProfileTag_RmsdThrd(struct net_device *prNetDev,
+int Set_TxBfProfileTag_RmsdThrd(struct wireless_dev *prWdev,
 				uint8_t *prInBuf);
-int Set_TxBfProfileTag_McsThrd(struct net_device *prNetDev,
+int Set_TxBfProfileTag_McsThrd(struct wireless_dev *prWdev,
 			       uint8_t *prInBuf);
-int Set_TxBfProfileTag_TimeOut(struct net_device *prNetDev,
+int Set_TxBfProfileTag_TimeOut(struct wireless_dev *prWdev,
 			       uint8_t *prInBuf);
 int Set_TxBfProfileTag_DesiredBW(struct net_device
 				 *prNetDev, uint8_t *prInBuf);
@@ -205,92 +205,92 @@ int Set_TxBfProfileTag_DesiredNc(struct net_device
 				 *prNetDev, uint8_t *prInBuf);
 int Set_TxBfProfileTag_DesiredNr(struct net_device
 				 *prNetDev, uint8_t *prInBuf);
-int Set_TxBfProfileTagRead(struct net_device *prNetDev,
+int Set_TxBfProfileTagRead(struct wireless_dev *prWdev,
 			   uint8_t *prInBuf);
-int Set_TxBfProfileTagWrite(struct net_device *prNetDev,
+int Set_TxBfProfileTagWrite(struct wireless_dev *prWdev,
 			    uint8_t *prInBuf);
-int Set_StaRecCmmUpdate(struct net_device *prNetDev,
+int Set_StaRecCmmUpdate(struct wireless_dev *prWdev,
 			uint8_t *prInBuf);
-int Set_StaRecBfUpdate(struct net_device *prNetDev,
+int Set_StaRecBfUpdate(struct wireless_dev *prWdev,
 		       uint8_t *prInBuf);
 
-int Set_DevInfoUpdate(struct net_device *prNetDev,
+int Set_DevInfoUpdate(struct wireless_dev *prWdev,
 		      uint8_t *prInBuf);
 
-int Set_BssInfoUpdate(struct net_device *prNetDev,
+int Set_BssInfoUpdate(struct wireless_dev *prWdev,
 		      uint8_t *prInBuf);
-int Set_TxBfProfileDataRead(struct net_device *prNetDev,
+int Set_TxBfProfileDataRead(struct wireless_dev *prWdev,
 			    uint8_t *prInBuf);
-int Set_TxBfProfileDataWrite(struct net_device *prNetDev,
+int Set_TxBfProfileDataWrite(struct wireless_dev *prWdev,
 			     uint8_t *prInBuf);
-int Set_Trigger_Sounding_Proc(struct net_device *prNetDev,
+int Set_Trigger_Sounding_Proc(struct wireless_dev *prWdev,
 			      uint8_t *prInBuf);
-int Set_Stop_Sounding_Proc(struct net_device *prNetDev,
+int Set_Stop_Sounding_Proc(struct wireless_dev *prWdev,
 			   uint8_t *prInBuf);
-int Set_TxBfTxApply(struct net_device *prNetDev,
+int Set_TxBfTxApply(struct wireless_dev *prWdev,
 		    uint8_t *prInBuf);
-int Set_TxBfProfilePnRead(struct net_device *prNetDev,
+int Set_TxBfProfilePnRead(struct wireless_dev *prWdev,
 			  uint8_t *prInBuf);
-int Set_TxBfProfilePnWrite(struct net_device *prNetDev,
+int Set_TxBfProfilePnWrite(struct wireless_dev *prWdev,
 			   uint8_t *prInBuf);
-int Set_TxBfManualAssoc(struct net_device *prNetDev,
+int Set_TxBfManualAssoc(struct wireless_dev *prWdev,
 			uint8_t *prInBuf);
-int Set_TxBfPfmuMemAlloc(struct net_device *prNetDev,
+int Set_TxBfPfmuMemAlloc(struct wireless_dev *prWdev,
 			 uint8_t *prInBuf);
-int Set_TxBfPfmuMemRelease(struct net_device *prNetDev,
+int Set_TxBfPfmuMemRelease(struct wireless_dev *prWdev,
 			   uint8_t *prInBuf);
 
 #if CFG_SUPPORT_MU_MIMO
-int Set_MUGetInitMCS(struct net_device *prNetDev,
+int Set_MUGetInitMCS(struct wireless_dev *prWdev,
 		     uint8_t *prInBuf);
-int Set_MUCalInitMCS(struct net_device *prNetDev,
+int Set_MUCalInitMCS(struct wireless_dev *prWdev,
 		     uint8_t *prInBuf);
-int Set_MUCalLQ(struct net_device *prNetDev,
+int Set_MUCalLQ(struct wireless_dev *prWdev,
 		uint8_t *prInBuf);
-int Set_MUGetLQ(struct net_device *prNetDev,
+int Set_MUGetLQ(struct wireless_dev *prWdev,
 		uint8_t *prInBuf);
-int Set_MUSetSNROffset(struct net_device *prNetDev,
+int Set_MUSetSNROffset(struct wireless_dev *prWdev,
 		       uint8_t *prInBuf);
-int Set_MUSetZeroNss(struct net_device *prNetDev,
+int Set_MUSetZeroNss(struct wireless_dev *prWdev,
 		     uint8_t *prInBuf);
-int Set_MUSetSpeedUpLQ(struct net_device *prNetDev,
+int Set_MUSetSpeedUpLQ(struct wireless_dev *prWdev,
 		       uint8_t *prInBuf);
-int Set_MUSetMUTable(struct net_device *prNetDev,
+int Set_MUSetMUTable(struct wireless_dev *prWdev,
 		     uint8_t *prInBuf);
-int Set_MUSetGroup(struct net_device *prNetDev,
+int Set_MUSetGroup(struct wireless_dev *prWdev,
 		   uint8_t *prInBuf);
-int Set_MUGetQD(struct net_device *prNetDev,
+int Set_MUGetQD(struct wireless_dev *prWdev,
 		uint8_t *prInBuf);
-int Set_MUSetEnable(struct net_device *prNetDev,
+int Set_MUSetEnable(struct wireless_dev *prWdev,
 		    uint8_t *prInBuf);
-int Set_MUSetGID_UP(struct net_device *prNetDev,
+int Set_MUSetGID_UP(struct wireless_dev *prWdev,
 		    uint8_t *prInBuf);
-int Set_MUTriggerTx(struct net_device *prNetDev,
+int Set_MUTriggerTx(struct wireless_dev *prWdev,
 		    uint8_t *prInBuf);
 #endif
 
 #if CFG_SUPPORT_TX_BF_FPGA
-int Set_TxBfProfileSwTagWrite(struct net_device *prNetDev,
+int Set_TxBfProfileSwTagWrite(struct wireless_dev *prWdev,
 			      uint8_t *prInBuf);
 #endif
 #endif
 
 
-int WriteEfuse(struct net_device *prNetDev,
+int WriteEfuse(struct wireless_dev *prWdev,
 	       uint8_t *prInBuf);
-int SetTxTargetPower(struct net_device *prNetDev,
+int SetTxTargetPower(struct wireless_dev *prWdev,
 		     uint8_t *prInBuf);
 
 #if (CFG_SUPPORT_DFS_MASTER == 1)
-int SetRddReport(struct net_device *prNetDev,
+int SetRddReport(struct wireless_dev *prWdev,
 		 uint8_t *prInBuf);
-int SetByPassCac(struct net_device *prNetDev,
+int SetByPassCac(struct wireless_dev *prWdev,
 		 uint8_t *prInBuf);
-int SetRadarDetectMode(struct net_device *prNetDev,
+int SetRadarDetectMode(struct wireless_dev *prWdev,
 		       uint8_t *prInBuf);
 #endif
 
-int AteCmdSetHandle(struct net_device *prNetDev,
+int AteCmdSetHandle(struct wireless_dev *prWdev,
 		    uint8_t *prInBuf, uint32_t u4InBufLen);
 
 #endif /*CFG_SUPPORT_QA_TOOL */

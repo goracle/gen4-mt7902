@@ -331,12 +331,12 @@ bool receive_del_txs_queue(
 	uint32_t time_stamp);
 
 int priv_driver_txs_test(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen);
 
 int priv_driver_txs_test_result(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen);
 
@@ -347,20 +347,20 @@ uint32_t AutomationTxDone(IN struct ADAPTER *prAdapter,
 	IN enum ENUM_TX_RESULT_CODE rTxDoneStatus);
 
 int priv_driver_set_tx_test(
-	IN struct net_device *prNetDev, IN char *pcCommand,
+	IN struct wireless_dev *prWdev, IN char *pcCommand,
 	IN int i4TotalLen);
 int priv_driver_set_tx_test_ac(
-	IN struct net_device *prNetDev, IN char *pcCommand,
+	IN struct wireless_dev *prWdev, IN char *pcCommand,
 	IN int i4TotalLen);
 
 /* RXV Test */
 int priv_driver_rxv_test(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen);
 
 int priv_driver_rxv_test_result(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen);
 
@@ -370,13 +370,13 @@ void connac2x_rxv_correct_test(
 
 /* CSO Test */
 int priv_driver_cso_test(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen);
 
 /* skip legal channel sanity check for fpga dvt */
 int priv_driver_skip_legal_ch_check(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen);
 

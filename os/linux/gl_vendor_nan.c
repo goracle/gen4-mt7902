@@ -401,7 +401,7 @@ wlanoidGetNANCapabilitiesRsp(IN struct ADAPTER *prAdapter, IN void *pvSetBuffer,
 		(struct NanCapabilitiesRspMsg *)pvSetBuffer;
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 
 	wiphy = priv_to_wiphy(prAdapter->prGlueInfo);
 	wdev = (wlanGetNetDev(prAdapter->prGlueInfo, AIS_DEFAULT_INDEX))
@@ -466,7 +466,7 @@ wlanoidNANEnableRsp(IN struct ADAPTER *prAdapter, IN void *pvSetBuffer,
 		(struct NanEnableRspMsg *)pvSetBuffer;
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 
 	wiphy = priv_to_wiphy(prAdapter->prGlueInfo);
 	wdev = (wlanGetNetDev(prAdapter->prGlueInfo, AIS_DEFAULT_INDEX))
@@ -512,7 +512,7 @@ wlanoidNANDisableRsp(IN struct ADAPTER *prAdapter, IN void *pvSetBuffer,
 		(struct NanDisableRspMsg *)pvSetBuffer;
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 
 	wiphy = priv_to_wiphy(prAdapter->prGlueInfo);
 	wdev = (wlanGetNetDev(prAdapter->prGlueInfo, AIS_DEFAULT_INDEX))
@@ -556,7 +556,7 @@ wlanoidNANConfigRsp(IN struct ADAPTER *prAdapter,
 		(struct NanConfigRspMsg *)pvSetBuffer;
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 
 	wiphy = priv_to_wiphy(prAdapter->prGlueInfo);
 	wdev = (wlanGetNetDev(prAdapter->prGlueInfo, AIS_DEFAULT_INDEX))
@@ -601,7 +601,7 @@ wlanoidNanPublishRsp(IN struct ADAPTER *prAdapter, IN void *pvSetBuffer,
 		(struct NanPublishServiceRspMsg *)pvSetBuffer;
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 
 	kalMemZero(&nanPublishRsp, sizeof(struct NanPublishServiceRspMsg));
 	wiphy = priv_to_wiphy(prAdapter->prGlueInfo);
@@ -665,7 +665,7 @@ wlanoidNANCancelPublishRsp(IN struct ADAPTER *prAdapter, IN void *pvSetBuffer,
 		(struct NanPublishServiceCancelRspMsg *)pvSetBuffer;
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 
 	kalMemZero(&nanPublishCancelRsp,
 		   sizeof(struct NanPublishServiceCancelRspMsg));
@@ -726,7 +726,7 @@ wlanoidNanSubscribeRsp(IN struct ADAPTER *prAdapter, IN void *pvSetBuffer,
 		(struct NanSubscribeServiceRspMsg *)pvSetBuffer;
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 
 	kalMemZero(&nanSubscribeRsp, sizeof(struct NanSubscribeServiceRspMsg));
 	wiphy = priv_to_wiphy(prAdapter->prGlueInfo);
@@ -786,7 +786,7 @@ wlanoidNANCancelSubscribeRsp(IN struct ADAPTER *prAdapter, IN void *pvSetBuffer,
 		(struct NanSubscribeServiceCancelRspMsg *)pvSetBuffer;
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 
 	kalMemZero(&nanSubscribeCancelRsp,
 		   sizeof(struct NanSubscribeServiceCancelRspMsg));
@@ -844,7 +844,7 @@ wlanoidNANFollowupRsp(IN struct ADAPTER *prAdapter, IN void *pvSetBuffer,
 		(struct NanTransmitFollowupRspMsg *)pvSetBuffer;
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 
 	wiphy = priv_to_wiphy(prAdapter->prGlueInfo);
 	wdev = (wlanGetNetDev(prAdapter->prGlueInfo, AIS_DEFAULT_INDEX))
@@ -893,7 +893,7 @@ wlanoidNANFollowupRsp(IN struct ADAPTER *prAdapter, IN void *pvSetBuffer,
 struct NanDataPathInitiatorNDPE g_ndpReqNDPE;
 
 int mtk_cfg80211_vendor_nan(struct wiphy *wiphy,
-	struct wireless_dev *wdev, const void *data, int data_len)
+	struct net_device *ndev, const void *data, int data_len)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
 	struct sk_buff *skb = NULL;
@@ -2035,7 +2035,7 @@ mtk_cfg80211_vendor_event_nan_event_indication(IN struct ADAPTER *prAdapter,
 {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	struct NanEventIndMsg *prNanEventInd;
 	struct NAN_DE_EVENT *prDeEvt;
 	uint16_t u2EventType;
@@ -2112,7 +2112,7 @@ int mtk_cfg80211_vendor_event_nan_disable_indication(
 {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	struct NanDisableIndMsg *prNanDisableInd;
 	struct NAN_DISABLE_EVENT *prDisableEvt;
 	size_t message_len = 0;
@@ -2175,7 +2175,7 @@ mtk_cfg80211_vendor_event_nan_replied_indication(IN struct ADAPTER *prAdapter,
 {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	struct NAN_REPLIED_EVENT *prRepliedEvt = NULL;
 	struct NanPublishRepliedIndMsg *prNanPubRepliedInd;
 	uint8_t *tlvs = NULL;
@@ -2242,7 +2242,7 @@ mtk_cfg80211_vendor_event_nan_match_indication(IN struct ADAPTER *prAdapter,
 {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	struct NAN_DISCOVERY_EVENT *prDiscEvt;
 	struct NanMatchIndMsg *prNanMatchInd;
 	struct NanSdeaCtrlParams peer_sdea_params;
@@ -2343,7 +2343,7 @@ mtk_cfg80211_vendor_event_nan_publish_terminate(IN struct ADAPTER *prAdapter,
 {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	struct NAN_PUBLISH_TERMINATE_EVENT *prPubTerEvt;
 	struct NanPublishTerminatedIndMsg nanPubTerInd;
 	size_t message_len = 0;
@@ -2394,7 +2394,7 @@ mtk_cfg80211_vendor_event_nan_subscribe_terminate(IN struct ADAPTER *prAdapter,
 {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	struct NAN_SUBSCRIBE_TERMINATE_EVENT *prSubTerEvt;
 	struct NanSubscribeTerminatedIndMsg nanSubTerInd;
 	size_t message_len = 0;
@@ -2442,7 +2442,7 @@ mtk_cfg80211_vendor_event_nan_followup_indication(IN struct ADAPTER *prAdapter,
 {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	struct NanFollowupIndMsg *prNanFollowupInd;
 	struct NAN_FOLLOW_UP_EVENT *prFollowupEvt;
 	uint8_t *tlvs = NULL;
@@ -2521,7 +2521,7 @@ int mtk_cfg80211_vendor_event_nan_seldflwup_indication(
 {
 	struct sk_buff *skb = NULL;
 	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	struct net_device *ndev;
 	struct NanFollowupIndMsg *prNanFollowupInd;
 	struct NAN_FOLLOW_UP_EVENT *prFollowupEvt;
 	size_t message_len = 0;

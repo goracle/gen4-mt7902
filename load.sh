@@ -27,7 +27,7 @@ GHOST_IFACE=$(ip -o link show | grep -E "enp0|usb|enx" | awk -F': ' '{print $2}'
 # 2. The "Deep Scrub" Cleanup
 log "🗑️  Removing old module and cleaning the kitchen..."
 sudo rmmod $MODULE_NAME 2>/dev/null || true
-
+sudo rmmod mt7921e 2>/dev/null || true
 # Unload the helpers. Note: it's 'cdc_ether', not 'cdc_ethernet'
 #sudo modprobe -r cdc_ether usbnet 2>/dev/null || true
 

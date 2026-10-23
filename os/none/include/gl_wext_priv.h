@@ -325,32 +325,32 @@ enum AGG_RANGE_TYPE_T {
  */
 #if 0
 int
-priv_set_int(IN struct net_device *prNetDev,
+priv_set_int(IN struct wireless_dev *prWdev,
 	     IN struct iw_request_info *prIwReqInfo,
 	     IN union iwreq_data *prIwReqData, IN char *pcExtra);
 
 int
-priv_get_int(IN struct net_device *prNetDev,
+priv_get_int(IN struct wireless_dev *prWdev,
 	     IN struct iw_request_info *prIwReqInfo,
 	     IN union iwreq_data *prIwReqData, IN OUT char *pcExtra);
 
 int
-priv_set_ints(IN struct net_device *prNetDev,
+priv_set_ints(IN struct wireless_dev *prWdev,
 	      IN struct iw_request_info *prIwReqInfo,
 	      IN union iwreq_data *prIwReqData, IN char *pcExtra);
 
 int
-priv_get_ints(IN struct net_device *prNetDev,
+priv_get_ints(IN struct wireless_dev *prWdev,
 	      IN struct iw_request_info *prIwReqInfo,
 	      IN union iwreq_data *prIwReqData, IN OUT char *pcExtra);
 
 int
-priv_set_struct(IN struct net_device *prNetDev,
+priv_set_struct(IN struct wireless_dev *prWdev,
 		IN struct iw_request_info *prIwReqInfo,
 		IN union iwreq_data *prIwReqData, IN char *pcExtra);
 
 int
-priv_get_struct(IN struct net_device *prNetDev,
+priv_get_struct(IN struct wireless_dev *prWdev,
 		IN struct iw_request_info *prIwReqInfo,
 		IN union iwreq_data *prIwReqData, IN OUT char *pcExtra);
 
@@ -360,12 +360,12 @@ uint8_t CmdString2HexParse(IN uint8_t *InStr,
 #endif
 
 int
-priv_set_driver(IN struct net_device *prNetDev,
+priv_set_driver(IN struct wireless_dev *prWdev,
 		IN struct iw_request_info *prIwReqInfo,
 		IN union iwreq_data *prIwReqData, IN OUT char *pcExtra);
 
 int
-priv_set_ap(IN struct net_device *prNetDev,
+priv_set_ap(IN struct wireless_dev *prWdev,
 		IN struct iw_request_info *prIwReqInfo,
 		IN union iwreq_data *prIwReqData, IN OUT char *pcExtra);
 
@@ -380,15 +380,15 @@ int android_private_support_driver_cmd(IN struct net_device *prDev,
 IN OUT struct ifreq *prReq, IN int i4Cmd);
 #endif /* CFG_ANDROID_AOSP_PRIV_CMD */
 
-int32_t priv_driver_cmds(IN struct net_device *prNetDev,
+int32_t priv_driver_cmds(IN struct wireless_dev *prWdev,
 			 IN int8_t *pcCommand, IN int32_t i4TotalLen);
 
-int priv_driver_set_cfg(IN struct net_device *prNetDev,
+int priv_driver_set_cfg(IN struct wireless_dev *prWdev,
 			IN char *pcCommand, IN int i4TotalLen);
 
 #if CFG_SUPPORT_QA_TOOL
 int
-priv_ate_set(IN struct net_device *prNetDev,
+priv_ate_set(IN struct wireless_dev *prWdev,
 	     IN struct iw_request_info *prIwReqInfo,
 	     IN union iwreq_data *prIwReqData, IN char *pcExtra);
 #endif

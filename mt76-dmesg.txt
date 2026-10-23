@@ -1,0 +1,6 @@
+[    2.099535] mt7921e 0000:02:00.0: ASIC revision: 79020000
+[    2.192779] mt7921e 0000:02:00.0: HW/SW Version: 0x8a108a10, Build Time: 20251212032046a
+[    2.383103] mt7921e 0000:02:00.0: WM Firmware Version: ____000000, Build Time: 20251212032127
+[   18.373535] mt7921e 0000:02:00.0: ASIC revision: 79020000
+[   18.467268] mt7921e 0000:02:00.0: HW/SW Version: 0x8a108a10, Build Time: 20251212032046a
+[   18.487324] mt7921e 0000:02:00.0: WM Firmware Version: ____000000, Build Time: 20251212032127

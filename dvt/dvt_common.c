@@ -518,7 +518,7 @@ bool receive_del_txs_queue(
 * Send specific type of packet and check if TXS is back
 */
 int priv_driver_txs_test(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen)
 {
@@ -645,7 +645,7 @@ int priv_driver_txs_test(
 * Check TXS test result
 */
 int priv_driver_txs_test_result(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen)
 {
@@ -793,7 +793,7 @@ uint32_t AutomationTxDone(IN struct ADAPTER *prAdapter,
 *        matched with specific rate
 */
 int priv_driver_rxv_test(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen)
 {
@@ -892,7 +892,7 @@ int priv_driver_rxv_test(
 * This routine is used to judge result of RXV DVT.
 */
 int priv_driver_rxv_test_result(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen)
 {
@@ -1010,7 +1010,7 @@ void connac2x_rxv_correct_test(
 * step3. Passed if throughput is normal
 */
 int priv_driver_cso_test(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen)
 {
@@ -1065,7 +1065,7 @@ int priv_driver_cso_test(
 * Set a value to allow how many packets be transmitting
 */
 int priv_driver_set_tx_test(
-			IN struct net_device *prNetDev, IN char *pcCommand,
+			IN struct wireless_dev *prWdev, IN char *pcCommand,
 			IN int i4TotalLen)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
@@ -1106,7 +1106,7 @@ int priv_driver_set_tx_test(
 * Assign specific AC of Data to verify HW behavior when receive Trigger frame
 */
 int priv_driver_set_tx_test_ac(
-			IN struct net_device *prNetDev, IN char *pcCommand,
+			IN struct wireless_dev *prWdev, IN char *pcCommand,
 			IN int i4TotalLen)
 {
 	struct GLUE_INFO *prGlueInfo = NULL;
@@ -1147,7 +1147,7 @@ int priv_driver_set_tx_test_ac(
 * from RXD. Ignore this error
 */
 int priv_driver_skip_legal_ch_check(
-	IN struct net_device *prNetDev,
+	IN struct wireless_dev *prWdev,
 	IN char *pcCommand,
 	IN int i4TotalLen)
 {

@@ -325,11 +325,11 @@ struct HQA_CMD_TABLE {
  *******************************************************************************
  */
 
-int HQA_CMDHandler(struct net_device *prNetDev,
+int HQA_CMDHandler(struct net_device *prWdev,
 		   IN union iwreq_data *prIwReqData,
 		   struct HQA_CMD_FRAME *HqaCmdFrame);
 
-int priv_qa_agent(IN struct net_device *prNetDev,
+int priv_qa_agent(IN struct net_device *prWdev,
 		  IN struct iw_request_info *prIwReqInfo,
 		  IN union iwreq_data *prIwReqData, IN char *pcExtra);
 

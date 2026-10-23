@@ -801,7 +801,7 @@ void nanMapRangingConfigParams(u32 *pIndata,
 void
 nanMapNan20RangingReqParams(u32 *pIndata,
 			    struct NanRangeResponseCfg *prNanRangeRspCfgParms);
-int mtk_cfg80211_vendor_nan(struct wiphy *wiphy, struct wireless_dev *wdev,
+int mtk_cfg80211_vendor_nan(struct wiphy *wiphy, struct net_device *ndev,
 			    const void *data, int data_len);
 int mtk_cfg80211_vendor_event_nan_event_indication(IN struct ADAPTER *prAdapter,
 						   uint8_t *pcuEvtBuf);
