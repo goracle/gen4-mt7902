@@ -1321,12 +1321,60 @@ struct MSDU_TOKEN_ENTRY *halAcquireMsduToken(IN struct ADAPTER *prAdapter)
  */
 /*----------------------------------------------------------------------------*/
 
+/* True if prMsduInfo is already linked on the free MSDU list.  Bounded walk so
+ * that an already-corrupt (circular) list cannot hang the caller. */
+static bool halMsduIsOnFreeList(IN struct ADAPTER *prAdapter,
+				IN struct MSDU_INFO *prMsduInfo)
+{
+	struct QUE *prFree = &prAdapter->rTxCtrl.rFreeMsduInfoList;
+	struct QUE_ENTRY *prEntry;
+	uint32_t u4Left = prFree->u4NumElem + 1;
+	bool fgFound = false;
+
+	KAL_SPIN_LOCK_DECLARATION();
+	KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_TX_MSDU_INFO_LIST);
+	for (prEntry = prFree->prHead; prEntry && u4Left;
+	     prEntry = prEntry->prNext, u4Left--) {
+		if (prEntry == (struct QUE_ENTRY *)prMsduInfo) {
+			fgFound = true;
+			break;
+		}
+	}
+	KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_TX_MSDU_INFO_LIST);
+	return fgFound;
+}
+
+/* Call from any path that frees an MSDU which a TX token may still reference
+ * (e.g. nicTxMsduLifeTimeoutHandler) so SER reset / teardown cannot free it a
+ * second time. */
+void halDetachMsduFromToken(IN struct ADAPTER *prAdapter,
+			    IN struct MSDU_INFO *prMsduInfo)
+{
+	struct MSDU_TOKEN_INFO *prTokenInfo =
+		&prAdapter->prGlueInfo->rHifInfo.rTokenInfo;
+	unsigned long flags;
+	uint32_t u4Idx;
+
+	if (!prMsduInfo)
+		return;
+	spin_lock_irqsave(&prTokenInfo->rTokenLock, flags);
+	for (u4Idx = 0; u4Idx < HIF_TX_MSDU_TOKEN_NUM; u4Idx++) {
+		if (prTokenInfo->arToken[u4Idx].prMsduInfo == prMsduInfo) {
+			prTokenInfo->arToken[u4Idx].prMsduInfo = NULL;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
+	prMsduInfo->prToken = NULL;
+}
+
 static void halResetMsduToken(IN struct ADAPTER *prAdapter)
 {
 	struct GL_HIF_INFO *prHifInfo;
 	struct HIF_MEM_OPS *prMemOps;
 	struct MSDU_TOKEN_INFO *prTokenInfo;
 	struct MSDU_TOKEN_ENTRY *prToken;
+	unsigned long flags;
 	uint32_t u4Idx = 0;
 
 	if (WARN_ON(!prAdapter || !prAdapter->prGlueInfo))
@@ -1337,91 +1385,86 @@ static void halResetMsduToken(IN struct ADAPTER *prAdapter)
 	prTokenInfo = &prHifInfo->rTokenInfo;
 
 	for (u4Idx = 0; u4Idx < HIF_TX_MSDU_TOKEN_NUM; u4Idx++) {
-		struct MSDU_INFO *local_prMsduInfo;
-		dma_addr_t local_rPktDmaAddr, local_rDmaAddr;
-		uint32_t local_u4PktDmaLength, local_u4DmaLength;
+		struct MSDU_INFO *local_prMsduInfo = NULL;
+		dma_addr_t local_rPktDmaAddr = 0, local_rDmaAddr = 0;
+		uint32_t local_u4PktDmaLength = 0, local_u4DmaLength = 0;
 		bool was_in_use;
 
+		/* Snapshot and clear under the token lock; the frees below
+		 * take other locks and call handlers, so run them unlocked. */
+		spin_lock_irqsave(&prTokenInfo->rTokenLock, flags);
 		prToken = &prTokenInfo->arToken[u4Idx];
 		was_in_use = prToken->fgInUsed;
-
 		if (was_in_use) {
-			DBGLOG(HAL, WARN,
-			       "Resetting active token[%u]! Protecting against race.\n",
-			       u4Idx);
-
-			/* Steal pointers before nulling */
-			local_prMsduInfo     = prToken->prMsduInfo;
-			local_rPktDmaAddr    = prToken->rPktDmaAddr;
-			local_rDmaAddr       = prToken->rDmaAddr;
+			local_prMsduInfo = prToken->prMsduInfo;
+			local_rPktDmaAddr = prToken->rPktDmaAddr;
+			local_rDmaAddr = prToken->rDmaAddr;
 			local_u4PktDmaLength = prToken->u4PktDmaLength;
+			local_u4DmaLength = prToken->u4DmaLength;
 
-			/* Atomically clear */
-			prToken->prMsduInfo     = NULL;
-			//prToken->prPacket       = NULL;
-			prToken->rPktDmaAddr    = 0;
+			prToken->prMsduInfo = NULL;
+			prToken->rPktDmaAddr = 0;
 			prToken->u4PktDmaLength = 0;
-			prToken->rDmaAddr       = 0;
-			prToken->u4DmaLength    = 0;
-			prToken->fgInUsed       = FALSE;
-
-			smp_wmb();
-
-			if (prMemOps->unmapTxBuf) {
-				if (local_rPktDmaAddr)
-					prMemOps->unmapTxBuf(prHifInfo,
-										 local_rPktDmaAddr,
-										 local_u4PktDmaLength);
-				if (local_rDmaAddr)
-					prMemOps->unmapTxBuf(prHifInfo,
-										 local_rDmaAddr,
-										 local_u4DmaLength);
-			}
-
-			/* Notify upper layers so the MSDU doesn't linger in
-			 * the pending TX queue for the life timer to find.
-			 * Without this, SAA retries into a freed/poisoned
-			 * MSDU and halWpdmaWriteMsdu sees prPacket == NULL. */
-
-
-
-
-
-			if (local_prMsduInfo) {
-
-				if (local_prMsduInfo->pfTxDoneHandler)
-					local_prMsduInfo->pfTxDoneHandler(prAdapter, local_prMsduInfo, TX_RESULT_DROPPED_IN_DRIVER);
-
-				/* prPacket was DMA-submitted to HW before this token
-				 * was marked in-use. By SER recovery time it is either
-				 * already freed by a TX-done interrupt or was never
-				 * validly initialized (token set up mid-flight).
-				 * Either way cnmMemFree/dev_kfree_skb must not touch
-				 * it — null it so cnmPktFree and nicTxFreePacket both
-				 * skip the packet free and only recycle the MSDU_INFO
-				 * struct itself. */
-				local_prMsduInfo->prPacket = NULL;
-
-				if (local_prMsduInfo->eSrc == TX_PACKET_MGMT)
-					cnmMgtPktFree(prAdapter,
-								  local_prMsduInfo);
-				else {
-					nicTxFreePacket(prAdapter,
-									local_prMsduInfo,
-									FALSE);
-					nicTxReturnMsduInfo(prAdapter,
-										local_prMsduInfo);
-				}
-			}
-
-		} else {
+			prToken->rDmaAddr = 0;
+			prToken->u4DmaLength = 0;
 			prToken->fgInUsed = FALSE;
 		}
-
 		/* Return token to the free stack */
 		prTokenInfo->aprTokenStack[u4Idx] = prToken;
+		spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
+
+		if (!was_in_use)
+			continue;
+
+		DBGLOG(HAL, WARN,
+		       "Resetting active token[%u]! Protecting against race.\n",
+		       u4Idx);
+
+		if (prMemOps->unmapTxBuf) {
+			if (local_rPktDmaAddr)
+				prMemOps->unmapTxBuf(prHifInfo,
+						     local_rPktDmaAddr,
+						     local_u4PktDmaLength);
+			if (local_rDmaAddr)
+				prMemOps->unmapTxBuf(prHifInfo,
+						     local_rDmaAddr,
+						     local_u4DmaLength);
+		}
+
+		if (!local_prMsduInfo)
+			continue;
+
+		/* The MSDU may already have been freed by the TX lifetime
+		 * timeout or a TX-done event.  Freeing it again links the same
+		 * entry into the free list twice (circular list -> the free
+		 * list walkers spin forever in softirq). */
+		if (halMsduIsOnFreeList(prAdapter, local_prMsduInfo)) {
+			DBGLOG(HAL, ERROR,
+			       "[RESET-TOK] tok[%u] msdu %p already freed, skip\n",
+			       u4Idx, local_prMsduInfo);
+			continue;
+		}
+
+		local_prMsduInfo->prToken = NULL;
+		if (local_prMsduInfo->pfTxDoneHandler)
+			local_prMsduInfo->pfTxDoneHandler(prAdapter,
+				local_prMsduInfo, TX_RESULT_DROPPED_IN_DRIVER);
+
+		/* prPacket points into the token bounce buffer or an skb that
+		 * is not ours to free here; only recycle the MSDU_INFO. */
+		local_prMsduInfo->prPacket = NULL;
+
+		if (local_prMsduInfo->eSrc == TX_PACKET_MGMT) {
+			cnmMgtPktFree(prAdapter, local_prMsduInfo);
+		} else {
+			nicTxFreePacket(prAdapter, local_prMsduInfo, FALSE);
+			nicTxReturnMsduInfo(prAdapter, local_prMsduInfo);
+		}
 	}
+
+	spin_lock_irqsave(&prTokenInfo->rTokenLock, flags);
 	prTokenInfo->u4UsedCnt = 0;
+	spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
 }
 
 
@@ -1640,17 +1683,20 @@ u_int8_t halProcessToken(IN struct ADAPTER *prAdapter,
 				   halGetMsduTokenFreeCnt(prAdapter));
 #else
 	prMsduInfo = prTokenEntry->prMsduInfo;
-	prMsduInfo->prToken = NULL;
+	/* NULL when the MSDU was already freed (lifetime timeout / SER reset) */
+	if (prMsduInfo) {
+		prMsduInfo->prToken = NULL;
 
-	DBGLOG_LIMITED(HAL, TRACE,
-				   "MsduRpt: Tok[%u] Msdu[0x%p] TxDone[%u] Free[%u]\n",
-				   u4Token, prMsduInfo,
-				   (prMsduInfo->pfTxDoneHandler ? TRUE : FALSE),
-				   halGetMsduTokenFreeCnt(prAdapter));
+		DBGLOG_LIMITED(HAL, TRACE,
+			       "MsduRpt: Tok[%u] Msdu[0x%p] TxDone[%u] Free[%u]\n",
+			       u4Token, prMsduInfo,
+			       (prMsduInfo->pfTxDoneHandler ? TRUE : FALSE),
+			       halGetMsduTokenFreeCnt(prAdapter));
 
-	if (!prMsduInfo->pfTxDoneHandler) {
-		QUEUE_INSERT_TAIL(prFreeQueue,
-						  (struct QUE_ENTRY *) prMsduInfo);
+		if (!prMsduInfo->pfTxDoneHandler) {
+			QUEUE_INSERT_TAIL(prFreeQueue,
+					  (struct QUE_ENTRY *) prMsduInfo);
+		}
 	}
 #endif
 	if (prMemOps->unmapTxBuf) {
@@ -4972,6 +5018,21 @@ static void halStartSerTimer(IN struct ADAPTER *prAdapter)
 	mod_timer(&prHifInfo->rSerTimer,
 			  jiffies + HIF_SER_TIMEOUT * HZ / MSEC_PER_SEC);
 	DBGLOG(HAL, INFO, "Start SER timer\n");
+}
+
+/* Stop SER recovery before teardown: no timer callback or recovery state may
+ * outlive the token/ring free in wlanRemove. */
+void halQuiesceSer(IN struct ADAPTER *prAdapter)
+{
+	struct GL_HIF_INFO *prHifInfo = &prAdapter->prGlueInfo->rHifInfo;
+
+#if CFG80211_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+	timer_delete_sync(&prHifInfo->rSerTimer);
+#else
+	del_timer_sync(&prHifInfo->rSerTimer);
+#endif
+	prHifInfo->rErrRecoveryCtl.u4Status = 0;
+	prHifInfo->rErrRecoveryCtl.eErrRecovState = ERR_RECOV_STOP_IDLE;
 }
 
 void halHwRecoveryFromError(IN struct ADAPTER *prAdapter)

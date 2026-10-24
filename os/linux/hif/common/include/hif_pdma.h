@@ -555,6 +555,9 @@ uint32_t halWpdmaGetRxDmaDoneCnt(IN struct GLUE_INFO *prGlueInfo,
 				 IN uint8_t ucRingNum);
 void halInitMsduTokenInfo(IN struct ADAPTER *prAdapter);
 void halUninitMsduTokenInfo(IN struct ADAPTER *prAdapter);
+void halDetachMsduFromToken(IN struct ADAPTER *prAdapter,
+			    IN struct MSDU_INFO *prMsduInfo);
+void halQuiesceSer(IN struct ADAPTER *prAdapter);
 uint32_t halGetMsduTokenFreeCnt(IN struct ADAPTER *prAdapter);
 struct MSDU_TOKEN_ENTRY *halGetMsduTokenEntry(IN struct ADAPTER *prAdapter,
 					      uint32_t u4TokenNum);
