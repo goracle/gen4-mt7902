@@ -122,6 +122,7 @@ static void SetTestChannel(uint8_t *pucPrimaryChannel);
 #endif
 /* nic_uni.h */
 extern PROCESS_LEGACY_TO_UNI_FUNCTION arUniCmdTable[];
+extern int nicUniCmdFwRoute(uint8_t ucCID, uint32_t u4Len);
 extern PROCESS_LEGACY_TO_UNI_FUNCTION arUniExtCmdTable[];
 /******************************************************************************
  *                              F U N C T I O N S
@@ -10774,7 +10775,11 @@ uint32_t wlanSendSetQueryCmdAdv(IN struct ADAPTER *prAdapter,
     prChipInfo = prAdapter->chip_info;
 
     /* ===== UNI CMD DISPATCH ===== */
+    if (nicUniCmdFwRoute(ucCID, u4SetQueryInfoLen) < 0)
+        return WLAN_STATUS_SUCCESS;
+
     if (ucCID < CMD_ID_END &&
+        nicUniCmdFwRoute(ucCID, u4SetQueryInfoLen) == 0 &&
         arUniCmdTable[ucCID]) {
 
         struct WIFI_UNI_SETQUERY_INFO rUniInfo;

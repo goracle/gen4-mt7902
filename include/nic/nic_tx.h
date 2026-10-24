@@ -193,6 +193,19 @@
 #define NIC_TX_DESC_AND_PADDING_LENGTH \
 	(NIC_TX_DESC_LONG_FORMAT_LENGTH + NIC_TX_DESC_PADDING_LENGTH)
 
+/*
+ * Mgmt frames sent on the data ring use cut-through with the token buffer
+ *   [TXD][TXP][frame]
+ * NIC_TX_CT_TXP_LEN is the TXP size (== chip_info->txd_append_size, checked
+ * at runtime in halTxBuildMgmtCtTxp). The one predicate below is shared by
+ * the copy (pcie.c) and the ring/TXP code (hal_pdma.c) so they cannot drift.
+ */
+#define NIC_TX_CT_TXP_LEN	32
+#define NIC_TX_IS_MGMT_CT_TXP(_prMsduInfo) \
+	((_prMsduInfo) && (_prMsduInfo)->eSrc == TX_PACKET_MGMT && \
+	 (_prMsduInfo)->fgMgmtUseDataQ)
+
+
 /* Tx header padding (TXD.HeaderPadding)  */
 /* Warning!! To use MAC header padding, every Tx packet must be decomposed */
 #define NIC_TX_DESC_HEADER_PADDING_LENGTH       0	/* in unit of bytes */

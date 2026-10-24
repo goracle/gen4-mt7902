@@ -247,10 +247,17 @@
 		*(_pV) = 0xDEADFEED; \
 }
 
+
+void mt7902_reglog_add(u32 off, u32 val);
+
 #define RTMP_IO_WRITE32(_A, _R, _V) \
 { \
-	if (likely((_A)->CSRBaseAddress)) \
-		writel(_V, (void *)((_A)->CSRBaseAddress + (_R))); \
+	if (likely((_A)->CSRBaseAddress)) { \
+		u32 __rl_r = (_R); \
+		u32 __rl_v = (_V); \
+		writel(__rl_v, (void *)((_A)->CSRBaseAddress + __rl_r)); \
+		mt7902_reglog_add(__rl_r, __rl_v); \
+	} \
 }
 
 /*******************************************************************************

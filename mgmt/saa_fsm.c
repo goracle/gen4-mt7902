@@ -284,42 +284,6 @@ static uint32_t saa_perform_auth_send(
 
 
 
-{
-	uint32_t u4ExtVal = 0;
-	const uint32_t u4TargetExt = 0x81000004;
-	const uint32_t u4RegAddr = 0x7c024600;
-
-	HAL_MCR_RD(prAdapter, u4RegAddr, &u4ExtVal);
-
-	if (u4ExtVal != u4TargetExt) {
-		DBGLOG(HAL, WARN,
-		       "[AUTH-GATE] TX_RING0_EXT_CTRL (0x%08x) needs re-arm. Current: 0x%08x\n",
-		       u4RegAddr, u4ExtVal);
-
-		if (prAdapter->fgIsFwOwn) {
-			DBGLOG(HAL, WARN, "[AUTH-GATE] FW owns hardware — reclaiming driver own\n");
-			prAdapter->fgIsFwOwn = TRUE;
-			if (!halSetDriverOwn(prAdapter)) {
-				DBGLOG(HAL, ERROR, "[AUTH-GATE] halSetDriverOwn failed — TX will ghost\n");
-			}
-		}
-
-		HAL_MCR_WR(prAdapter, u4RegAddr, u4TargetExt);
-		udelay(10);
-		HAL_MCR_RD(prAdapter, u4RegAddr, &u4ExtVal);
-
-		if (u4ExtVal == 0x0) {
-			DBGLOG(HAL, ERROR,
-			       "[AUTH-GATE] FATAL: Register still ghosting after driver own reclaim\n");
-		} else if (u4ExtVal != u4TargetExt) {
-			DBGLOG(HAL, ERROR,
-			       "[AUTH-GATE] RE-ARM FAILED: Expected 0x%08x, Got 0x%08x\n",
-			       u4TargetExt, u4ExtVal);
-		} else {
-			DBGLOG(HAL, INFO, "[AUTH-GATE] RE-ARM SUCCESS\n");
-		}
-	}
-}
 
 
 

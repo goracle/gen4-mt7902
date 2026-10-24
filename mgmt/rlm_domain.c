@@ -1499,6 +1499,10 @@ void rlmDomainSendDomainInfoCmd_V2(struct ADAPTER *prAdapter)
 		sizeof(struct CMD_DOMAIN_CHANNEL);
 #endif
 
+	if (!prChs->u1ActiveChNum2g && !prChs->u1ActiveChNum5g)
+		DBGLOG(RLM, ERROR,
+			   "domain info has 0 active channels, FW gets no usable channel\n");
+
 	DBGLOG(RLM, INFO,
 	       "rlmDomainSendDomainInfoCmd_V2(), buff_valid_size = 0x%x\n",
 	       buff_valid_size);

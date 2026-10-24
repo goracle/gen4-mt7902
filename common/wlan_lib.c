@@ -1555,6 +1555,15 @@ wlanAdapterStart_NicCapAndConfig(struct ADAPTER *prAdapter,
 
     wlanUpdateBasicConfig(prAdapter);
 
+    { /* mt7921_run_firmware() ends with fw_log_2_host(ctrl=1) */
+        struct CMD_FW_LOG_2_HOST_CTRL rFwLog = {
+            .ucFwLog2HostCtrl = 1, .ucMcuDest = 0 };
+
+        wlanSendSetQueryCmd(prAdapter, CMD_ID_FW_LOG_2_HOST, TRUE, FALSE,
+                    FALSE, NULL, NULL, sizeof(rFwLog),
+                    (uint8_t *)&rFwLog, NULL, 0);
+    }
+
     if (!bAtResetFlow) {
         uint32_t u4Idx;
 
@@ -9325,6 +9334,10 @@ uint32_t wlanCfgParseToFW(int8_t **args, int8_t *args_size,
  * @return none
  */
 /*----------------------------------------------------------------------------*/
+static int skip_feature_to_fw = 1;
+module_param(skip_feature_to_fw, int, 0444);
+MODULE_PARM_DESC(skip_feature_to_fw, "1 = skip wlanFeatureToFw (debug)");
+
 void wlanFeatureToFw(IN struct ADAPTER *prAdapter)
 {
     struct WLAN_CFG_ENTRY *prWlanCfgEntry;
@@ -9340,6 +9353,14 @@ void wlanFeatureToFw(IN struct ADAPTER *prAdapter)
 
     if (!prAdapter)
         return;
+
+
+    if (skip_feature_to_fw) {
+        DBGLOG(INIT, ERROR, "wlanFeatureToFw: SKIPPED (skip_feature_to_fw=1)\n");
+        return;
+    }
+
+     kalMemSet(&rCmdV1Header, 0, sizeof(struct CMD_HEADER));
 
     kalMemSet(&rCmdV1Header, 0, sizeof(struct CMD_HEADER));
     rCmdV1Header.cmdType = CMD_TYPE_SET;
@@ -9386,7 +9407,7 @@ void wlanFeatureToFw(IN struct ADAPTER *prAdapter)
             current_offset + sizeof(struct CMD_FORMAT_V1) > MAX_CMD_BUFFER_LENGTH) {
             if (ucTimes > 0) {
                 rCmdV1Header.itemNum = ucTimes;
-                DBGLOG(INIT, INFO,
+                DBGLOG(INIT, ERROR,
                        "wlanFeatureToFw: flushing batch %u (%u items, %zu bytes)\n",
                        ucBatchNum, ucTimes, current_offset);
                 rStatus = wlanSendSetQueryCmd(prAdapter,
@@ -9429,7 +9450,7 @@ void wlanFeatureToFw(IN struct ADAPTER *prAdapter)
             }
         }
 
-        DBGLOG(INIT, TRACE,
+        DBGLOG(INIT, ERROR,
                "wlanFeatureToFw: queuing entry[%u] '%s'='%s'\n",
                i, prWlanCfgEntry->aucKey, prWlanCfgEntry->aucValue);
 
@@ -9443,7 +9464,7 @@ void wlanFeatureToFw(IN struct ADAPTER *prAdapter)
     /* Final flush */
     if (ucTimes > 0) {
         rCmdV1Header.itemNum = ucTimes;
-        DBGLOG(INIT, INFO,
+        DBGLOG(INIT, ERROR,
                "wlanFeatureToFw: final flush batch %u (%u items, %zu bytes)\n",
                ucBatchNum, ucTimes, current_offset);
         rStatus = wlanSendSetQueryCmd(prAdapter,

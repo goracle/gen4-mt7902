@@ -10461,6 +10461,30 @@ void nicUniCmdEventQueryMcrRead(IN struct ADAPTER *prAdapter,
 	nicCmdEventQueryMcrRead(prAdapter, prCmdInfo, (uint8_t *)&legacy);
 }
 
+/* Routing for the MT7902 (connac2, mt7921-class) FW, mirroring mt76:
+ * <0: do not send, 0: UNI table, >0: legacy CE.
+ */
+int nicUniCmdFwRoute(uint8_t ucCID, uint32_t u4Len)
+{
+	switch (ucCID) {
+	case CMD_ID_SET_DBDC_PARMS:
+	case CMD_ID_BASIC_CONFIG:
+	case CMD_ID_LOG_UI_INFO:
+		DBGLOG(REQ, WARN, "CID 0x%02x not sent: not in mt76 mt7921 set\n",
+			   ucCID);
+		return -1;
+	case CMD_ID_SET_DOMAIN_INFO:
+		/* mt7921 FW takes CE 0x0f only; UNI 0x15 is NOT_SUPPORTED */
+		if (u4Len == sizeof(struct CMD_SET_DOMAIN_INFO)) {
+			DBGLOG(REQ, WARN, "domain V1 layout not sent\n");
+			return -1;
+		}
+		return 1;
+	default:
+		return 0;
+	}
+}
+
 PROCESS_LEGACY_TO_UNI_FUNCTION arUniCmdTable[CMD_ID_END] = {
 	[0 ... CMD_ID_END - 1] = NULL,
 	[CMD_ID_SCAN_REQ_V2] = nicUniCmdScanReqV2,
@@ -10536,7 +10560,11 @@ wlanSendSetQueryCmdHelper(IN struct ADAPTER *prAdapter,
 		return WLAN_STATUS_NOT_ACCEPTED;
 	}
 
-	if (!arUniCmdTable[ucCID])
+	if (nicUniCmdFwRoute(ucCID, u4SetQueryInfoLen) < 0)
+		return WLAN_STATUS_SUCCESS;
+
+	if (nicUniCmdFwRoute(ucCID, u4SetQueryInfoLen) > 0 ||
+		!arUniCmdTable[ucCID])
 		return wlanSendSetQueryCmdAdv(prAdapter,
 			ucCID, ucExtCID, fgSetQuery, fgNeedResp, fgIsOid,
 			pfCmdDoneHandler, pfCmdTimeoutHandler,

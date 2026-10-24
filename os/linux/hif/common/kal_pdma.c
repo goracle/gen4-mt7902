@@ -234,6 +234,32 @@ u_int8_t kalDevRegRead(IN struct GLUE_INFO *prGlueInfo,
  * \retval FALSE         operation fail
  */
 /*----------------------------------------------------------------------------*/
+#define REGLOG_MAX 2048
+static u32 g_reglog[REGLOG_MAX][2];
+static atomic_t g_reglog_n = ATOMIC_INIT(0);
+static atomic_t g_reglog_done = ATOMIC_INIT(0);
+
+void mt7902_reglog_add(u32 off, u32 val)
+{
+	int n, i, m;
+
+	if (atomic_read(&g_reglog_done))
+		return;
+	n = atomic_fetch_add(1, &g_reglog_n);
+	if (n < REGLOG_MAX) {
+		g_reglog[n][0] = off;
+		g_reglog[n][1] = val;
+	}
+	/* same stop condition as mmio_diff.py: GLO_CFG with both DMA-enable bits */
+	if (off == 0xd4208 && (val & 0x5) == 0x5 &&
+	    !atomic_xchg(&g_reglog_done, 1)) {
+		m = n + 1 < REGLOG_MAX ? n + 1 : REGLOG_MAX;
+		pr_info("REGLOG MAP 0.0 1 0x0 0x0 0x1000000 0x0 0\n");
+		for (i = 0; i < m; i++)
+			pr_info("REGLOG W 4 0.0 1 %x %x 0 0\n",
+				g_reglog[i][0], g_reglog[i][1]);
+	}
+}
 u_int8_t kalDevRegWrite(IN struct GLUE_INFO *prGlueInfo,
 	IN uint32_t u4Register, IN uint32_t u4Value)
 {
@@ -284,6 +310,7 @@ u_int8_t kalDevRegWrite(IN struct GLUE_INFO *prGlueInfo,
 	/* Static mapping */
 	if (halChipToStaticMapBusAddr(prGlueInfo, u4Register, &u4BusAddr)) {
 		RTMP_IO_WRITE32(prHifInfo, u4BusAddr, u4Value);
+
 	} else {
 		DBGLOG(HAL, ERROR, "Not exist CR write[0x%08x] value[0x%08x]\n",
 		       u4Register, u4Value);

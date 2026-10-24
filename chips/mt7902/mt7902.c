@@ -200,11 +200,22 @@ void mt7902EnableInterrupt(
 	HAL_MCR_WR(prAdapter,
 		WF_WFDMA_HOST_DMA0_HOST_INT_ENA_ADDR, IntMask.word);
 
+	/* MCU2HOST SW INT mask (WFDMA0 + 0x1f4).  The mmiotrace shows this
+	 * RMW on every IST pass: read 0x3d, write 0xffff, i.e. it unmasks all
+	 * 16 SW-INT sources, including MT_MCU_CMD_STOP_DMA (bit2) and the
+	 * other error bits (1-5).  mt76 writes 0x1 (WAKE_RX_PCIE) once and
+	 * never unmasks the error bits (mt792x_dma.c:183).  Default here is the
+	 * mt76 value; build with -DMT7902_SW_INT_MASK_VAL=0xffff for the old
+	 * behaviour.  NOTE: this only stops the host from seeing the FW's
+	 * stop-DMA request; it does not show whether the FW is really failing. */
+#ifndef MT7902_SW_INT_MASK_VAL
+#define MT7902_SW_INT_MASK_VAL	0xffff	/* temporarily unmasked so SER fires and the dummy CR dump prints; mt76 value is 0x1 */
+#endif
 	if (prChipInfo->is_support_asic_lp)
 		HAL_MCR_WR_FIELD(prAdapter,
 				 CONNAC2X_WPDMA_MCU2HOST_SW_INT_MASK
 				 (u4HostWpdamBase),
-				 BITS(0, 15),
+				 MT7902_SW_INT_MASK_VAL,
 				 0,
 				 BITS(0, 15));
 
@@ -731,12 +742,93 @@ void mt79xx_mcu2host_dump(struct ADAPTER *prAdapter, const char *tag)
 	       (glo >> 20) & 1, romidx);
 }
 
+/*
+ * Diagnostic: probe WFDMA0 registers straight through the mapped BAR0,
+ * bypassing HAL_MCR_RD/WR and its address translation.
+ *
+ * Background: mt7921e's mmiotrace shows only WRITES to BAR0+0xd4600
+ * (0x4, then 0x01000004) and no reads, so "reads back 0" has never been
+ * shown to mean "write dropped".  This helper checks that directly and
+ * uses ring BASE (0x300) as a positive control: that register is known
+ * to latch values.  Every register is restored after the test.
+ */
+#define MT7902_DIAG_WFDMA0_PCIE_OFF	0xd4000
+
+static void mt7902DiagRawWfdma(struct GLUE_INFO *prGlueInfo, const char *tag)
+{
+	void __iomem *bar = prGlueInfo->rHifInfo.CSRBaseAddress;
+	void __iomem *w0;
+	uint32_t orig, rb1, rb2, rb3, rst, glo, ext0, cnt_orig, rb4;
+
+	if (!bar) {
+		DBGLOG(INIT, ERROR, "[RAWDIAG %s] CSRBaseAddress NULL\n", tag);
+		return;
+	}
+	w0 = bar + MT7902_DIAG_WFDMA0_PCIE_OFF;
+
+	rst  = readl(w0 + 0x100);
+	glo  = readl(w0 + 0x208);
+	ext0 = readl(w0 + 0x2b0);
+	DBGLOG(INIT, ERROR,
+	       "[RAWDIAG %s] bar=%p RST(0x100)=0x%08x GLO_CFG(0x208)=0x%08x GLO_CFG_EXT0(0x2b0)=0x%08x\n",
+	       tag, bar, rst, glo, ext0);
+
+	/* Positive control: TX ring0 BASE should latch an arbitrary value. */
+	orig = readl(w0 + 0x300);
+	writel(0x5a5a5a00, w0 + 0x300);
+	wmb();
+	rb1 = readl(w0 + 0x300);
+	writel(orig, w0 + 0x300);
+	wmb();
+	DBGLOG(INIT, ERROR,
+	       "[RAWDIAG %s] CTRL TX0_BASE@0x300 orig=0x%08x wrote=0x5a5a5a00 rb=0x%08x restored=0x%08x\n",
+	       tag, orig, rb1, readl(w0 + 0x300));
+
+	/* TX ring0 EXT_CTRL, mt76 order: 0x4 then 0x01000004, then delayed. */
+	orig = readl(w0 + 0x600);
+	writel(0x00000004, w0 + 0x600);
+	wmb();
+	rb1 = readl(w0 + 0x600);
+	writel(0x01000004, w0 + 0x600);
+	wmb();
+	rb2 = readl(w0 + 0x600);
+	kalUdelay(200);
+	rb3 = readl(w0 + 0x600);
+	DBGLOG(INIT, ERROR,
+	       "[RAWDIAG %s] TX0_EXT_CTRL@0x600 orig=0x%08x w4->rb=0x%08x w01000004->rb=0x%08x +200us=0x%08x\n",
+	       tag, orig, rb1, rb2, rb3);
+	writel(orig, w0 + 0x600);
+	wmb();
+
+	/* mt76 programs TX0 CNT (0x304 = 0x800) before EXT_CTRL; check whether
+	 * a nonzero ring size lets EXT_CTRL latch. */
+	cnt_orig = readl(w0 + 0x304);
+	writel(0x800, w0 + 0x304);
+	wmb();
+	writel(0x01000004, w0 + 0x600);
+	wmb();
+	rb4 = readl(w0 + 0x600);
+	DBGLOG(INIT, ERROR,
+	       "[RAWDIAG %s] CNT-TEST TX0_CNT@0x304 orig=0x%08x -> EXT_CTRL rb=0x%08x\n",
+	       tag, cnt_orig, rb4);
+	writel(orig, w0 + 0x600);
+	writel(cnt_orig, w0 + 0x304);
+	wmb();
+
+	/* Neighbouring EXT_CTRL registers (read only; RX0=0x680, RX1=0x684). */
+	DBGLOG(INIT, ERROR,
+	       "[RAWDIAG %s] ro: 0x604=0x%08x 0x608=0x%08x 0x680=0x%08x 0x684=0x%08x 0x688=0x%08x\n",
+	       tag, readl(w0 + 0x604), readl(w0 + 0x608), readl(w0 + 0x680),
+	       readl(w0 + 0x684), readl(w0 + 0x688));
+}
+
 void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 {
 	struct ADAPTER *prAdapter = prGlueInfo->prAdapter;
 	uint32_t glo = 0;
 	static unsigned int u4PrefetchCalls;
-
+	DBGLOG(INIT, ERROR,
+		   "[PREFETCH-TRACE] manual-prefetch callback entered\n");
 	u4PrefetchCalls++;
 	DBGLOG(INIT, ERROR, "%s: call #%u ADAPTER_FLAG_HW_ERR=%d fgIsBusAccessFailed=%d\n",
 		__func__, u4PrefetchCalls,
@@ -786,9 +878,13 @@ void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 		uint32_t g = 0;
 		HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &g);
 		DBGLOG(INIT, ERROR, "%s: GLO_CFG on entry=0x%08x\n", __func__, g);
-		g &= ~(MT_WFDMA0_GLO_CFG_TX_DMA_EN | MT_WFDMA0_GLO_CFG_RX_DMA_EN);
-		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, g);
-		{
+		g &= ~(MT_WFDMA0_GLO_CFG_TX_DMA_EN |
+			   MT_WFDMA0_GLO_CFG_RX_DMA_EN |
+			   MT_WFDMA0_GLO_CFG_CSR_DISP_BASE_PTR_CHAIN_EN |
+			   MT7902_GLO_CFG_OMIT_TX_INFO |
+			   MT7902_GLO_CFG_OMIT_RX_INFO_PFET2);
+
+		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, g);		{
 			uint32_t retries = 100;
 			do {
 				HAL_MCR_RD(prAdapter,
@@ -802,6 +898,36 @@ void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 		}
 		HAL_MCR_RD(prAdapter, WF_WFDMA_HOST_DMA0_WPDMA_GLO_CFG_ADDR, &g);
 		DBGLOG(INIT, ERROR, "%s: GLO_CFG after disable=0x%08x\n", __func__, g);
+	}
+
+	/* DMASHDL bypass BEFORE the logic reset, in the order of the good mt76
+	 * trace (mt76-mmio-good.txt, just ahead of the first 0xd4600 write):
+	 *   R/W 0xd42b0: 0x28c004df -> 0x28c0049f   (GLO_CFG_EXT0 bit6 clear)
+	 *   R/W 0xd6004: 0x0 -> 0x10000000          (DMASHDL_SW_CONTROL bit28)
+	 *   RST 0xd4100: 0x30 -> 0x0 -> 0x30        (logic reset)
+	 *   ring CSRs, then EXT_CTRL (0xd4600) = 0x4
+	 * This driver used to do the bypass only after the EXT_CTRL writes. */
+	{
+		const uint32_t pre_ext0_addr = WF_WFDMA_HOST_DMA0_BASE + 0x2b0;
+		const uint32_t pre_swc_addr  = WF_WFDMA_HOST_DMA0_BASE + 0x2000 + 0x04;
+		uint32_t pre_ext0 = 0xbad0bad0, pre_swc = 0xbad0bad0;
+		uint32_t pre_ext0_b, pre_swc_b;
+
+		HAL_MCR_RD(prAdapter, pre_ext0_addr, &pre_ext0);
+		HAL_MCR_RD(prAdapter, pre_swc_addr, &pre_swc);
+		pre_ext0_b = pre_ext0;
+		pre_swc_b = pre_swc;
+		pre_ext0 &= ~BIT(6);
+		pre_swc |= BIT(28);
+		HAL_MCR_WR(prAdapter, pre_ext0_addr, pre_ext0);
+		HAL_MCR_WR(prAdapter, pre_swc_addr, pre_swc);
+		pre_ext0 = pre_swc = 0xbad0bad0;
+		HAL_MCR_RD(prAdapter, pre_ext0_addr, &pre_ext0);
+		HAL_MCR_RD(prAdapter, pre_swc_addr, &pre_swc);
+		DBGLOG(INIT, ERROR,
+		       "%s: PRE-RESET DMASHDL bypass EXT0@0x%08x 0x%08x->0x%08x  SW_CTRL@0x%08x 0x%08x->0x%08x\n",
+		       __func__, pre_ext0_addr, pre_ext0_b, pre_ext0,
+		       pre_swc_addr, pre_swc_b, pre_swc);
 	}
 
 	/* Reset WFDMA logic - this is what actually opens the EXT_CTRL write
@@ -834,18 +960,32 @@ void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 		halWpdmaInitTxRing(prGlueInfo);
 		halWpdmaInitRxRing(prGlueInfo);
 #ifndef MT7902_RX_DIDX_RESET
-#define MT7902_RX_DIDX_RESET 1
+#define MT7902_RX_DIDX_RESET 0
 #endif
 #if MT7902_RX_DIDX_RESET
 		/* mt76 queue reset writes RX ring 0 and 2 DIDX <- 0 */
 		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_BASE + 0x50c, 0);
 		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_BASE + 0x52c, 0);
 #endif
+/* Superseded by halWpdmaInitTxRing(), which now writes TX DIDX itself in
+ * mt76 order (hal_pdma.c, MT7902_MT76_RING_ORDER).  Left as an opt-in. */
+#ifndef MT7902_TX_DIDX_RESET
+#define MT7902_TX_DIDX_RESET 0
+#endif
+#if MT7902_TX_DIDX_RESET
+		/* mt76-mmio-good.txt: queue reset also writes DIDX <- 0 for TX
+		 * rings 0, 15 and 16 (0xd430c, 0xd43fc, 0xd440c).  The vendor ring
+		 * init never writes TX DIDX. */
+		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_BASE + 0x30c, 0);
+		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_BASE + 0x3fc, 0);
+		HAL_MCR_WR(prAdapter, WF_WFDMA_HOST_DMA0_BASE + 0x40c, 0);
+#endif
 		mt79xx_wfdma_dump(prAdapter, "prefetch-after-ring-reprogram");
 	}
 
 	mt79xx_wfdma_dump(prAdapter, "prefetch-after-logic-reset");
 
+#if 0 /* EXT_CTRL pattern test: writes 0x5a5a0004 twice, mt76 does not */
 	/* Diagnostic: can TX_RING0_EXT_CTRL hold an arbitrary value at all?
 	 * Write a throwaway pattern via the macro address and via the raw
 	 * mt76 offset (WFDMA0 + 0x600) and read both back.  A pattern that
@@ -869,6 +1009,10 @@ void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 		       (uint32_t)WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR,
 		       rb_m, raw, rb_r);
 	}
+#endif /* pattern test disabled: duplicate 0xd4600 writes not in mt76 */
+
+	/* Raw-BAR diagnostic, bypasses the HAL (see mt7902DiagRawWfdma). */
+	mt7902DiagRawWfdma(prGlueInfo, "after-logic-reset");
 
 	/* Step 1: write EXT_CTRL prefetch registers. */
 
@@ -914,6 +1058,28 @@ void mt7902Connac2xWfdmaManualPrefetch(struct GLUE_INFO *prGlueInfo)
 	HAL_MCR_WR(prAdapter,
 		   WF_WFDMA_HOST_DMA0_WPDMA_TX_RING16_EXT_CTRL_ADDR,
 		   PREFETCH(0x300, 0x4));
+
+/* TRACE A: read EXT_CTRL immediately after writes,
+ * before RST_DTX_PTR runs.
+ */
+{
+    uint32_t tx0 = 0, rx0 = 0, rx1 = 0;
+
+    HAL_MCR_RD(prAdapter,
+               WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR,
+               &tx0);
+    HAL_MCR_RD(prAdapter,
+               WF_WFDMA_HOST_DMA0_WPDMA_RX_RING0_EXT_CTRL_ADDR,
+               &rx0);
+    HAL_MCR_RD(prAdapter,
+               WF_WFDMA_HOST_DMA0_WPDMA_RX_RING1_EXT_CTRL_ADDR,
+               &rx1);
+
+    DBGLOG(INIT, ERROR,
+           "[EXT-TRACE A before DTX reset] TX0=0x%08x "
+           "RX0=0x%08x RX1=0x%08x\n",
+           tx0, rx0, rx1);
+}
 
 	/* Step 2: reset DMA TX index pointers.
 	 * mt76 does this between prefetch and GLO_CFG enable.
@@ -2357,9 +2523,7 @@ struct mt66xx_chip_info mt66xx_chip_info_mt7902 = {
 #if CFG_ENABLE_FW_DOWNLOAD
 	.asicEnableFWDownload = asicEnableFWDownload,
 #endif /* CFG_ENABLE_FW_DOWNLOAD */
-#if defined(_HIF_USB) || defined(_HIF_SDIO)
 	.asicDumpSerDummyCR = mt7961DumpSerDummyCR,
-#endif
 	.downloadBufferBin = wlanConnac2XDownloadBufferBin,
 	.constructBufferBinFileName = mt7902ConstructBufferBinFileName,
 	.is_support_hw_amsdu = TRUE,

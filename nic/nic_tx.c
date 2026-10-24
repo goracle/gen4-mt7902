@@ -3411,8 +3411,7 @@ u_int8_t nicTxProcessMngPacket(IN struct ADAPTER *prAdapter,
 		break;
 	}
 
-	if ((prMsduInfo->ucRateMode == MSDU_RATE_MODE_AUTO) &&
-	    (prMsduInfo->fgMgmtUseDataQ != TRUE))
+	if (prMsduInfo->ucRateMode == MSDU_RATE_MODE_AUTO)
 		nicTxSetPktLowestFixedRate(prAdapter, prMsduInfo);
 
 	prMsduInfo->fgIsTXDTemplateValid = FALSE;

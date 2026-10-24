@@ -1552,6 +1552,11 @@ bool halHifSwInfoInit(IN struct ADAPTER *prAdapter)
 	prHifInfo = &prAdapter->prGlueInfo->rHifInfo;
 	prBusInfo = prAdapter->chip_info->bus_info;
 	DBGLOG(INIT, ERROR,
+	       "[CHIPINFO] chip_info=%p chip_id=0x%x asicDumpSerDummyCR=%ps asicSerInit=%ps\n",
+	       prAdapter->chip_info, prAdapter->chip_info->chip_id,
+	       prAdapter->chip_info->asicDumpSerDummyCR,
+	       prAdapter->chip_info->asicSerInit);
+	DBGLOG(INIT, ERROR,
 		   "[HALSWINFO] eWfsysResetState=%d fgAllocMem will be=%d\n",
 		   prAdapter->eWfsysResetState,
 		   (prAdapter->eWfsysResetState != WFSYS_RESET_STATE_IDLE) ? 0 : 1);
@@ -3056,6 +3061,19 @@ int fgHalInitTrace = 0;
 #ifndef MT7902_RING_INIT_ONCE
 #define MT7902_RING_INIT_ONCE	1
 #endif
+/* mt76 ring CSR programming (see mt76-mmio-good.txt):
+ *   TX: CIDX=0, DIDX=0, CNT, BASE written last; only rings 0, 15 and 16;
+ *       ring 0 EXT_CTRL = 0x4 right after ring 0.
+ *   RX: CIDX=0, DIDX=0, CNT, BASE written last; only HW rings 0 and 2; the
+ *       CIDX <- size-1 kick comes after all rings are programmed.
+ *   Rings are programmed once, after the logic reset (the prefetch hook does
+ *   that), not before it as well.
+ * Build with -DMT7902_MT76_RING_ORDER=0 for the old vendor behaviour. */
+#ifndef MT7902_MT76_RING_ORDER
+#define MT7902_MT76_RING_ORDER	1
+#endif
+/* HW RX rings mt76 programs: RX0 @0x...500 (MCU events), RX2 @0x...520 (data) */
+#define MT7902_MT76_RX_HW(a)	(((a) & 0xfff) == 0x500 || ((a) & 0xfff) == 0x520)
 bool g_mt79xx_ring_inited;
 
 void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo, u_int8_t fgEnableDma)
@@ -3125,7 +3143,12 @@ void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo, u_int8_t fgEnableDma)
 	/* Init TX ring(s). Keep the function call as-is so any specialized
 	 * TX initialization logic in halWpdmaInitTxRing is preserved.
 	 */
-	halWpdmaInitTxRing(prGlueInfo);
+#if MT7902_MT76_RING_ORDER
+	/* the manual-prefetch hook resets WFDMA and re-programs the ring CSRs;
+	 * mt76 programs them only after the reset */
+	if (!(fgEnableDma && prBusInfo->wfdmaManualPrefetch))
+#endif
+		halWpdmaInitTxRing(prGlueInfo);
 
 #ifdef CFG_HAL_INIT_TRACE
 	{
@@ -3138,7 +3161,10 @@ void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo, u_int8_t fgEnableDma)
 #endif
 
 	/* Init RX ring base/size/index CSR */
-	halWpdmaInitRxRing(prGlueInfo);
+#if MT7902_MT76_RING_ORDER
+	if (!(fgEnableDma && prBusInfo->wfdmaManualPrefetch))
+#endif
+		halWpdmaInitRxRing(prGlueInfo);
 
 #ifdef CFG_HAL_INIT_TRACE
 	{
@@ -3192,6 +3218,24 @@ void halWpdmaInitRing(struct GLUE_INFO *prGlueInfo, u_int8_t fgEnableDma)
 	/* Now finalize DMA setup (this may enable DMA master bits) */
 	if (prBusInfo->pdmaSetup && fgEnableDma)
 		prBusInfo->pdmaSetup(prGlueInfo, TRUE);
+
+{
+	uint32_t tx0 = 0, rx0 = 0, rx1 = 0;
+
+	kalDevRegRead(prGlueInfo,
+		      WF_WFDMA_HOST_DMA0_WPDMA_TX_RING0_EXT_CTRL_ADDR,
+		      &tx0);
+	kalDevRegRead(prGlueInfo,
+		      WF_WFDMA_HOST_DMA0_WPDMA_RX_RING0_EXT_CTRL_ADDR,
+		      &rx0);
+	kalDevRegRead(prGlueInfo,
+		      WF_WFDMA_HOST_DMA0_WPDMA_RX_RING1_EXT_CTRL_ADDR,
+		      &rx1);
+
+	DBGLOG(INIT, ERROR,
+	       "[EXT-TRACE] after pdmaSetup(TRUE): TX0=%08x RX0=%08x RX1=%08x\n",
+	       tx0, rx0, rx1);
+}
 
 #ifdef CFG_HAL_INIT_TRACE
 	{
@@ -3282,6 +3326,20 @@ void halWpdmaInitTxRing(IN struct GLUE_INFO *prGlueInfo)
 		prTxRing->hw_cnt_addr =
 			prBusInfo->host_tx_ring_cnt_addr + offset;
 
+#if MT7902_MT76_RING_ORDER
+		/* mt76 order: CIDX, DIDX, CNT, BASE last; TX ring 1 is left alone */
+		if (i != TX_RING_DATA1_IDX_1) {
+			kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr,
+				       prTxRing->TxCpuIdx);
+			kalDevRegWrite(prGlueInfo, prTxRing->hw_didx_addr, 0);
+
+			kalDevRegRead(prGlueInfo, prTxRing->hw_cnt_addr, &u4Cnt);
+			u4Cnt &= ~0xfff;
+			u4Cnt |= (0xfff & TX_RING_SIZE);
+			kalDevRegWrite(prGlueInfo, prTxRing->hw_cnt_addr, u4Cnt);
+			kalDevRegWrite(prGlueInfo, prTxRing->hw_desc_base, phy_addr);
+		}
+#else
 		kalDevRegWrite(prGlueInfo, prTxRing->hw_desc_base, phy_addr);
 		kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr,
 					   prTxRing->TxCpuIdx);
@@ -3292,8 +3350,16 @@ void halWpdmaInitTxRing(IN struct GLUE_INFO *prGlueInfo)
 		kalDevRegWrite(prGlueInfo, prTxRing->hw_cnt_addr,
 					   u4Cnt);
 
+#endif
+
 		if (prBusInfo->tx_ring_ext_ctrl)
 			prBusInfo->tx_ring_ext_ctrl(prGlueInfo, prTxRing, i);
+#if MT7902_MT76_RING_ORDER
+		/* mt76 writes TX ring 0 EXT_CTRL = 0x4 right after the ring CSRs */
+		if (i == TX_RING_DATA0_IDX_0 && prBusInfo->wfdmaManualPrefetch &&
+		    prTxRing->hw_desc_base_ext)
+			kalDevRegWrite(prGlueInfo, prTxRing->hw_desc_base_ext, 0x4);
+#endif
 
 		DBGLOG(HAL, TRACE, "-->TX_RING_%d[0x%x]: Base=0x%x, Cnt=%d!\n",
 			   i, prHifInfo->TxRing[i].hw_desc_base,
@@ -3350,6 +3416,7 @@ void halWpdmaInitRxRing(IN struct GLUE_INFO *prGlueInfo)
 	struct RXD_STRUCT *pRxD;
 	uint32_t j = 0;
 	uint32_t u4Cnt = 0;
+	uint32_t u4HwMask = 0;
 
 	ASSERT(prGlueInfo);
 	prHifInfo = &prGlueInfo->rHifInfo;
@@ -3371,6 +3438,20 @@ void halWpdmaInitRxRing(IN struct GLUE_INFO *prGlueInfo)
 		phy_addr = ((uint64_t)prRxRing->Cell[0].AllocPa &
 					DMA_LOWER_32BITS_MASK);
 		prRxRing->RxCpuIdx = prRxRing->u4RingSize - 1;
+#if MT7902_MT76_RING_ORDER
+		/* mt76 order: CIDX=0, DIDX=0, CNT, BASE last; only HW rings 0 and 2.
+		 * The CIDX <- size-1 kick follows after every ring is programmed. */
+		if (MT7902_MT76_RX_HW((uint32_t)prRxRing->hw_desc_base)) {
+			u4HwMask |= BIT(i);
+			kalDevRegWrite(prGlueInfo, prRxRing->hw_cidx_addr, 0);
+			kalDevRegWrite(prGlueInfo, prRxRing->hw_didx_addr, 0);
+			kalDevRegRead(prGlueInfo, prRxRing->hw_cnt_addr, &u4Cnt);
+			u4Cnt &= ~0xfff;
+			u4Cnt |= (0xfff & prRxRing->u4RingSize);
+			kalDevRegWrite(prGlueInfo, prRxRing->hw_cnt_addr, u4Cnt);
+			kalDevRegWrite(prGlueInfo, prRxRing->hw_desc_base, phy_addr);
+		}
+#else
 		kalDevRegWrite(prGlueInfo, prRxRing->hw_desc_base, phy_addr);
 		kalDevRegWrite(prGlueInfo, prRxRing->hw_cidx_addr,
 					   prRxRing->RxCpuIdx);
@@ -3379,6 +3460,7 @@ void halWpdmaInitRxRing(IN struct GLUE_INFO *prGlueInfo)
 		u4Cnt &= ~0xfff;
 		u4Cnt |= (0xfff & prRxRing->u4RingSize);
 		kalDevRegWrite(prGlueInfo, prRxRing->hw_cnt_addr, u4Cnt);
+#endif
 		prRxRing->fgSwRead = false;
 
 		/* Reset DMADONE bit */
@@ -3413,6 +3495,17 @@ void halWpdmaInitRxRing(IN struct GLUE_INFO *prGlueInfo)
 			   i, prRxRing->hw_desc_base,
 			   phy_addr, prRxRing->u4RingSize);
 	}
+
+#if MT7902_MT76_RING_ORDER
+	/* mt76: hand the buffers to the DMA only after every ring is programmed */
+	for (i = 0; i < NUM_OF_RX_RING; i++) {
+		if (!(u4HwMask & BIT(i)))
+			continue;
+		prRxRing = &prHifInfo->RxRing[i];
+		kalDevRegWrite(prGlueInfo, prRxRing->hw_cidx_addr,
+			       prRxRing->RxCpuIdx);
+	}
+#endif
 }
 
 
@@ -3749,7 +3842,28 @@ bool halWpdmaWriteCmd(IN struct GLUE_INFO *prGlueInfo,
 	prTxRing->u4UsedCnt++;
 
 	wmb();
-	kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr, prTxRing->TxCpuIdx);
+	{
+		/* [CIDX-CHK] diagnostic: kalDevRegWrite() can return FALSE silently
+		 * (isValidRegAccess / chip-no-ack) and its result was ignored.  Read
+		 * CIDX back and log the first few mismatches.  NOTE: the read-back
+		 * also flushes the posted write, so if the stall disappears with this
+		 * in, that is a finding in itself. */
+		static int iCidxBad;
+		uint32_t u4CidxRb = 0xffffffff;
+		bool fgCidxOk;
+
+		fgCidxOk = kalDevRegWrite(prGlueInfo, prTxRing->hw_cidx_addr,
+					  prTxRing->TxCpuIdx);
+		kalDevRegRead(prGlueInfo, prTxRing->hw_cidx_addr, &u4CidxRb);
+		if ((!fgCidxOk || (u4CidxRb & 0xfff) != prTxRing->TxCpuIdx) &&
+		    iCidxBad < 20) {
+			iCidxBad++;
+			DBGLOG(HAL, ERROR,
+			       "[CIDX-CHK] CID=0x%02x wrote=%u write_ok=%d readback=0x%08x resetting=%d\n",
+			       prCmdInfo->ucCID, prTxRing->TxCpuIdx, fgCidxOk,
+			       u4CidxRb, kalIsResetting());
+		}
+	}
 
 	spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
 
@@ -3764,6 +3878,39 @@ bool halWpdmaWriteCmd(IN struct GLUE_INFO *prGlueInfo,
 			rmb();
 			printk(KERN_ERR "[mt7902] [CMD-TRACE post #%d] DMAD=%08x %08x %08x %08x (DDONE is ctrl bit31)\n",
 			       iCmdPost, pu4D[0], pu4D[1], pu4D[2], pu4D[3]);
+		}
+	}
+
+	/* [CMD-STALL] stage-boundary invariant: after FW download, the CMD ring
+	 * DIDX must advance while commands are outstanding.  Fires once when
+	 * DIDX has not moved for 50 ms with >=3 commands queued, and snapshots
+	 * SW_INT_STA / GLO_CFG / fw_state at that moment. */
+	{
+		static uint32_t u4LastDidx = 0xffffffff;
+		static unsigned long ulLastChange;
+		static bool fgStallDumped;
+		uint32_t u4Didx = 0, u4Outst;
+
+		if (prGlueInfo->prAdapter->fgIsFwDownloaded && !fgStallDumped) {
+			kalDevRegRead(prGlueInfo, prTxRing->hw_didx_addr, &u4Didx);
+			u4Didx &= MT_RING_DIDX_MASK;
+			u4Outst = (prTxRing->TxCpuIdx + TX_RING_SIZE - u4Didx) %
+				  TX_RING_SIZE;
+			if (u4Didx != u4LastDidx) {
+				u4LastDidx = u4Didx;
+				ulLastChange = jiffies;
+			} else if (u4Outst >= 3 &&
+				   time_after(jiffies,
+					      ulLastChange + msecs_to_jiffies(50))) {
+				fgStallDumped = true;
+				DBGLOG(HAL, ERROR,
+				       "[CMD-STALL] CID=0x%02x cpu=%u didx=%u outstanding=%u stuck>50ms\n",
+				       prCmdInfo->ucCID, prTxRing->TxCpuIdx,
+				       u4Didx, u4Outst);
+				mt79xx_wfdma_dump(prGlueInfo->prAdapter, "cmd-stall");
+				mt79xx_mcu2host_dump(prGlueInfo->prAdapter, "cmd-stall");
+				mt79xx_conn_on_misc_log(prGlueInfo->prAdapter, "cmd-stall");
+			}
 		}
 	}
 
@@ -3845,7 +3992,13 @@ static bool halWpdmaFillTxRing(struct GLUE_INFO *prGlueInfo,
 	 * leave the frame payload (bytes 32..61 for a 30-byte auth frame)
 	 * un-transferred, causing HIF_TX_FAILED from firmware.
 	 */
-	pTxD->SDLen0 = prToken->u4DmaLength;
+	if (NIC_TX_IS_MGMT_CT_TXP(prToken->prMsduInfo)) {
+		/* mgmt CT: descriptor covers [TXD][TXP] only; the TXP points at
+		 * the frame behind it (see halTxBuildMgmtCtTxp). */
+		pTxD->SDLen0 = NIC_TX_DESC_AND_PADDING_LENGTH + NIC_TX_CT_TXP_LEN;
+	} else {
+		pTxD->SDLen0 = prToken->u4DmaLength;
+	}
 	pTxD->SDPtr1 = 0;
 	pTxD->SDLen1 = 0;
 	pTxD->LastSec0 = 1;
@@ -3915,6 +4068,58 @@ static bool halWpdmaFillTxRing(struct GLUE_INFO *prGlueInfo,
 	return TRUE;
 }
 
+/*
+ * Mgmt frames on the data ring use CT with the token buffer laid out as
+ *   [TXD 32][TXP 32][frame]
+ * The ring descriptor covers TXD+TXP only. The TXP carries the MSDU token
+ * and the DMA address/length of the frame, so the firmware fetches the
+ * payload itself (the scheme mt76 uses with hw_txp). The payload address is
+ * only known once the buffer is mapped, so the TXP is built here: after
+ * mapTxBuf() and before flushCache() (which makes it visible to the device).
+ */
+static bool halTxBuildMgmtCtTxp(struct GLUE_INFO *prGlueInfo,
+				struct MSDU_TOKEN_ENTRY *prToken)
+{
+	struct mt66xx_chip_info *prChipInfo = prGlueInfo->prAdapter->chip_info;
+	uint8_t *pucBuf = (uint8_t *)prToken->prPacket;
+	uint32_t u4PayloadOfs = NIC_TX_DESC_AND_PADDING_LENGTH + NIC_TX_CT_TXP_LEN;
+	static int iDumped;
+
+	/* fillTxDescAppendByHostV2 places the TXP at NIC_TX_DESC_LONG_FORMAT_LENGTH */
+	BUILD_BUG_ON(NIC_TX_DESC_AND_PADDING_LENGTH != NIC_TX_DESC_LONG_FORMAT_LENGTH);
+
+	if (!pucBuf || !prToken->rDmaAddr || !prToken->prMsduInfo ||
+		!prChipInfo->prTxDescOps || !prChipInfo->prTxDescOps->fillHifAppend ||
+		prChipInfo->txd_append_size != NIC_TX_CT_TXP_LEN) {
+		DBGLOG(HAL, ERROR,
+			   "[MGMT-TXP] cannot build: buf=%p dma=0x%llx hook=%p append=%u want=%u\n",
+			   pucBuf, (unsigned long long)prToken->rDmaAddr,
+			   prChipInfo->prTxDescOps ? (void *)prChipInfo->prTxDescOps->fillHifAppend : NULL,
+			   (uint32_t)prChipInfo->txd_append_size,
+			   (uint32_t)NIC_TX_CT_TXP_LEN);
+		return false;
+	}
+
+	kalMemZero(pucBuf + NIC_TX_DESC_AND_PADDING_LENGTH, NIC_TX_CT_TXP_LEN);
+	prChipInfo->prTxDescOps->fillHifAppend(prGlueInfo->prAdapter, prToken->prMsduInfo,
+				  prToken->u4Token,
+				  prToken->rDmaAddr + u4PayloadOfs,
+				  0, TRUE, pucBuf);
+
+	if (iDumped < 8) {
+		iDumped++;
+		DBGLOG(HAL, WARN,
+			   "[MGMT-TXP] tok=%u payload dma=0x%llx len=%u\n",
+			   prToken->u4Token,
+			   (unsigned long long)(prToken->rDmaAddr + u4PayloadOfs),
+			   prToken->prMsduInfo->u2FrameLength);
+		print_hex_dump(KERN_WARNING, "[MGMT-TXP] TXD+TXP: ",
+				   DUMP_PREFIX_OFFSET, 16, 1, pucBuf,
+				   u4PayloadOfs, false);
+	}
+	return true;
+}
+
 static bool halFlushToken(struct GLUE_INFO *prGlueInfo,
 						  struct MSDU_TOKEN_ENTRY *prToken)
 {
@@ -3948,6 +4153,11 @@ static bool halFlushToken(struct GLUE_INFO *prGlueInfo,
 		DBGLOG(HAL, WARN,
 			   "[FLUSHTOK] tok=%u mapTxBuf is NULL - skipping DMA map\n",
 			   prToken->u4Token);
+	}
+
+	if (NIC_TX_IS_MGMT_CT_TXP(prToken->prMsduInfo)) {
+		if (!halTxBuildMgmtCtTxp(prGlueInfo, prToken))
+			return false;
 	}
 
 	if (prMemOps->flushCache)
@@ -4081,6 +4291,46 @@ static bool halWpdmaWriteData(struct GLUE_INFO *prGlueInfo,
 							  prToken,
 							  u4Idx,
 							  fgIsLast);
+
+	/* [TXBUF-CHECK] stage-boundary invariant: after the descriptor update,
+	 * the first NIC_TX_DESC_AND_PADDING_LENGTH bytes of the token bounce
+	 * buffer (what the DMA fetches) must equal the composed TXD in
+	 * aucTxDescBuffer.  halTxUpdateCutThroughDesc() returns early for
+	 * management frames, so this shows whether the TXD ever reaches the
+	 * buffer on that path.  Logs the first 8 frames; hex dump on mismatch. */
+	{
+		static int iTxBufChk;
+
+		if (prFillToken && prFillToken->prPacket && iTxBufChk < 8) {
+			uint32_t u4Cmp = NIC_TX_DESC_AND_PADDING_LENGTH;
+			bool fgMatch = !memcmp(prFillToken->prPacket,
+					       prMsduInfo->aucTxDescBuffer, u4Cmp);
+
+			iTxBufChk++;
+			DBGLOG(HAL, ERROR,
+			       "[TXBUF-CHECK #%d] tok=%u type=%u frameLen=%u dmaLen=%u TXD-in-buffer %s\n",
+			       iTxBufChk, prFillToken->u4Token,
+			       prMsduInfo->ucPacketType,
+			       prMsduInfo->u2FrameLength,
+			       prFillToken->u4DmaLength,
+			       fgMatch ? "MATCH" : "MISMATCH");
+			if (!fgMatch || iTxBufChk <= 3)
+				print_hex_dump(KERN_ERR, "[TXBUF-CHECK] buf TXD: ",
+					       DUMP_PREFIX_OFFSET, 16, 1,
+					       prFillToken->prPacket, u4Cmp, false);
+			if (!fgMatch) {
+				print_hex_dump(KERN_ERR, "[TXBUF-CHECK] want TXD: ",
+					       DUMP_PREFIX_OFFSET, 16, 1,
+					       prMsduInfo->aucTxDescBuffer, u4Cmp, false);
+				print_hex_dump(KERN_ERR, "[TXBUF-CHECK] buf full: ",
+					       DUMP_PREFIX_OFFSET, 16, 1,
+					       prFillToken->prPacket,
+					       min_t(uint32_t,
+						     prFillToken->u4DmaLength, 96),
+					       false);
+			}
+		}
+	}
 
 	/* ------------------------------------------------ */
 	/* Flush token if needed                            */
@@ -4772,8 +5022,22 @@ void halHwRecoveryFromError(IN struct ADAPTER *prAdapter)
 	case ERR_RECOV_STOP_IDLE:
 		if (u4Status & ERROR_DETECT_STOP_PDMA) {
 			mt79xx_ser_snapshot(prAdapter, u4Status, "ser-stop-pdma");
-			if (prChipInfo->asicDumpSerDummyCR)
+			/* The firmware's SER error code lives in the dummy CRs and
+			 * asicDumpSerDummyCR() prints it at INFO level, which the
+			 * default HAL mask (ERROR|WARN, set in wlanProbe) hides.
+			 * Raise the HAL mask just for this call so the dump shows. */
+			if (prChipInfo->asicDumpSerDummyCR) {
+				uint8_t ucHalMaskSave = aucDebugModule[DBG_HAL_IDX];
+
+				aucDebugModule[DBG_HAL_IDX] |= DBG_CLASS_INFO;
+				DBGLOG(HAL, ERROR, "[SER] --- dummy CR dump begin ---\n");
 				prChipInfo->asicDumpSerDummyCR(prAdapter);
+				DBGLOG(HAL, ERROR, "[SER] --- dummy CR dump end ---\n");
+				aucDebugModule[DBG_HAL_IDX] = ucHalMaskSave;
+			} else {
+				DBGLOG(HAL, ERROR,
+				       "[SER] asicDumpSerDummyCR is NULL in chip_info, no dummy CR dump\n");
+			}
 			halStartSerTimer(prAdapter);
 			DBGLOG(HAL, INFO,
 				   "SER(E) Host stop PDMA tx/rx ring operation\n");

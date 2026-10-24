@@ -405,6 +405,10 @@ static inline void safe_set_packet_format(struct HW_MAC_CONNAC2X_TX_DESC *prTxDe
 
 #define TXD_DUMP_MAX_WORDS 16
 
+#ifndef MT7902_MGMT_PKT_FMT_SF
+#define MT7902_MGMT_PKT_FMT_SF 0
+#endif
+
 /* --- small helpers --- */
 
 /* Dump TXD DWs as 32-bit words (useful quick-check) */
@@ -527,7 +531,8 @@ static u_int8_t nic_txd_choose_and_set_queue(struct ADAPTER *prAdapter,
 
         if (likely(prWlanHeader)) {
             u_int8_t subtype = (prWlanHeader->u2FrameCtrl & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
-            if (subtype == 4 || subtype == 13) {
+			if (subtype == 0 || subtype == 2 || subtype == 4 ||
+				subtype == 11 || subtype == 13) {
                 DBGLOG(TX, INFO, "Routing mgmt subtype %u via ALTX\n", subtype);
                 ucTarQueue = MAC_TXQ_ALTX_0_INDEX;
             }
@@ -767,6 +772,20 @@ void nic_txd_v2_compose(struct ADAPTER *prAdapter,
 
     HAL_MAC_CONNAC2X_TXD_SET_POWER_OFFSET(prTxDesc, prMsduInfo->cPowerOffset);
 
+    /* [TXRATE-CHK pre] state going into the rate switch */
+    DBGLOG(TX, ERROR,
+           "[TXRATE-CHK pre] pkttype=%u is80211=%u tc=%u bss=%u starIdx=%u starec=%p(idx=%u) wlanIdx=%u rateMode=%u fixedRateOpt=0x%08x bssDefRate=0x%04x DW2=0x%08x DW6=0x%08x\n",
+           (unsigned)prMsduInfo->ucPktType, (unsigned)prMsduInfo->fgIs802_11,
+           (unsigned)prMsduInfo->ucTC, (unsigned)prMsduInfo->ucBssIndex,
+           (unsigned)prMsduInfo->ucStaRecIndex,
+           prStaRec, (unsigned)(prStaRec ? prStaRec->ucIndex : 0xff),
+           (unsigned)prMsduInfo->ucWlanIndex,
+           (unsigned)prMsduInfo->ucRateMode,
+           (unsigned)prMsduInfo->u4FixedRateOption,
+           (unsigned)prBssInfo->u2HwDefaultFixedRateCode,
+           (unsigned)((uint32_t *)prTxDesc)[2],
+           (unsigned)((uint32_t *)prTxDesc)[6]);
+
     switch (prMsduInfo->ucRateMode) {
     case MSDU_RATE_MODE_MANUAL_DESC:
         HAL_MAC_TX_DESC_SET_DW(prTxDesc, 6, 1, &prMsduInfo->u4FixedRateOption);
@@ -786,10 +805,37 @@ void nic_txd_v2_compose(struct ADAPTER *prAdapter,
     }
 
     /* firmware requires channel=0 for mgmt frames before association */
-    if (prMsduInfo->fgIs802_11 && prMsduInfo->ucPktType == ENUM_PKT_802_11_MGMT) {
+    if (prMsduInfo->fgIs802_11 && prMsduInfo->ucPktType == ENUM_PKT_802_11_MGMT &&
+        prMsduInfo->ucRateMode == MSDU_RATE_MODE_AUTO) {
         /* Clear DW6[23:16] = channel */
+        uint32_t u4Dw6Before = ((uint32_t *)prTxDesc)[6];
+
         prTxDesc->u4DW6 &= ~(0xff << 16);
+
+        /* [TXRATE-CHK clear] does this clear actually wipe a rate? */
+        DBGLOG(TX, ERROR,
+               "[TXRATE-CHK clear] DW6 before=0x%08x after=0x%08x %s\n",
+               (unsigned)u4Dw6Before, (unsigned)((uint32_t *)prTxDesc)[6],
+               (u4Dw6Before != ((uint32_t *)prTxDesc)[6]) ? "CHANGED" : "unchanged");
     }
+
+/* mt76 parity for auth/assoc-req/reassoc-req sent on the data ring */
+if (prMsduInfo->fgIs802_11 && prMsduInfo->fgMgmtUseDataQ &&
+    prMsduInfo->ucPktType == ENUM_PKT_802_11_MGMT) {
+    uint32_t *pu4 = (uint32_t *)prTxDesc;
+
+    pu4[2] |= BIT(13);                          /* HTC_VLD */
+    pu4[3] = (pu4[3] & ~GENMASK(15, 11)) |      /* REM_TX_COUNT = 15 */
+             (15u << 11) | BIT(28);             /* BA_DISABLE */
+    pu4[6] |= BIT(2);                           /* FIXED_BW */
+
+#if MT7902_MGMT_PKT_FMT_SF
+    /* EXPERIMENT (not mt76 parity: mt76 uses CT on mmio).
+     * Buffer is [TXD][frame] with no TXP, so SF matches what is there.
+     * Remove once a real CT+TXP path exists. */
+    pu4[0] = (pu4[0] & ~GENMASK(24, 23)) | (1u << 23);   /* PKT_FMT = SF */
+#endif
+}
 
     /* final checks & diagnostic dump */
     if (!nic_txd_final_checks(prMsduInfo, prTxDesc, u4TxDescAndPaddingLength)) {

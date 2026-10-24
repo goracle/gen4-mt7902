@@ -442,6 +442,10 @@ static inline void mt7902_mark_irq_dead(struct GL_HIF_INFO *prHifInfo)
 	DBGLOG(HAL, WARN, "IRQ marked as DEAD - no more synchronize_irq allowed\n");
 }
 
+/* Global BAR0 mapping, set by glBusInit(), copied into rHifInfo by
+ * glSetHifInfo(), and cleared again in glBusFreeResources(). */
+static void *CSRBaseAddress;
+
 void glBusFreeResources(struct GLUE_INFO *prGlueInfo)
 {
     struct GL_HIF_INFO *prHifInfo = &prGlueInfo->rHifInfo;
@@ -451,6 +455,11 @@ void glBusFreeResources(struct GLUE_INFO *prGlueInfo)
         DBGLOG(INIT, INFO, "Freeing BAR/MMIO\n");
 
         iounmap(prHifInfo->CSRBaseAddress);
+        /* Don't leave the global pointing at the mapping just freed;
+         * otherwise a later glBusInit() takes the "already mapped" path
+         * with a dangling pointer. */
+        if (CSRBaseAddress == prHifInfo->CSRBaseAddress)
+            CSRBaseAddress = NULL;
         prHifInfo->CSRBaseAddress = NULL;
 
         if (pdev) {
@@ -557,8 +566,6 @@ static void mt7902_recovery_work(struct work_struct *work)
 
     mutex_unlock(&prHifInfo->recovery_lock);
 }
-
-static void *CSRBaseAddress;
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -1599,15 +1606,23 @@ static bool pcieCopyTxData(struct MSDU_TOKEN_ENTRY *prToken,
 	 * Data frames (TX_PACKET_OS*) already have the TXD in the skb
 	 * headroom; pucSrc points to [TXD][frame] and u4Len covers both.
 	 */
-	if (prMsduInfo &&
-	    prMsduInfo->eSrc == TX_PACKET_MGMT &&
-	    prMsduInfo->fgMgmtUseDataQ) {
+	if (NIC_TX_IS_MGMT_CT_TXP(prMsduInfo)) {
 		u4TxdLen = NIC_TX_DESC_AND_PADDING_LENGTH;
 		DBGLOG(HAL, INFO,
 		       "[TXCOPY] mgmt-datapath: prepend TXD %u bytes then frame %u bytes\n",
 		       u4TxdLen, u4Len);
+		/* Layout [TXD][TXP][frame]. The TXP stays zero here: it needs the DMA
+		 * address, so halFlushToken() builds it after the buffer is mapped. */
+		if (u4TxdLen + NIC_TX_CT_TXP_LEN + u4Len > prToken->u4DmaLength) {
+			DBGLOG(HAL, ERROR,
+				   "[TXCOPY] mgmt frame does not fit: txd=%u txp=%u len=%u dma=%u\n",
+				   u4TxdLen, (uint32_t)NIC_TX_CT_TXP_LEN, u4Len,
+				   prToken->u4DmaLength);
+			return false;
+		}
 		memcpy(pucDst, prMsduInfo->aucTxDescBuffer, u4TxdLen);
-		memcpy(pucDst + u4TxdLen, pucSrc, u4Len);
+		memset(pucDst + u4TxdLen, 0, NIC_TX_CT_TXP_LEN);
+		memcpy(pucDst + u4TxdLen + NIC_TX_CT_TXP_LEN, pucSrc, u4Len);
 	} else {
 		memcpy(pucDst, pucSrc, u4Len);
 	}

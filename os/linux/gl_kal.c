@@ -3435,12 +3435,13 @@ kalOidComplete(IN struct GLUE_INFO *prGlueInfo,
          * so main_thread will expect to finalize/complete it. Make sure the main
          * thread wakes up and sees the OID completion flag.
          */
-        set_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag);
+        //set_bit(GLUE_FLAG_OID_BIT, &prGlueInfo->ulFlag);
 
         /* Ensure main_thread wakes up to process the OID completion path. */
-        kalSetEvent(prGlueInfo);
+        //kalSetEvent(prGlueInfo);
+        /* OID already finished synchronously in main_thread; nothing to re-arm */
+        DBGLOG(INIT, TRACE, "kalOidComplete: OID already completed, status=0x%08x\n", rOidStatus);
 
-        DBGLOG(INIT, TRACE, "kalOidComplete: notified main thread to finish OID (status=0x%08x)\n", rOidStatus);
     }
 
     if (rOidStatus == WLAN_STATUS_SUCCESS)
