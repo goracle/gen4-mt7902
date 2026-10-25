@@ -8488,7 +8488,9 @@ int mtk_cfg80211_set_cqm_rssi_config(
 		sizeof(struct CMD_ROAMING_CTRL),
 		FALSE, FALSE, TRUE, &u4InfoBufLen, ucBssIndex);
 
-	if (rStatus != WLAN_STATUS_SUCCESS) {
+	/* fgWaitResp=FALSE: the command is queued, so PENDING is success */
+	if (rStatus != WLAN_STATUS_SUCCESS &&
+	    rStatus != WLAN_STATUS_PENDING) {
 		DBGLOG(OID, INFO, "Set RSSI Config failed 0x%x\n", rStatus);
 		return -EINVAL;
 	}

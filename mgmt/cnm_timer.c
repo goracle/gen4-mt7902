@@ -500,9 +500,16 @@ void cnmTimerDoTimeOutCheck(IN struct ADAPTER *prAdapter)
 		ASSERT(prTimer);
 
 		if (prLinkEntry->prNext == NULL) {
-			log_dbg(CNM, WARN, "timer was re-inited, prev func %pS\n", pfMgmtTimeOutFunc);
-			/* Force remove the corrupted entry so we don't hit it again */
-			LINK_REMOVE_KNOWN_ENTRY(prTimerList, prLinkEntry);
+			/* A timer that is still linked but has prNext == NULL
+			 * was re-initialised while armed (cnmTimerInitTimer
+			 * clears its links). Do not unlink it: its links are
+			 * gone, so unlinking is unsafe. Report the owner and
+			 * stop scanning this pass.
+			 */
+			DBGLOG(CNM, ERROR,
+			       "timer re-inited while armed: timer=%p func=%pS data=0x%lx\n",
+			       prTimer, prTimer->pfMgmtTimeOutFunc,
+			       prTimer->ulDataPtr);
 			break;
 		}
 
@@ -553,7 +560,7 @@ void cnmTimerDoTimeOutCheck(IN struct ADAPTER *prAdapter)
 				&& (prTimer->eType == TIMER_WAKELOCK_AUTO))
 				eType = TIMER_WAKELOCK_AUTO;
 		}
-	}	/* end of for loop */
+	} /* end of for loop */
 
 	/* Setup the prNext timeout event. It is possible the timer was already
 	 * set in the above timeout callback function.

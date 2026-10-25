@@ -899,6 +899,11 @@ struct MSDU_INFO {
 	uint8_t ucTarQueue;
 #endif
 	uint8_t fgMgmtUseDataQ;
+	/* Non-zero when prPacket of a TX_PACKET_MGMT MSDU is an sk_buff
+	 * (set in nicTxEnsureSkbHeadroom). cnmPktFree() then releases it with
+	 * dev_kfree_skb_any() instead of cnmMemFree().
+	 */
+	uint8_t fgMgmtPktIsSkb;
 #if CFG_SUPPORT_TX_MGMT_USE_DATAQ
 	uint64_t u8Cookie;
 #endif

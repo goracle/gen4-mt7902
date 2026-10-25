@@ -1852,40 +1852,19 @@ static void nicUniEventCmdResult(struct ADAPTER *prAdapter,
 	prCmdInfo = nicGetPendingCmdInfo(prAdapter, prEvent->ucSeqNum);
 
 	if (!prCmdInfo) {
-        //print_hex_dump(KERN_WARNING,
-		//              "UNI_CMD_RESULT_RAW: ",
-		//              DUMP_PREFIX_OFFSET,
-		//              16, 1,
-		//              prEvent->aucBuffer,
-		//              64,
-		//              false);
-
-		if (prResult->u4Status == 0)
-			DBGLOG(RX, WARN, "[CMD-RESULT] no pending cmd SEQ=%u CID=0x%04x status=%u\n",
-				prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
-		else
-			DBGLOG(RX, WARN, "[CMD-RESULT] no pending cmd SEQ=%u CID=0x%04x status=%u\n",
-				prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
+		DBGLOG(RX, WARN,
+		       "[CMD-RESULT] no pending cmd SEQ=%u CID=0x%04x status=%u\n",
+		       prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
 		return;
 	}
 
-	DBGLOG(RX, WARN,
-	       "UNI_CMD_RESULT: CID=0x%x Seq=%u Status=%u\n",
-	       prResult->u2CID,
-	       prEvent->ucSeqNum,
-	       prResult->u4Status);
 
-	DBGLOG(RX, WARN,
-	       "event_seq=%u result_seq=%u CID=0x%x status=%u\n",
-	       prEvent->ucSeqNum,
-	       prResult->u2CID,
-	       prResult->u4Status);
-
-	DBGLOG(RX, WARN, "[CMD-RESULT] matched SEQ=%u CID=0x%04x status=%u\n",
-			prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
-	if (prResult->u4Status != 0)
-		DBGLOG(RX, WARN, "[CMD-RESULT] CID=0x%04x SEQ=%u status=%u\n",
-			prResult->u2CID, prEvent->ucSeqNum, prResult->u4Status);
+	if (prResult->u4Status)
+		DBGLOG(RX, ERROR, "[CMD-RESULT] matched SEQ=%u CID=0x%04x status=%u\n",
+			   prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
+	else
+		DBGLOG(RX, WARN, "[CMD-RESULT] matched SEQ=%u CID=0x%04x status=%u\n",
+			   prEvent->ucSeqNum, prResult->u2CID, prResult->u4Status);
 
 	if (prCmdInfo->pfCmdDoneHandler)
 		prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,

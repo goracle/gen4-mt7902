@@ -494,59 +494,76 @@ static bool nic_txd_compute_and_set_eth_offset(struct ADAPTER *prAdapter,
 
 /* Choose and validate queue. Returns final queue index. */
 static u_int8_t nic_txd_choose_and_set_queue(struct ADAPTER *prAdapter,
-                                             struct MSDU_INFO *prMsduInfo,
-                                             struct BSS_INFO *prBssInfo,
-                                             struct HW_MAC_CONNAC2X_TX_DESC *prTxDesc)
+					     struct MSDU_INFO *prMsduInfo,
+					     struct BSS_INFO *prBssInfo,
+					     struct HW_MAC_CONNAC2X_TX_DESC *prTxDesc)
 {
-    u_int8_t ucTarQueue = 0;
-    u_int8_t ucTarPort = 0;
+	u_int8_t ucTarQueue = 0;
+	u_int8_t ucTarPort = 0;
+	u_int8_t ucWmmAdd = 0;
 
-    ucTarQueue = nicTxGetTxDestQIdxByTc(prMsduInfo->ucTC);
-    ucTarPort = nicTxGetTxDestPortIdxByTc(prMsduInfo->ucTC);
+	ucTarQueue = nicTxGetTxDestQIdxByTc(prMsduInfo->ucTC);
+	ucTarPort = nicTxGetTxDestPortIdxByTc(prMsduInfo->ucTC);
 
 #if (CFG_TX_RSRC_WMM_ENHANCE == 1)
-    if ((ucTarPort == PORT_INDEX_LMAC) && (prMsduInfo->ucTC <= TC4_INDEX))
+	if ((ucTarPort == PORT_INDEX_LMAC) && (prMsduInfo->ucTC <= TC4_INDEX))
 #else
-    if (ucTarPort == PORT_INDEX_LMAC)
+	if (ucTarPort == PORT_INDEX_LMAC)
 #endif
-    {
-        u_int8_t add = (prBssInfo->ucWmmQueSet * WMM_AC_INDEX_NUM);
-        if (unlikely(add > (MAC_TXQ_MAX_INDEX - ucTarQueue))) {
-            DBGLOG(TX, WARN, "ucWmmQueSet overflow attempt ucTarQueue=%u add=%u -> ignore add\n",
-                   ucTarQueue, add);
-            add = 0;
-        }
-        ucTarQueue += add;
-    }
+	{
+		ucWmmAdd = (prBssInfo->ucWmmQueSet * WMM_AC_INDEX_NUM);
+		if (unlikely(ucWmmAdd > (MAC_TXQ_MAX_INDEX - ucTarQueue))) {
+			DBGLOG(TX, WARN, "ucWmmQueSet overflow attempt ucTarQueue=%u add=%u -> ignore add\n",
+			       ucTarQueue, ucWmmAdd);
+			ucWmmAdd = 0;
+		}
+		ucTarQueue += ucWmmAdd;
+	}
 
 #if CFG_SUPPORT_ALTX_MGMT
-    /* small routing for probe-req/action only (keep your existing guard) */
-    if (prMsduInfo->fgIs802_11 &&
-        (prMsduInfo->ucPacketType == TX_PACKET_TYPE_MGMT ||
-         prMsduInfo->ucPktType == ENUM_PKT_802_11_MGMT) &&
-        prMsduInfo->prPacket) {
+	if (prMsduInfo->fgIs802_11 &&
+	    (prMsduInfo->ucPacketType == TX_PACKET_TYPE_MGMT ||
+	     prMsduInfo->ucPktType == ENUM_PKT_802_11_MGMT) &&
+	    prMsduInfo->prPacket) {
 
-        struct WLAN_MAC_HEADER *prWlanHeader =
-            (struct WLAN_MAC_HEADER *)((uint8_t *)prMsduInfo->prPacket + MAC_TX_RESERVED_FIELD);
+		struct WLAN_MAC_HEADER *prWlanHeader =
+			(struct WLAN_MAC_HEADER *)((uint8_t *)prMsduInfo->prPacket + MAC_TX_RESERVED_FIELD);
 
-        if (likely(prWlanHeader)) {
-            u_int8_t subtype = (prWlanHeader->u2FrameCtrl & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
-			if (subtype == 0 || subtype == 2 || subtype == 4 ||
-				subtype == 11 || subtype == 13) {
-                DBGLOG(TX, INFO, "Routing mgmt subtype %u via ALTX\n", subtype);
-                ucTarQueue = MAC_TXQ_ALTX_0_INDEX;
-            }
-        }
-    }
+		if (likely(prWlanHeader)) {
+			u_int8_t subtype = (prWlanHeader->u2FrameCtrl & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
+
+			if (subtype == 4 || subtype == 13) {
+				/* probe-req / action: ALTX (unchanged) */
+				DBGLOG(TX, INFO, "Routing mgmt subtype %u via ALTX\n", subtype);
+				ucTarQueue = MAC_TXQ_ALTX_0_INDEX;
+			} else if (ucTarPort == PORT_INDEX_LMAC &&
+				   (subtype == 0 || subtype == 2 || subtype == 10 ||
+				    subtype == 11 || subtype == 12)) {
+				/*
+				 * assoc-req / reassoc-req / disassoc / auth / deauth.
+				 * ALTX never drains for these (life-timeout, status=1).
+				 * mt76 gets them from mac80211 as non-data frames, which
+				 * mac80211 classifies as priority 7 = AC_VO, so they go out
+				 * on AC_VO of the BSS's WMM set, not on the TC0 (AC_BK)
+				 * queue the TC mapping gave us. Take the VO queue from the
+				 * driver's own TC3 mapping instead of hardcoding 3.
+				 */
+				ucTarQueue = nicTxGetTxDestQIdxByTc(TC3_INDEX) + ucWmmAdd;
+				DBGLOG(TX, INFO, "Routing mgmt subtype %u via AC_VO queue %u\n",
+				       subtype, ucTarQueue);
+			}
+		}
+	}
 #endif
 
-    ucTarQueue = clamp_queue_index(ucTarQueue);
-    HAL_MAC_CONNAC2X_TXD_SET_QUEUE_INDEX(prTxDesc, ucTarQueue);
+	ucTarQueue = clamp_queue_index(ucTarQueue);
+	HAL_MAC_CONNAC2X_TXD_SET_QUEUE_INDEX(prTxDesc, ucTarQueue);
 
-    DBGLOG(TX, WARN, "queue chosen raw=%u port=%u final=%u\n", nicTxGetTxDestQIdxByTc(prMsduInfo->ucTC),
-           nicTxGetTxDestPortIdxByTc(prMsduInfo->ucTC), ucTarQueue);
+	DBGLOG(TX, WARN, "queue chosen raw=%u port=%u final=%u\n",
+	       nicTxGetTxDestQIdxByTc(prMsduInfo->ucTC),
+	       nicTxGetTxDestPortIdxByTc(prMsduInfo->ucTC), ucTarQueue);
 
-    return ucTarQueue;
+	return ucTarQueue;
 }
 
 /* Set header format and header-length fields; return false on fatal */
@@ -825,6 +842,8 @@ if (prMsduInfo->fgIs802_11 && prMsduInfo->fgMgmtUseDataQ &&
     uint32_t *pu4 = (uint32_t *)prTxDesc;
 
     pu4[2] |= BIT(13);                          /* HTC_VLD */
+	pu4[2] &= ~GENMASK(23, 16);                 /* MAX_TX_TIME: mt76 leaves 0 */
+	pu4[0] &= ~GENMASK(22, 16);                 /* ETH_TYPE_OFFSET: mt76 leaves 0 for 802.11 */
     pu4[3] = (pu4[3] & ~GENMASK(15, 11)) |      /* REM_TX_COUNT = 15 */
              (15u << 11) | BIT(28);             /* BA_DISABLE */
     pu4[6] |= BIT(2);                           /* FIXED_BW */

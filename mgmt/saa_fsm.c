@@ -1179,23 +1179,29 @@ static void saa_handle_tx_failure(struct ADAPTER *prAdapter,
 				  struct STA_RECORD *prStaRec,
 				  enum ENUM_TX_RESULT_CODE rTxDoneStatus)
 {
+	/* Firmware lifetime expiry while the STA is not yet authenticated:
+	 * the WTBL entry was flushed under the frame, so an immediate resend
+	 * would be flushed the same way. Retry from the retry timer.
+	 */
 	if (rTxDoneStatus == TX_RESULT_LIFE_TIMEOUT &&
 	    prStaRec->ucStaState < STA_STATE_3) {
 		DBGLOG(SAA, WARN,
-		       "[SAA-TXDONE] WTBL-flush detected, retry deferred (status=%d state=%u)\n",
+		       "[SAA-TXDONE] WTBL-flush detected, deferring retry (status=%d state=%u)\n",
 		       rTxDoneStatus, prStaRec->ucStaState);
+		saa_start_retry_timer(prAdapter, prStaRec);
 		return;
 	}
 
-	/* TX_RESULT_DROPPED_IN_DRIVER means halResetMsduToken freed
-	 * this frame during SER recovery.  The DMA ring is being torn
-	 * down and re-initialized — submitting a new frame now races
-	 * halWpdmaInitRing and sends into a ring in an undefined state.
-	 * Defer via retry timer; the ring will be clean by the time it
-	 * fires. */
+	/* TX_RESULT_DROPPED_IN_DRIVER: the driver dropped the frame itself.
+	 * Known sources: halResetMsduToken during SER recovery (the DMA ring
+	 * is being torn down and re-initialised, so resending now would race
+	 * halWpdmaInitRing), and the host MSDU lifetime timer
+	 * (nicTxMsduLifeTimeoutHandler, seen in the log as status=32).
+	 * Defer via the retry timer in both cases.
+	 */
 	if (rTxDoneStatus == TX_RESULT_DROPPED_IN_DRIVER) {
 		DBGLOG(SAA, WARN,
-		       "[SAA-TXDONE] SER drop, deferring retry (state=%u)\n",
+		       "[SAA-TXDONE] frame dropped in driver, deferring retry (state=%u)\n",
 		       prStaRec->ucStaState);
 		saa_start_retry_timer(prAdapter, prStaRec);
 		return;
@@ -1210,6 +1216,7 @@ static void saa_handle_tx_failure(struct ADAPTER *prAdapter,
 	else
 		saaSendAuthAssoc(prAdapter, prStaRec);
 }
+
 
 static uint32_t saa_validate_tx_frame(struct ADAPTER *prAdapter,
 				      struct MSDU_INFO *prMsduInfo,
@@ -1263,15 +1270,6 @@ saaFsmRunEventTxDone(IN struct ADAPTER *prAdapter,
 		       prMsduInfo->ucStaRecIndex);
 		return WLAN_STATUS_INVALID_PACKET;
 	}
-
-	/* FIX START: Stop timer on SER Reset to prevent kernel spin */
-    if (rTxDoneStatus == TX_RESULT_DROPPED_IN_DRIVER || rTxDoneStatus == 32) {
-        DBGLOG(SAA, WARN, "[SAA-TXDONE] SER Reset detected. Cleaning up timer.\n");
-        cnmTimerStopTimer(prAdapter, &prStaRec->rTxReqDoneOrRxRespTimer);
-        /* Optionally trigger a re-auth or let the AIS FSM handle it */
-        return WLAN_STATUS_SUCCESS;
-    }
-    /* FIX END */
 
 	if (prStaRec->ucBssIndex >= MAX_BSSID_NUM) {
 		DBGLOG(SAA, ERROR, "[SAA-TXDONE] bad ucBssIndex=%u\n",

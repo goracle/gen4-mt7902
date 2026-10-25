@@ -284,17 +284,26 @@ void cnmPktFree(struct ADAPTER *prAdapter, struct MSDU_INFO *prMsduInfo)
 
 	prQueList = &prAdapter->rTxCtrl.rFreeMsduInfoList;
 
+	/* The lifetime timer must not outlive the MSDU: a stale timer fires on
+	 * a recycled MSDU, and re-initialising an armed timer corrupts the
+	 * timer list.
+	 */
+	cnmTimerStopTimer(prAdapter, &prMsduInfo->rLifetimeTimer);
+
 	/* ASSERT(prMsduInfo->prPacket); */
 	if (prMsduInfo->prPacket) {
-		cnmMemFree(prAdapter, prMsduInfo->prPacket);
+		if (prMsduInfo->fgMgmtPktIsSkb)
+			dev_kfree_skb_any((struct sk_buff *)prMsduInfo->prPacket);
+		else
+			cnmMemFree(prAdapter, prMsduInfo->prPacket);
 		prMsduInfo->prPacket = NULL;
 	}
+	prMsduInfo->fgMgmtPktIsSkb = FALSE;
 
 	KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_TX_MSDU_INFO_LIST);
 	QUEUE_INSERT_TAIL(prQueList, &prMsduInfo->rQueEntry);
 	KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_TX_MSDU_INFO_LIST);
 }
-
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief This function is used to initial the MGMT/MSG memory pool.

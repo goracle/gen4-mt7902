@@ -676,6 +676,8 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 
 	prBssDesc->fgIsConnecting = TRUE;
 	COPY_MAC_ADDR(prAisBssInfo->aucBSSID, prBssDesc->aucBSSID);
+	prAisBssInfo->eBand = prBssDesc->eBand;
+	prAisBssInfo->ucPrimaryChannel = prBssDesc->ucChannelNum;
 	nicUpdateBss(prAdapter, ucBssIndex);
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)

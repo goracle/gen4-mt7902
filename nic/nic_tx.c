@@ -2398,63 +2398,70 @@ uint32_t nicTxMsduQueue(IN struct ADAPTER *prAdapter,
 
 
 void nicTxMsduLifeTimeoutHandler(struct ADAPTER *prAdapter,
-                                 unsigned long plParamPtr)
+				 unsigned long plParamPtr)
 {
-    struct MSDU_INFO *prTimeoutMsdu =
-        (struct MSDU_INFO *)plParamPtr;
-    struct MSDU_INFO *prMsduInfo;
+	struct MSDU_INFO *prTimeoutMsdu = (struct MSDU_INFO *)plParamPtr;
+	struct MSDU_INFO *prMsduInfo;
+	uint8_t ucWlanIndex, ucPID;
 
-    if (!prAdapter || !prTimeoutMsdu)
-        return;
+	KAL_SPIN_LOCK_DECLARATION();
 
-    DBGLOG(TX, ERROR,
-        "MSDU Life Timeout Tag[0x%08x] WIDX:PID[%u:%u] ptr=%p\n",
-        prTimeoutMsdu->u4TxDoneTag,
-        prTimeoutMsdu->ucWlanIndex,
-        prTimeoutMsdu->ucPID,
-        prTimeoutMsdu);
+	if (!prAdapter || !prTimeoutMsdu)
+		return;
 
-    /* lookup current pending entry */
-    prMsduInfo = nicGetPendingTxMsduInfo(prAdapter,
-        prTimeoutMsdu->ucWlanIndex,
-        prTimeoutMsdu->ucPID);
+	ucWlanIndex = prTimeoutMsdu->ucWlanIndex;
+	ucPID = prTimeoutMsdu->ucPID;
 
-    if (!prMsduInfo) {
-        DBGLOG(TX, WARN,
-            "Timeout: not in pending tx queue WIDX=%u PID=%u\n",
-            prTimeoutMsdu->ucWlanIndex,
-            prTimeoutMsdu->ucPID);
-        return;
-    }
+	DBGLOG(TX, ERROR,
+	       "MSDU Life Timeout Tag[0x%08x] WIDX:PID[%u:%u] ptr=%p\n",
+	       prTimeoutMsdu->u4TxDoneTag, ucWlanIndex, ucPID,
+	       prTimeoutMsdu);
 
-    /* prevent freeing the wrong recycled object */
-    if (prMsduInfo != prTimeoutMsdu) {
-        DBGLOG(TX, ERROR,
-            "Timeout mismatch timer=%p pending=%p WIDX=%u PID=%u\n",
-            prTimeoutMsdu,
-            prMsduInfo,
-            prTimeoutMsdu->ucWlanIndex,
-            prTimeoutMsdu->ucPID);
-        return;
-    }
+	/* lookup current pending entry (this removes it from the queue) */
+	prMsduInfo = nicGetPendingTxMsduInfo(prAdapter, ucWlanIndex, ucPID);
 
-    DBGLOG(TX, ERROR,
-        "MSDU timeout freeing WIDX=%u PID=%u\n",
-        prMsduInfo->ucWlanIndex,
-        prMsduInfo->ucPID);
+	if (!prMsduInfo) {
+		DBGLOG(TX, WARN,
+		       "Timeout: not in pending tx queue WIDX=%u PID=%u\n",
+		       ucWlanIndex, ucPID);
+		return;
+	}
 
-    /* clear identifiers so late TXDONE can't match */
-    prMsduInfo->ucPID = 0xFF;
-    prMsduInfo->ucWlanIndex = 0xFF;
+	/* prevent freeing the wrong recycled object */
+	if (prMsduInfo != prTimeoutMsdu) {
+		DBGLOG(TX, ERROR,
+		       "Timeout mismatch timer=%p pending=%p WIDX=%u PID=%u\n",
+		       prTimeoutMsdu, prMsduInfo, ucWlanIndex, ucPID);
 
-    nicTxFreePacket(prAdapter, prMsduInfo, TRUE);
-    nicTxReturnMsduInfo(prAdapter, prMsduInfo);
+		/* The lookup already unlinked the other MSDU: put it back, or
+		 * it is lost and its real TXDONE can never find it.
+		 */
+		KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_TXING_MGMT_LIST);
+		QUEUE_INSERT_TAIL(&prAdapter->rTxCtrl.rTxMgmtTxingQueue,
+				  (struct QUE_ENTRY *)prMsduInfo);
+		KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_TXING_MGMT_LIST);
+		return;
+	}
 
-    /* poison for debugging */
-    prMsduInfo->prPacket = NULL;
-    prMsduInfo->prToken = NULL;
-    prMsduInfo->u4TxDoneTag = 0xDEADBEEF;
+	DBGLOG(TX, ERROR, "MSDU timeout freeing WIDX=%u PID=%u\n",
+	       ucWlanIndex, ucPID);
+
+	/* clear identifiers so a late TXDONE can't match */
+	prMsduInfo->ucPID = 0xFF;
+	prMsduInfo->ucWlanIndex = 0xFF;
+
+	/* nicTxReturnMsduInfo() treats its argument as a list head, so make
+	 * sure this is a single-element list.
+	 */
+	prMsduInfo->rQueEntry.prNext = NULL;
+
+	nicTxFreePacket(prAdapter, prMsduInfo, TRUE);
+	nicTxReturnMsduInfo(prAdapter, prMsduInfo);
+
+	/* prMsduInfo is back on the free list: do not touch it again. */
 }
+
+
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief In this function, we'll write Command(CMD_INFO_T) into HIF.
@@ -2732,50 +2739,35 @@ void nicTxFreePacket(IN struct ADAPTER *prAdapter,
 					rStatus);
 		if (fgDrop)
 			wlanUpdateTxStatistics(prAdapter, prMsduInfo,
-				TRUE); /*get per-AC Tx drop packets */
+				TRUE); /*get per-AC Tx drop packets*/
 	} else if (prMsduInfo->eSrc == TX_PACKET_MGMT) {
+		/* Capture before the done handler runs: it may re-enqueue
+		 * this MSDU and change prPacket.
+		 */
+		u_int8_t fgIsSkb = prMsduInfo->fgMgmtPktIsSkb;
+
 		if (prMsduInfo->pfTxDoneHandler)
 			prMsduInfo->pfTxDoneHandler(prAdapter, prMsduInfo,
-		    TX_RESULT_DROPPED_IN_DRIVER);
-		/*
-		 * Fix #3: NULL prPacket only if the handler did not replace it.
-		 *
-		 * The handler (saaFsmRunEventTxDone) may synchronously re-enqueue
-		 * this same MSDU struct with a fresh skb by setting prPacket to a
-		 * new value before returning.  If we unconditionally NULL here we
-		 * wipe that new pointer, causing halWpdmaWriteMsdu to see a NULL
-		 * skb on the very next TX attempt.
-		 *
-		 * Conversely, if we never NULL we leave the old (about-to-be-freed)
-		 * prPacket visible, risking a UAF if anything reads it before the
-		 * retry overwrites it.
-		 *
-		 * Safe rule: only NULL if prPacket still holds the value we saved
-		 * in prNativePacket.  If the handler installed a new skb the field
-		 * will differ and we leave it alone.
+				TX_RESULT_DROPPED_IN_DRIVER);
+
+		/* Only clear prPacket if the handler left it alone; if it
+		 * installed a new packet, that one now belongs to the retry.
 		 */
-		if (prMsduInfo->prPacket == prNativePacket)
+		if (prMsduInfo->prPacket == prNativePacket) {
 			prMsduInfo->prPacket = NULL;
+			prMsduInfo->fgMgmtPktIsSkb = FALSE;
+		}
+
 		if (prNativePacket) {
-			/* Auth frames store an skb as prPacket (allocated via
-			 * kalPacketAlloc/dev_alloc_skb, not cnmMemAlloc).
-			 * cnmMemFree detects out-of-pool pointers and falls through
-			 * to kfree, but kfree on an skb triggers !PageLargeKmalloc.
-			 * Detect the skb case by checking pool membership and use
-			 * dev_kfree_skb instead.
+			/* An skb is only ever stored in prPacket by
+			 * nicTxEnsureSkbHeadroom, which sets the flag.
+			 * Everything else is a cnmMemAlloc buffer.
 			 */
-			if (((unsigned long)prNativePacket >=
-			     (unsigned long)&prAdapter->aucMsgBuf[0] &&
-			     (unsigned long)prNativePacket <=
-			     (unsigned long)&prAdapter->aucMsgBuf[MSG_BUFFER_SIZE - 1]) ||
-			    ((unsigned long)prNativePacket >=
-			     (unsigned long)prAdapter->pucMgtBufCached &&
-			     (unsigned long)prNativePacket <=
-			     (unsigned long)prAdapter->pucMgtBufCached + MGT_BUFFER_SIZE - 1)) {
+			if (fgIsSkb)
+				dev_kfree_skb_any(
+					(struct sk_buff *)prNativePacket);
+			else
 				cnmMemFree(prAdapter, prNativePacket);
-			} else {
-				dev_kfree_skb((struct sk_buff *)prNativePacket);
-			}
 		}
 	} else if (prMsduInfo->eSrc == TX_PACKET_FORWARDING) {
 		GLUE_DEC_REF_CNT(prTxCtrl->i4PendingFwdFrameCount);
@@ -2850,7 +2842,7 @@ void nicTxReturnMsduInfo(IN struct ADAPTER *prAdapter,
 {
 	struct TX_CTRL *prTxCtrl;
 	struct MSDU_INFO *prMsduInfo = prMsduInfoListHead,
-				  *prNextMsduInfo;
+			 *prNextMsduInfo;
 
 	KAL_SPIN_LOCK_DECLARATION();
 
@@ -2860,8 +2852,8 @@ void nicTxReturnMsduInfo(IN struct ADAPTER *prAdapter,
 	ASSERT(prTxCtrl);
 
 	while (prMsduInfo) {
-		prNextMsduInfo = (struct MSDU_INFO *) QUEUE_GET_NEXT_ENTRY((
-					 struct QUE_ENTRY *) prMsduInfo);
+		prNextMsduInfo = (struct MSDU_INFO *) QUEUE_GET_NEXT_ENTRY(
+			(struct QUE_ENTRY *) prMsduInfo);
 
 		switch (prMsduInfo->eSrc) {
 		case TX_PACKET_FORWARDING:
@@ -2874,18 +2866,18 @@ void nicTxReturnMsduInfo(IN struct ADAPTER *prAdapter,
 			break;
 		}
 
+		/* Stop the lifetime timer before the struct is wiped/recycled */
+		cnmTimerStopTimer(prAdapter, &prMsduInfo->rLifetimeTimer);
+
 		/* Reset MSDU_INFO fields */
 		kalMemZero(prMsduInfo, sizeof(struct MSDU_INFO));
 
-		KAL_ACQUIRE_SPIN_LOCK(prAdapter,
-				      SPIN_LOCK_TX_MSDU_INFO_LIST);
+		KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_TX_MSDU_INFO_LIST);
 		QUEUE_INSERT_TAIL(&prTxCtrl->rFreeMsduInfoList,
 				  (struct QUE_ENTRY *) prMsduInfo);
-		KAL_RELEASE_SPIN_LOCK(prAdapter,
-				      SPIN_LOCK_TX_MSDU_INFO_LIST);
+		KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_TX_MSDU_INFO_LIST);
 		prMsduInfo = prNextMsduInfo;
-	};
-
+	}
 }
 
 /*----------------------------------------------------------------------------*/
@@ -3396,6 +3388,7 @@ u_int8_t nicTxProcessMngPacket(IN struct ADAPTER *prAdapter,
 		DBGLOG(TX, WARN, "[MGMT] AUTH/ASSOC fc=0x%04x -> TC0 data path\n",
 		       u2FrameCtrl);
 		break;
+
 #if CFG_SUPPORT_ALTX_MGMT
 	case MAC_FRAME_ACTION:
 	case MAC_FRAME_PROBE_REQ:
@@ -3562,6 +3555,14 @@ nicTxProcessTxDoneEvent(IN struct ADAPTER *prAdapter,
 		prTxDone->ucWlanIndex, prTxDone->ucPacketSeq,
 		prTxDone->ucStatus);
 
+	DBGLOG(TX, WARN,
+	       "[TXDONE-RAW] PID=%u flag=0x%02x cnt=%u rate=0x%04x bw=%u pwr=%d flush=%u delay=%u ts=%u applied=0x%08x\n",
+	       prTxDone->ucPacketSeq, prTxDone->ucFlag, prTxDone->ucTxCount,
+	       prTxDone->u2TxRate, prTxDone->ucBandwidth,
+	       (int)(int8_t)prTxDone->ucTxPower, prTxDone->ucFlushReason,
+	       prTxDone->u4TxDelay, prTxDone->u4Timestamp,
+	       prTxDone->u4AppliedFlag);
+
 	uni.ucPacketSeq      = prTxDone->ucPacketSeq;
 	uni.ucStatus         = prTxDone->ucStatus;
 	uni.u2SequenceNumber = prTxDone->u2SequenceNumber;
@@ -3670,47 +3671,45 @@ nicTxProcessTxDoneEvent(IN struct ADAPTER *prAdapter,
  *
  * Must be called with no spin locks held.
  * --------------------------------------------------------------------------*/
+/*
+ * Stamp a PID on a mgmt MSDU that takes the direct data-path (e.g. AUTH/ASSOC
+ * via TC0) and request TX status from the MCU.
+ *
+ * This does NOT queue the MSDU on rTxMgmtTxingQueue. The HIF dequeue path
+ * (nicTxMsduInfoListMthread -> ... -> HAL_WRITE_TX_DATA) does that right
+ * before the frame is written, and an MSDU has a single QUE_ENTRY, so
+ * inserting it here as well would link the entry into the list twice.
+ */
 static void nicTxAssignMgmtPidDataPath(struct ADAPTER *prAdapter,
-                                        struct MSDU_INFO *prMsduInfo)
+				       struct MSDU_INFO *prMsduInfo)
 {
-    struct TX_CTRL *prTxCtrl;
+	if (!prAdapter || !prMsduInfo) {
+		DBGLOG(TX, ERROR, "[DATAPATH-PID] NULL adapter=%p msdu=%p\n",
+		       prAdapter, prMsduInfo);
+		return;
+	}
 
-    KAL_SPIN_LOCK_DECLARATION();
+	/* no completion handler -> nobody waits for TX status, no PID needed */
+	if (!prMsduInfo->pfTxDoneHandler)
+		return;
 
-    if (!prAdapter || !prMsduInfo) {
-        DBGLOG(TX, ERROR, "[DATAPATH-PID] NULL adapter=%p msdu=%p\n",
-               prAdapter, prMsduInfo);
-        return;
-    }
+	if (!prMsduInfo->prPacket) {
+		DBGLOG(TX, ERROR,
+		       "[DATAPATH-PID] MSDU=%p has NULL prPacket, refusing to stamp WIDX=%u\n",
+		       prMsduInfo, prMsduInfo->ucWlanIndex);
+		return;
+	}
 
-    if (!prMsduInfo->pfTxDoneHandler)
-        return;
+	prMsduInfo->ucPID = nicTxAssignPID(prAdapter, prMsduInfo->ucWlanIndex);
 
-    if (!prMsduInfo->prPacket) {
-        DBGLOG(TX, ERROR,
-               "[DATAPATH-PID] MSDU=%p has NULL prPacket, refusing to enqueue WIDX=%u\n",
-               prMsduInfo, prMsduInfo->ucWlanIndex);
-        return;
-    }
+	HAL_MAC_CONNAC2X_TXD_SET_PID(
+		(struct HW_MAC_CONNAC2X_TX_DESC *)prMsduInfo->aucTxDescBuffer,
+		prMsduInfo->ucPID);
+	HAL_MAC_CONNAC2X_TXD_SET_TXS_TO_MCU(
+		(struct HW_MAC_CONNAC2X_TX_DESC *)prMsduInfo->aucTxDescBuffer);
 
-    prTxCtrl = &prAdapter->rTxCtrl;
-
-    prMsduInfo->ucPID = nicTxAssignPID(prAdapter, prMsduInfo->ucWlanIndex);
-
-    HAL_MAC_CONNAC2X_TXD_SET_PID(
-        (struct HW_MAC_CONNAC2X_TX_DESC *)prMsduInfo->aucTxDescBuffer,
-        prMsduInfo->ucPID);
-    HAL_MAC_CONNAC2X_TXD_SET_TXS_TO_MCU(
-        (struct HW_MAC_CONNAC2X_TX_DESC *)prMsduInfo->aucTxDescBuffer);
-
-    KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_TXING_MGMT_LIST);
-    QUEUE_INSERT_TAIL(&prTxCtrl->rTxMgmtTxingQueue,
-                      (struct QUE_ENTRY *)prMsduInfo);
-    KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_TXING_MGMT_LIST);
-
-    DBGLOG(TX, INFO,
-           "[DATAPATH-PID] WIDX=%u PID=%u stamped, inserted into TxingQueue\n",
-           prMsduInfo->ucWlanIndex, prMsduInfo->ucPID);
+	DBGLOG(TX, INFO, "[DATAPATH-PID] WIDX=%u PID=%u stamped\n",
+	       prMsduInfo->ucWlanIndex, prMsduInfo->ucPID);
 }
 /* ---------------------------------------------------------------------------
  * nicTxEnsureSkbHeadroom
@@ -3731,6 +3730,12 @@ static bool nicTxEnsureSkbHeadroom(struct ADAPTER *prAdapter,
 		uint8_t *pucFrame = (uint8_t *)prMsduInfo->prPacket;
 		uint16_t u2FrameLen = prMsduInfo->u2FrameLength;
 
+		/* Already converted (re-enqueue/retry of the same MSDU):
+		 * prPacket is an skb, not a raw frame buffer.
+		 */
+		if (prMsduInfo->fgMgmtPktIsSkb)
+			return true;
+
 		prSkb = dev_alloc_skb(u4HeadRoom + u2FrameLen);
 		if (!prSkb) {
 			DBGLOG(TX, ERROR, "[DIRECT-TX] dev_alloc_skb failed for mgmt\n");
@@ -3740,6 +3745,7 @@ static bool nicTxEnsureSkbHeadroom(struct ADAPTER *prAdapter,
 		skb_put_data(prSkb, pucFrame, u2FrameLen);
 		cnmMemFree(prAdapter, prMsduInfo->prPacket);
 		prMsduInfo->prPacket = prSkb;
+		prMsduInfo->fgMgmtPktIsSkb = TRUE;
 		return true;
 	}
 

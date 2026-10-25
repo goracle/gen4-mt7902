@@ -5736,7 +5736,13 @@ void rlmFillSyncCmdParam(struct CMD_SET_BSS_RLM_PARAM *prCmdBody,
 		       prCmdBody->ucRxNss,
 		       prCmdBody->ucTxNss);
 	} else {
-		DBGLOG(RLM, INFO, "N=%d closed\n", prCmdBody->ucBssIndex);
+		DBGLOG(RLM, WARN,
+		       "N=%d closed: band=%d pch=%d sco=%d bw=%d netActive=%d conn=%d\n",
+		       prCmdBody->ucBssIndex, prCmdBody->ucRfBand,
+		       prCmdBody->ucPrimaryChannel, prCmdBody->ucRfSco,
+		       prCmdBody->ucVhtChannelWidth,
+		       prBssInfo->fgIsNetActive,
+		       prBssInfo->eConnectionState);
 	}
 }
 

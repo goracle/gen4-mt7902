@@ -7392,24 +7392,43 @@ void nicCmdEventLatchTSF(IN struct ADAPTER *prAdapter,
 }
 #endif
 
+/* mt76 parity: struct rlm_tlv in mt76_connac_mcu_uni_set_chctx() is 16 bytes
+ * (tag, len, control, center, center2, bw, tx, rx, short_st, ht_op_info,
+ * sco, band, pad[2]).  The vendor UNI_CMD_BSSINFO_RLM is only 12 bytes and
+ * orders the tail differently, so build the mt76 layout here.
+ */
+struct UNI_CMD_BSSINFO_RLM_MT76 {
+	uint16_t u2Tag;
+	uint16_t u2Length;
+	uint8_t  ucControlChannel;
+	uint8_t  ucCenterChannel;
+	uint8_t  ucCenterChannel2;
+	uint8_t  ucBandwidth;
+	uint8_t  ucTxStreams;
+	uint8_t  ucRxStreams;
+	uint8_t  ucShortSt;
+	uint8_t  ucHtOpInfo;
+	uint8_t  ucSco;
+	uint8_t  ucBand;
+	uint8_t  aucPad[2];
+} __KAL_ATTRIB_PACKED__;
+
 uint32_t nicUniCmdSetBssRlmImpl(struct ADAPTER *ad,
        uint8_t *buf, struct CMD_SET_BSS_RLM_PARAM *cmd)
 {
-       struct UNI_CMD_BSSINFO_RLM *rlm_tag;
+       struct UNI_CMD_BSSINFO_RLM_MT76 *rlm_tag;
        struct UNI_CMD_BSSINFO_PROTECT *prot_tag;
        struct UNI_CMD_BSSINFO_IFS_TIME *ifs_tag;
        uint8_t *pos = buf;
 
-       rlm_tag = (struct UNI_CMD_BSSINFO_RLM *) pos;
+       rlm_tag = (struct UNI_CMD_BSSINFO_RLM_MT76 *) pos;
        rlm_tag->u2Tag = UNI_CMD_BSSINFO_TAG_RLM;
        rlm_tag->u2Length = sizeof(*rlm_tag);
-       rlm_tag->ucPrimaryChannel = cmd->ucPrimaryChannel;
-       rlm_tag->ucCenterChannelSeg0 = cmd->ucVhtChannelFrequencyS1;
-       rlm_tag->ucCenterChannelSeg1 = cmd->ucVhtChannelFrequencyS2;
-       rlm_tag->ucTxStream = cmd->ucTxNss;
-       rlm_tag->ucRxStream = cmd->ucRxNss;
-       rlm_tag->ucHtOpInfo1 = cmd->ucHtOpInfo1;
-       rlm_tag->ucSCO = cmd->ucRfSco;
+       rlm_tag->ucControlChannel = cmd->ucPrimaryChannel;
+       rlm_tag->ucCenterChannel2 = cmd->ucVhtChannelFrequencyS2;
+       rlm_tag->ucTxStreams = cmd->ucTxNss;
+       rlm_tag->ucRxStreams = cmd->ucRxNss;
+       rlm_tag->ucShortSt = 1;
        rlm_tag->ucBandwidth = BW_20;
        switch (cmd->ucVhtChannelWidth) {
        case VHT_OP_CHANNEL_WIDTH_80P80:
@@ -7428,6 +7447,35 @@ uint32_t nicUniCmdSetBssRlmImpl(struct ADAPTER *ad,
        default:
                break;
        }
+
+       /* mt76: center_chan = channel number of center_freq1.  Wide VHT
+        * widths already carry it in S1; 20 MHz centres on the primary and
+        * HT40 on primary +/- 2.  Never leave it 0.
+        */
+       rlm_tag->ucCenterChannel = cmd->ucVhtChannelFrequencyS1;
+       if (!rlm_tag->ucCenterChannel) {
+               rlm_tag->ucCenterChannel = cmd->ucPrimaryChannel;
+               if (rlm_tag->ucBandwidth == BW_40) {
+                       if (cmd->ucRfSco == 1)          /* SCA */
+                               rlm_tag->ucCenterChannel += 2;
+                       else if (cmd->ucRfSco == 3)     /* SCB */
+                               rlm_tag->ucCenterChannel -= 2;
+               }
+       }
+
+       /* mt76: sco derived from control vs centre channel */
+       if (rlm_tag->ucControlChannel < rlm_tag->ucCenterChannel)
+               rlm_tag->ucSco = 1;     /* SCA */
+       else if (rlm_tag->ucControlChannel > rlm_tag->ucCenterChannel)
+               rlm_tag->ucSco = 3;     /* SCB */
+
+       /* mt76: ht_op_info = 4 (HT40 allowed), 0 for 20 MHz */
+       rlm_tag->ucHtOpInfo = (rlm_tag->ucBandwidth == BW_20) ? 0 : 4;
+
+       /* mt76: .band = enum nl80211_band (2GHz=0, 5GHz=1).  Taken from the
+        * channel number since no band enum is visible in this file.
+        */
+       rlm_tag->ucBand = (cmd->ucPrimaryChannel > 14) ? 1 : 0;
        pos += sizeof(*rlm_tag);
 
        prot_tag = (struct UNI_CMD_BSSINFO_PROTECT *) pos;
@@ -7706,7 +7754,7 @@ uint32_t nicUniCmdBssInfoTagBasic(struct ADAPTER *ad,
 	tag->ucActive = IS_BSS_ACTIVE(bss);
 	tag->ucOwnMacIdx = bss->ucOwnMacIndex;
 	tag->ucHwBSSIndex = bss->ucOwnMacIndex;
-	tag->ucDbdcIdx = cmd->ucDBDCBand;
+	tag->ucDbdcIdx = 0; /* mt76: .band_idx = mvif->band_idx */
 	tag->u4ConnectionType = nicUniCmdBssInfoConnType(ad, bss);
 	tag->ucConnectionState = bss->eConnectionState;
 	tag->ucWmmIdx = cmd->ucWmmSet;
@@ -7726,7 +7774,7 @@ uint32_t nicUniCmdBssInfoTagBasic(struct ADAPTER *ad,
 
 struct UNI_CMD_BSSINFO_TAG_HANDLE arSetBssInfoTable[] = {
 	{sizeof(struct UNI_CMD_BSSINFO_BASIC), nicUniCmdBssInfoTagBasic},
-	{sizeof(struct UNI_CMD_BSSINFO_RLM) +
+	{sizeof(struct UNI_CMD_BSSINFO_RLM_MT76) +
 	 sizeof(struct UNI_CMD_BSSINFO_PROTECT)	+
 	 sizeof(struct UNI_CMD_BSSINFO_IFS_TIME), nicUniCmdBssInfoTagRlm},
 	{sizeof(struct UNI_CMD_BSSINFO_RATE), nicUniCmdBssInfoTagRate},
@@ -7781,6 +7829,42 @@ uint32_t nicUniCmdSetBssInfo(struct ADAPTER *ad,
 	LINK_INSERT_TAIL(&info->rUniCmdList, &entry->rLinkEntry);
 
 	return WLAN_STATUS_SUCCESS;
+}
+
+/* mt76 parity (struct sta_req_hdr): bytes 2..3 = tlv_num (le16), byte 4 =
+ * is_tlv_append (1), byte 5 = muar_idx (own MAC idx). The vendor struct
+ * UNI_CMD_STAREC calls these aucPadding[0..3] and never filled them.
+ * tlv_num is counted by walking the TLVs actually appended, so it cannot
+ * drift from the buffer contents.
+ */
+static void nicUniCmdStaRecFillHdr(struct ADAPTER *ad,
+		struct UNI_CMD_STAREC *uni_cmd, uint8_t ucBssIdx,
+		uint8_t *pucTlvEnd, uint8_t ucAppend)
+{
+	struct BSS_INFO *bss = GET_BSS_INFO_BY_INDEX(ad, ucBssIdx);
+	const uint8_t *p = uni_cmd->aucTlvBuffer;
+	uint8_t muar = bss ? bss->ucOwnMacIndex : 0;
+	uint16_t n = 0;
+
+	while (pucTlvEnd - p >= 4) {
+		uint16_t len = p[2] | (p[3] << 8);
+
+		if (len < 4 || len > (uint16_t)(pucTlvEnd - p))
+			break;
+		p += len;
+		n++;
+	}
+	if (p != pucTlvEnd)
+		DBGLOG(REQ, WARN,
+		       "[STAREC-HDR] TLV walk stopped %ld bytes short\n",
+		       (long)(pucTlvEnd - p));
+
+	uni_cmd->aucPadding[0] = n & 0xff;
+	uni_cmd->aucPadding[1] = n >> 8;
+	uni_cmd->aucPadding[2] = ucAppend;	/* is_tlv_append */
+	uni_cmd->aucPadding[3] = muar;
+	DBGLOG(REQ, WARN, "[STAREC-HDR] tlv_num=%u append=%u muar=%u\n",
+	       n, ucAppend, muar);
 }
 
 uint32_t nicUniCmdStaRecUpdateExt(struct ADAPTER *ad,
@@ -7857,6 +7941,9 @@ uint32_t nicUniCmdStaRecUpdateExt(struct ADAPTER *ad,
 	tag->rTxBfPfmuInfo.codebook42_su = bf->rTxBfPfmuInfo.fgCodebook42Su;
 	tag->rTxBfPfmuInfo.codebook75_mu = bf->rTxBfPfmuInfo.fgCodebook75Mu;
 	tag->rTxBfPfmuInfo.he_ltf = bf->rTxBfPfmuInfo.u1HeLtf;
+
+	nicUniCmdStaRecFillHdr(ad, uni_cmd, cmd->ucBssIndex,
+			       (uint8_t *)tag + sizeof(*tag), 0);
 
 	LINK_INSERT_TAIL(&info->rUniCmdList, &entry->rLinkEntry);
 
@@ -8177,15 +8264,29 @@ uint32_t nicUniCmdStaRecConnType(struct ADAPTER *ad, uint32_t legacy_sta_type)
 	return CONNECTION_INFRA_STA;
 }
 
+/*
+ * mt76 (mt76_connac_mcu_sta_cmd) sends conn_state = PORT_SECURE for every
+ * enabled STA, including a brand-new one before auth, and sets the NEW
+ * extra-info bit only when conn_state != DISCONNECT. The vendor code sent
+ * "NEW + DISCONNECT" at STA_STATE_1, a combination mt76 never sends.
+ * wlan_def.h only defines STATE_CONNECTED (1); mt76's enum is
+ * DISCONNECT=0, CONNECT=1, PORT_SECURE=2.
+ *
+ * EXPERIMENT: to revert, set UNI_STAREC_CONN_STATE_LIVE to STATE_CONNECTED.
+ */
+#define UNI_STAREC_CONN_STATE_PORT_SECURE	2
+#define UNI_STAREC_CONN_STATE_LIVE		UNI_STAREC_CONN_STATE_PORT_SECURE
+
 uint32_t nicUniCmdStaRecTagBasic(struct ADAPTER *ad,
-	uint8_t *buf, struct CMD_UPDATE_STA_RECORD *cmd)
+				 uint8_t *buf, struct CMD_UPDATE_STA_RECORD *cmd)
 {
 	struct UNI_CMD_STAREC_BASIC *tag = (struct UNI_CMD_STAREC_BASIC *)buf;
 
 	tag->u2Tag = UNI_CMD_STAREC_TAG_BASIC;
 	tag->u2Length = sizeof(*tag);
 	tag->u4ConnectionType = nicUniCmdStaRecConnType(ad, cmd->ucStaType);
-	tag->ucConnectionState = cmd->ucStaState >= STA_STATE_2 ? STATE_CONNECTED : 0;
+	tag->ucConnectionState = (cmd->ucStaState >= STA_STATE_1) ?
+				 UNI_STAREC_CONN_STATE_LIVE : 0;
 	tag->ucIsQBSS = cmd->ucIsQoS;
 	tag->u2AID = cmd->u2AssocId;
 	COPY_MAC_ADDR(tag->aucPeerMacAddr, cmd->aucMacAddr);
@@ -8193,8 +8294,13 @@ uint32_t nicUniCmdStaRecTagBasic(struct ADAPTER *ad,
 	if (cmd->ucStaState == STA_STATE_1)
 		tag->u2ExtraInfo |= STAREC_COMMON_EXTRAINFO_NEWSTAREC;
 
+	DBGLOG(REQ, WARN, "[STAREC-BASIC] staState=%u connState=%u extra=0x%x aid=%u\n",
+	       cmd->ucStaState, tag->ucConnectionState, tag->u2ExtraInfo,
+	       tag->u2AID);
+
 	return tag->u2Length;
 }
+
 
 uint32_t nicUniCmdStaRecTagState(struct ADAPTER *ad,
 	uint8_t *buf, struct CMD_UPDATE_STA_RECORD *cmd)
@@ -8366,31 +8472,57 @@ void nicUniCmdStaRecHandleEventPkt(IN struct ADAPTER *prAdapter,
                                    IN struct CMD_INFO *prCmdInfo,
                                    IN uint8_t *pucEventBuf)
 {
-    struct UNI_CMD_STAREC *uni_cmd = (struct UNI_CMD_STAREC *)GET_UNI_CMD_DATA(prCmdInfo);
-    struct UNI_EVENT_CMD_RESULT *evt = (struct UNI_EVENT_CMD_RESULT *)pucEventBuf;
-    DBGLOG(NIC, WARN, "[STAREC-CB] ucCID=0x%x UNI_CMD_ID_STAREC_INFO=0x%x status=%d wlanidx=%d\\n",
-           evt->u2CID, UNI_CMD_ID_STAREC_INFO, evt->u4Status, uni_cmd->ucWlanIdxL);
-    if (evt->u2CID != UNI_CMD_ID_STAREC_INFO || evt->u4Status != 0)
+    struct UNI_CMD_STAREC *uni_cmd = NULL;
+    struct STA_RECORD *prStaRec = NULL;
+
+    /* GET_UNI_CMD_DATA() can yield NULL here, and the event can arrive in
+     * the legacy (non-UNI) layout via nicRxProcessEventPacket(), so neither
+     * uni_cmd nor the event body may be dereferenced blindly. Reaching this
+     * done-handler means the firmware answered the STA_REC command.
+     */
+    if (prCmdInfo)
+        uni_cmd = (struct UNI_CMD_STAREC *)GET_UNI_CMD_DATA(prCmdInfo);
+
+    DBGLOG(REQ, WARN, "[STAREC-CB] entered cmdInfo=%p uni_cmd=%p evt=%p\n",
+           prCmdInfo, uni_cmd, pucEventBuf);
+    if (pucEventBuf)
+        DBGLOG(REQ, WARN, "[STAREC-CB] evt[0..15]=%16ph\n", pucEventBuf);
+
+    /* Only the real UNI STA_REC response carries the command data. A call
+     * with uni_cmd == NULL is a different (legacy) command sharing this
+     * done-handler; firing the SAA on it sends auth before the firmware has
+     * acknowledged the STA_REC.
+     */
+    if (!uni_cmd) {
+        DBGLOG(REQ, WARN, "[STAREC-CB] no uni cmd data, not a STA_REC ack - ignored\n");
         return;
-    struct STA_RECORD *prStaRec = cnmGetStaRecByIndex(prAdapter,
-                                  secGetStaIdxByWlanIdx(prAdapter, uni_cmd->ucWlanIdxL));
-    if (!prStaRec)
+    }
+
+    prStaRec = cnmGetStaRecByIndex(prAdapter,
+            secGetStaIdxByWlanIdx(prAdapter, uni_cmd->ucWlanIdxL));
+    if (!prStaRec) {
+        DBGLOG(REQ, WARN, "[STAREC-CB] no StaRec for wlanidx=%u\n",
+               uni_cmd->ucWlanIdxL);
         return;
+    }
+
+    DBGLOG(REQ, WARN, "[STAREC-CB] StaRec[%u] state=%u\n",
+           prStaRec->ucIndex, prStaRec->ucStaState);
     switch (prStaRec->ucStaState) {
     case STA_STATE_1:
         /* STATE_1 ACK = WTBL allocated, firmware ready for auth. Fire SAA now. */
-        DBGLOG(NIC, INFO, "StaRec[%u] FW ACK state=1 (UNI) — firing SAA\\n",
+        DBGLOG(REQ, WARN, "StaRec[%u] FW ACK state=1 (UNI) - firing SAA\n",
                prStaRec->ucIndex);
         aisFsmFirePendingSAA(prAdapter, prStaRec->ucBssIndex);
         break;
     case STA_STATE_2:
         /* STATE_2 ACK = post-auth association state confirmed. No-op here. */
-        DBGLOG(NIC, INFO, "StaRec[%u] FW ACK state=2 (UNI) — no-op\\n",
+        DBGLOG(REQ, WARN, "StaRec[%u] FW ACK state=2 (UNI) - no-op\n",
                prStaRec->ucIndex);
         break;
     case STA_STATE_3:
         /* STATE_3 ACK = keys installed, activate data TX path. */
-        DBGLOG(NIC, INFO, "StaRec[%u] FW ACK state=3 (UNI) — activating TX path\\n",
+        DBGLOG(REQ, WARN, "StaRec[%u] FW ACK state=3 (UNI) - activating TX path\n",
                prStaRec->ucIndex);
         if (!prStaRec->fgIsTxAllowed) {
             qmActivateStaRec(prAdapter, prStaRec);
@@ -8402,7 +8534,7 @@ void nicUniCmdStaRecHandleEventPkt(IN struct ADAPTER *prAdapter,
         }
         break;
     default:
-        DBGLOG(NIC, INFO, "StaRec[%u] FW ACK state=%u (UNI, no-op)\\n",
+        DBGLOG(REQ, WARN, "StaRec[%u] FW ACK state=%u (UNI, no-op)\n",
                prStaRec->ucIndex, prStaRec->ucStaState);
         break;
     }
@@ -8521,6 +8653,10 @@ uint32_t nicUniCmdUpdateStaRec(struct ADAPTER *ad,
 	pos += sizeof(*uni_cmd);
 	for (i = 0; i < ARRAY_SIZE(arUpdateStaRecTable); i++)
 		pos += arUpdateStaRecTable[i].pfHandler(ad, pos, cmd);
+	nicUniCmdStaRecFillHdr(ad, uni_cmd, cmd->ucBssIndex, pos, 1);
+	DBGLOG(REQ, WARN, "[STAREC-UNI] needResp=%u staState=%u widx=%u len=%u\n",
+	       cmd->ucNeedResp, cmd->ucStaState, cmd->ucWlanIndex,
+	       (uint32_t)(pos - entry->pucInfoBuffer));
 	entry->u4SetQueryInfoLen = pos - entry->pucInfoBuffer;
 
 	LINK_INSERT_TAIL(&info->rUniCmdList, &entry->rLinkEntry);
@@ -8538,7 +8674,7 @@ uint32_t nicUniCmdSetBssRlm(struct ADAPTER *ad,
 	struct UNI_CMD_BSSINFO *uni_cmd;
 	struct WIFI_UNI_CMD_ENTRY *entry;
 	uint32_t max_cmd_len = sizeof(struct UNI_CMD_BSSINFO) +
-			       sizeof(struct UNI_CMD_BSSINFO_RLM) +
+			       sizeof(struct UNI_CMD_BSSINFO_RLM_MT76) +
 			       sizeof(struct UNI_CMD_BSSINFO_PROTECT) +
 			       sizeof(struct UNI_CMD_BSSINFO_IFS_TIME);
 	uint8_t *pos;
@@ -8975,7 +9111,7 @@ uint32_t nicUniCmdBssActivateCtrl(struct ADAPTER *ad,
 	bss_basic_tag->u2Tag = UNI_CMD_BSSINFO_TAG_BASIC;
 	bss_basic_tag->u2Length = sizeof(*bss_basic_tag);
 	bss_basic_tag->ucActive = cmd->ucActive;
-	bss_basic_tag->ucDbdcIdx = ENUM_BAND_AUTO;
+	bss_basic_tag->ucDbdcIdx = 0; /* mt76: .band_idx = mvif->band_idx */
 	bss_basic_tag->ucOwnMacIdx = cmd->ucOwnMacAddrIndex;
 	bss_basic_tag->ucHwBSSIndex = cmd->ucOwnMacAddrIndex;
 	bss_basic_tag->u4ConnectionType = nicUniCmdBssInfoConnType(ad, bss);

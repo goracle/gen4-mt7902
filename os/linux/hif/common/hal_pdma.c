@@ -1718,73 +1718,82 @@ u_int8_t halProcessToken(IN struct ADAPTER *prAdapter,
 }
 
 static void halDefaultProcessMsduReport(IN struct ADAPTER *prAdapter,
-										IN OUT struct SW_RFB *prSwRfb,
-										IN OUT struct QUE *prFreeQueue)
+					IN OUT struct SW_RFB *prSwRfb,
+					IN OUT struct QUE *prFreeQueue)
 {
-	struct GL_HIF_INFO *prHifInfo;
-	struct HIF_MEM_OPS *prMemOps;
 	struct HW_MAC_MSDU_REPORT *prMsduReport;
-#if !HIF_TX_PREALLOC_DATA_BUFFER
-	struct MSDU_INFO *prMsduInfo;
-#endif
-	uint16_t u2TokenCnt, u2TotalTokenCnt;
-	uint32_t u4Idx, u4Token;
+	uint16_t u2TokenCnt = 0, u2TotalTokenCnt, u2BadCnt = 0;
+	uint32_t u4Idx = 0, u4MaxIdx, u4ByteCnt, u4Token;
 	uint8_t ucVer;
 
 	ASSERT(prAdapter);
 	ASSERT(prAdapter->prGlueInfo);
 
-	prHifInfo = &prAdapter->prGlueInfo->rHifInfo;
-	prMemOps = &prHifInfo->rMemOps;
-
 	prMsduReport = (struct HW_MAC_MSDU_REPORT *)prSwRfb->pucRecvBuff;
+
+	/* DW0[15:0] is the RX byte count of the whole TXFREE packet */
+	u4ByteCnt = ((uint32_t *)prSwRfb->pucRecvBuff)[0] & 0xffff;
+
 	ucVer = prMsduReport->DW1.field.u4Ver;
 	if (ucVer == TFD_EVT_VER_3)
 		u2TotalTokenCnt = prMsduReport->DW0.field_v3.u2MsduCount;
 	else
 		u2TotalTokenCnt = prMsduReport->DW0.field.u2MsduCount;
 
-	u4Idx = u2TokenCnt = 0;
-	while (u2TokenCnt < u2TotalTokenCnt) {
-		/* Format version of this tx done event.
-		 *	0: MT7615
-		 *	1: MT7622, CONNAC (X18/P18/MT7663)
-		 *	2: MT7915 E1/MT6885
-		 *      3: MT7915 E2/MT7961
-		 */
-		if (ucVer == TFD_EVT_VER_0)
+	/* 2 header words, then info words (v0 packs two IDs per word) */
+	u4MaxIdx = (u4ByteCnt > 8) ? ((u4ByteCnt - 8) >> 2) : 0;
+	if (ucVer == TFD_EVT_VER_0)
+		u4MaxIdx <<= 1;
+	if (u4MaxIdx > 256)
+		u4MaxIdx = 256;
+
+	/*
+	 * Format version of this tx done event.
+	 *   0: MT7615
+	 *   1: MT7622, CONNAC (X18/P18/MT7663)
+	 *   2: MT7915 E1/MT6885
+	 *   3: MT7915 E2/MT7961
+	 */
+	while (u2TokenCnt < u2TotalTokenCnt && u4Idx < u4MaxIdx) {
+		if (ucVer == TFD_EVT_VER_0) {
 			u4Token = prMsduReport->au4MsduToken[u4Idx >> 1].
 				rFormatV0.u2MsduID[u4Idx & 1];
-		else if (ucVer == TFD_EVT_VER_1)
+		} else if (ucVer == TFD_EVT_VER_1) {
 			u4Token = prMsduReport->au4MsduToken[u4Idx].
 				rFormatV1.u2MsduID;
-		else if (ucVer == TFD_EVT_VER_2)
+		} else if (ucVer == TFD_EVT_VER_2) {
 			u4Token = prMsduReport->au4MsduToken[u4Idx].
 				rFormatV2.u2MsduID;
-		else {
-			if (!prMsduReport->au4MsduToken[u4Idx].
-				rFormatV3.rP0.u4Pair)
-				u4Token = prMsduReport->au4MsduToken[u4Idx].
-					rFormatV3.rP0.u4MsduID;
-			else {
+		} else {
+			/* v3: a pair word (wlanIdx) is not a token, skip it */
+			if (prMsduReport->au4MsduToken[u4Idx].rFormatV3.rP0.u4Pair) {
 				u4Idx++;
 				continue;
 			}
+			u4Token = prMsduReport->au4MsduToken[u4Idx].
+				rFormatV3.rP0.u4MsduID;
 		}
 		u4Idx++;
 		u2TokenCnt++;
 
 		if (u4Token >= HIF_TX_MSDU_TOKEN_NUM) {
-			DBGLOG(HAL, ERROR, "Error MSDU report[%u]\n", u4Token);
-			DBGLOG_MEM32(HAL, ERROR, prMsduReport, 64);
-			prAdapter->u4HifDbgFlag |= DEG_HIF_DEFAULT_DUMP;
-			halPrintHifDbgInfo(prAdapter);
+			u2BadCnt++;
 			continue;
 		}
 
 		halProcessToken(prAdapter, u4Token, prFreeQueue);
 	}
 
+	if (u2BadCnt || u2TokenCnt < u2TotalTokenCnt) {
+		DBGLOG(HAL, ERROR,
+		       "TXFREE: ver=%u total=%u got=%u bad=%u bytes=%u words=%u\n",
+		       ucVer, u2TotalTokenCnt, u2TokenCnt, u2BadCnt,
+		       u4ByteCnt, u4MaxIdx);
+		DBGLOG_MEM32(HAL, ERROR, prMsduReport,
+			     (u4ByteCnt + 3) & ~3U);
+		prAdapter->u4HifDbgFlag |= DEG_HIF_DEFAULT_DUMP;
+		halPrintHifDbgInfo(prAdapter);
+	}
 }
 
 void halRxProcessMsduReport(IN struct ADAPTER *prAdapter,
@@ -3884,6 +3893,29 @@ bool halWpdmaWriteCmd(IN struct GLUE_INFO *prGlueInfo,
 		}
 	}
 
+	{
+		/* [CMDDUMP] full payload of every command, so the join-window
+		 * BSS/STA_REC tags can be diffed against mt76. Dumps the TXD
+		 * buffer (which holds the whole command when TxP len is 0).
+		 */
+		u32 u4DumpLen;
+
+		if (prCmdInfo->pucTxd && prCmdInfo->u4TxdLen) {
+			u4DumpLen = min_t(u32, prCmdInfo->u4TxdLen, 320);
+			printk(KERN_ERR "[CMDDUMP] CID=0x%02x slot=%u txd=%u txp=%u\n",
+			       prCmdInfo->ucCID, prTxRing->TxCpuIdx,
+			       prCmdInfo->u4TxdLen, prCmdInfo->u4TxpLen);
+			print_hex_dump(KERN_ERR, "[CMDDUMP] txd: ",
+				       DUMP_PREFIX_OFFSET, 16, 1,
+				       prCmdInfo->pucTxd, u4DumpLen, false);
+		}
+		if (prCmdInfo->pucTxp && prCmdInfo->u4TxpLen) {
+			u4DumpLen = min_t(u32, prCmdInfo->u4TxpLen, 320);
+			print_hex_dump(KERN_ERR, "[CMDDUMP] txp: ",
+				       DUMP_PREFIX_OFFSET, 16, 1,
+				       prCmdInfo->pucTxp, u4DumpLen, false);
+		}
+	}
 	INC_RING_INDEX(prTxRing->TxCpuIdx, TX_RING_SIZE);
 	prTxRing->u4UsedCnt++;
 
