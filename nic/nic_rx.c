@@ -72,6 +72,8 @@
  */
 
 #include "precomp.h"
+#include <linux/kernel.h>
+#include <linux/types.h>
 #include "nic_uni_cmd_event.h"
 #include "nic_cmd_event.h"
 #include "que_mgt.h"
@@ -82,7 +84,6 @@
 #endif
 #if (CFG_SUPPORT_SNIFFER_RADIOTAP == 1)
 #include "radiotap.h"
-//static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb);
 
 #endif
 
@@ -243,9 +244,9 @@ static struct RX_EVENT_HANDLER arEventTable[] = {
 #endif
 	{ EVENT_ID_OPMODE_CHANGE, cnmOpmodeEventHandler },
 #if CFG_SUPPORT_NAN
-	{ EVENT_ID_NAN_EXT_EVENT, nicNanEventDispatcher }
+	{ EVENT_ID_NAN_EXT_EVENT, nicNanEventDispatcher },
 #endif
-{EVENT_ID_INIT_EVENT_CMD_RESULT, nicEventInitCmdResult},
+	{EVENT_ID_INIT_EVENT_CMD_RESULT, nicEventInitCmdResult},
 };
 
 static const struct ACTION_FRAME_SIZE_MAP arActionFrameReservedLen[] = {
@@ -320,358 +321,176 @@ static const struct ACTION_FRAME_SIZE_MAP arActionFrameReservedLen[] = {
  * @return (none)
  */
 /*----------------------------------------------------------------------------*/
-#include <linux/types.h>
-#include <linux/kernel.h>
 
 
 
 
-/* refactored relay mgmt -> cfg80211 with hardened checks & small helpers */
+/* Management frames recovered from the data ring need a bounded cfg80211 relay. */
 
-/* Max bytes to dump on failure for diagnosis */
-#define RELAY_DUMP_BYTES 64
+/* Validate the complete Information Element stream before exposing it to cfg80211. */
+static bool relay_validate_ies(const uint8_t *ies, size_t ies_len)
+{
+	const uint8_t *pos = ies;
+	size_t remaining = ies_len;
 
-/* Candidate RX descriptor/prefix sizes to try (in bytes) */
-static const size_t relay_candidate_prefixes[] = { 8, 24, 28, 32, 36 };
+	if (!ies && ies_len)
+		return false;
 
-/* Compute buffer start/end from SW_RFB (safe arithmetic).
- * Returns 0 on success, -EINVAL if inputs look bogus.
+	while (remaining) {
+		size_t element_len;
+
+		if (remaining < 2)
+			return false;
+
+		element_len = pos[1];
+		if (element_len > remaining - 2)
+			return false;
+
+		pos += element_len + 2;
+		remaining -= element_len + 2;
+	}
+
+	return true;
+}
+
+/*
+ * The RX descriptor provides a channel number but no band here. Prefer the
+ * conventional 2.4/5 GHz interpretation for overlapping channel numbers, and
+ * only infer 6 GHz for high primary-channel numbers that do not overlap common
+ * 5 GHz channels.
  */
-static int relay_compute_buf_bounds(struct SW_RFB *prSwRfb,
-                                    uint8_t **pbuf_start,
-                                    uint8_t **pbuf_end,
-                                    size_t *pbuf_len)
+static int relay_channel_to_freq(uint8_t channel)
 {
-    uint8_t *pvHeader;
-    size_t hdr, pkt;
+	/* Prefer conventional 2.4 GHz interpretation when band is unknown. */
+	if (channel >= 1 && channel <= 13)
+		return 2407 + channel * 5;
+	if (channel == 14)
+		return 2484;
 
-    if (!prSwRfb || !prSwRfb->pvHeader)
-        return -EINVAL;
+	/* Standard 5 GHz channel blocks, including the upper 149-177 block. */
+	if ((channel >= 36 && channel <= 144 && channel % 4 == 0) ||
+	    (channel >= 149 && channel <= 177 &&
+	     (channel - 149) % 4 == 0))
+		return 5000 + channel * 5;
 
-    pvHeader = (uint8_t *)prSwRfb->pvHeader;
-    hdr = prSwRfb->u2HeaderLen;
-    pkt = prSwRfb->u2PacketLen;
+	/* Only map high 6 GHz channels that do not collide with common 5 GHz. */
+	if (channel >= 181 && channel <= 233 && (channel - 1) % 4 == 0)
+		return 5950 + channel * 5;
 
-    /* sanity */
-    if (hdr > 65535 || pkt > 65535)
-        return -EINVAL;
-
-    /* buf_start points to beginning of DMA buffer (header area first) */
-    *pbuf_start = pvHeader - hdr;
-
-    /* buf_end points one-past-last byte of the buffer we own */
-    *pbuf_end = *pbuf_start + hdr + pkt;
-    *pbuf_len = hdr + pkt;
-
-    /* basic sanity checks */
-    if (*pbuf_end <= *pbuf_start || *pbuf_len < 1)
-        return -EINVAL;
-
-    return 0;
+	return -EINVAL;
 }
 
-/* Try candidate offsets for a valid 802.11 frame header.
- * Returns pointer to frame_start on success (and sets *pframe_len and *pfc),
- * or NULL on failure.
- *
- * NOTE: We only accept explicit candidates in relay_candidate_prefixes[].
+/* Inform cfg80211 about a beacon or probe response recovered from the data ring. */
+static int relay_inform_cfg80211(struct wiphy *wiphy, uint8_t fc,
+				 uint8_t *bssid, uint8_t *ies, size_t ies_len,
+				 uint16_t capability, uint16_t beacon_interval,
+				 struct ieee80211_channel *chan)
+{
+	struct cfg80211_bss *bss;
+	enum cfg80211_bss_frame_type frame_type;
+	uint8_t subtype = (fc >> 4) & 0x0f;
+
+	if (!wiphy || !chan || !bssid || !ies || !ies_len)
+		return -EINVAL;
+
+	if (!relay_validate_ies(ies, ies_len)) {
+		DBGLOG(RX, WARN, "[RELAY] malformed IEs for BSSID=%pM\n", bssid);
+		return -EINVAL;
+	}
+
+	switch (subtype) {
+	case 8:
+		frame_type = CFG80211_BSS_FTYPE_BEACON;
+		break;
+	case 5:
+		frame_type = CFG80211_BSS_FTYPE_PRESP;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	bss = cfg80211_inform_bss(wiphy, chan, frame_type, bssid, 0ULL,
+				  capability, beacon_interval, ies, ies_len,
+				  DBM_TO_MBM(-50), GFP_ATOMIC);
+	if (!bss) {
+		DBGLOG(RX, WARN,
+		       "[RELAY] cfg80211_inform_bss failed for BSSID=%pM\n",
+		       bssid);
+		return -EIO;
+	}
+
+	cfg80211_put_bss(wiphy, bss);
+	return 0;
+}
+
+/*
+ * Only frames explicitly rerouted from the data ring are relayed here.
+ * Ordinary management frames already follow the normal scan/management path.
  */
-static uint8_t *relay_find_frame_start(uint8_t *buf_start, uint8_t *buf_end,
-                                       size_t *pframe_len, uint8_t *pfc)
+static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter,
+				    struct SW_RFB *prSwRfb)
 {
-    size_t i;
+	struct GLUE_INFO *prGlueInfo;
+	struct wiphy *wiphy;
+	struct ieee80211_channel *chan;
+	uint8_t *frame;
+	uint8_t frame_control;
+	uint8_t channel;
+	uint16_t beacon_interval, capability;
+	size_t frame_len, ies_len;
+	uint8_t *ies;
+	int frequency, rc;
 
-    for (i = 0; i < ARRAY_SIZE(relay_candidate_prefixes); i++) {
-        uint8_t *candidate = buf_start + relay_candidate_prefixes[i];
+	if (!prAdapter || !prSwRfb)
+		return -EINVAL;
 
-        /* Safety: Ensure we can read the Frame Control byte and the minimum header */
-        if (candidate + 36 > buf_end)
-            continue;
+	/* Only relay frames from the software-defined RX management path. */
+	if (prSwRfb->ucPacketType != RX_PKT_TYPE_SW_DEFINED)
+		return 0;
 
-        /*
-         * Validate Management Frame Control byte:
-         * 0x80: Beacon
-         * 0x50: Probe Response
-         * 0x40: Probe Request
-         * 0xD0: Action
-         */
-        uint8_t fc = candidate[0];
-        if (fc == 0x80 || fc == 0x50 || fc == 0xd0 || fc == 0x40) {
-            *pfc = fc;
-            *pframe_len = (size_t)(buf_end - candidate);
-            return candidate;
-        }
-    }
+	frame = (uint8_t *)prSwRfb->pvHeader;
+	frame_len = prSwRfb->u2PacketLen;
+	if (!frame || frame_len < 36)
+		return -EINVAL;
 
-    return NULL;
+	/* Beacon (0x80) and probe response (0x50) only. */
+	frame_control = frame[0];
+	if (frame_control != 0x80 && frame_control != 0x50)
+		return 0;
+
+	prGlueInfo = prAdapter->prGlueInfo;
+	if (!prGlueInfo || !prGlueInfo->prDevHandler ||
+	    !prGlueInfo->prDevHandler->ieee80211_ptr)
+		return -ENODEV;
+
+	wiphy = prGlueInfo->prDevHandler->ieee80211_ptr->wiphy;
+	if (!wiphy)
+		return -ENODEV;
+
+	channel = prSwRfb->ucChnlNum;
+	frequency = relay_channel_to_freq(channel);
+	if (frequency < 0)
+		return frequency;
+
+	chan = ieee80211_get_channel(wiphy, frequency);
+	if (!chan)
+		return -EINVAL;
+
+	/* Fixed beacon parameters begin after the 24-byte MAC header and TSF. */
+	beacon_interval = (uint16_t)frame[32] |
+			  ((uint16_t)frame[33] << 8);
+	capability = (uint16_t)frame[34] |
+		     ((uint16_t)frame[35] << 8);
+	ies = frame + 36;
+	ies_len = frame_len - 36;
+
+	rc = relay_inform_cfg80211(wiphy, frame_control, frame + 16, ies,
+				  ies_len, capability, beacon_interval, chan);
+	if (rc)
+		DBGLOG(RX, WARN, "[RELAY] BSS relay failed (%d)\n", rc);
+
+	return rc;
 }
-
-
-/* Extract SSID from IE blob (if present), nul-terminate into ssid_out (33 bytes).
- * Returns true if SSID found (and non-empty), false otherwise.
- */
-#if 0
-static bool relay_extract_ssid(uint8_t *ies, size_t ie_len, char ssid_out[33])
-{
-    size_t rem = ie_len;
-    uint8_t *p = ies;
-
-    if (!ies || ie_len < 2) {
-        ssid_out[0] = '\0';
-        return false;
-    }
-
-    while (rem >= 2) {
-        uint8_t id = p[0];
-        uint8_t len = p[1];
-
-        if (id == 0) { /* SSID IE */
-            size_t copy = (len > 32) ? 32 : len;
-            if (2 + copy <= rem) {
-                if (copy)
-                    kalMemCopy(ssid_out, p + 2, copy);
-                ssid_out[copy] = '\0';
-                return true;
-            } else {
-                break; /* malformed IE, bail */
-            }
-        }
-
-        if (len > rem - 2)
-            break;
-
-        p += 2 + len;
-        rem -= 2 + len;
-    }
-
-    ssid_out[0] = '\0';
-    return false;
-}
-#endif
-
-/* Compute channel frequency (kHz) from channel number.
- * Returns frequency in MHz (int) — same formula as original.
- */
-static int relay_channel_to_freq(int ucChnl)
-{
-    if (ucChnl <= 14)
-        return 2407 + ucChnl * 5;
-    else if (ucChnl >= 36 && ucChnl <= 177)
-        return 5000 + ucChnl * 5;
-    else if (ucChnl >= 1 && ucChnl <= 233) /* 6GHz channels */
-        return 5955 + ucChnl * 5;
-    else
-        return 5000 + ucChnl * 5;
-}
-
-/* Inform cfg80211 about a BSS. Returns 0 on success, negative on error.
- * This wrapper validates IEs pointer/length before calling cfg80211_inform_bss.
- */
-static int relay_inform_cfg80211(struct GLUE_INFO *prGlueInfo, struct wiphy *wiphy,
-                                 uint16_t fc, uint8_t *bssid, uint8_t *ies, size_t ies_len,
-                                 uint16_t u2Cap, uint16_t u2BeaconInt, struct ieee80211_channel *chan)
-{
-    struct cfg80211_bss *bss = NULL;
-    enum cfg80211_bss_frame_type ftype;
-    u8 subtype;
-
-    if (!wiphy || !chan || !bssid || !ies) {
-        DBGLOG(RX, ERROR, "[RELAY] invalid args wiphy=%p chan=%p bssid=%p ies=%p\n",
-               wiphy, chan, bssid, ies);
-        return -EINVAL;
-    }
-
-    if (ies_len == 0) {
-        DBGLOG(RX, WARN, "[RELAY] empty IEs for BSSID=%pM\n", bssid);
-        return -EINVAL;
-    }
-
-    /* Extract 802.11 subtype from frame control (fc is host-endian u16) */
-    subtype = (fc >> 4) & 0xF;
-
-    /* Map subtype to cfg80211 frame type expected by this kernel */
-    switch (subtype) {
-    case 8:  /* Beacon */
-        ftype = CFG80211_BSS_FTYPE_BEACON;
-        break;
-    case 5:  /* Probe Response */
-        ftype = CFG80211_BSS_FTYPE_PRESP;
-        break;
-    default:
-        DBGLOG(RX, LOUD, "[RELAY] ignoring mgmt subtype=%u (not beacon/probe resp)\n", subtype);
-        return -EINVAL;
-    }
-
-    DBGLOG(RX, INFO,
-           "[RELAY] informing cfg80211: subtype=%u ftype=%d BSSID=%pM ies_len=%zu BI=%u CAP=0x%04x CH=%d\n",
-           subtype, (int)ftype, bssid, ies_len, u2BeaconInt, u2Cap,
-           chan ? chan->hw_value : -1);
-
-    /* Call cfg80211_inform_bss with the kernel's expected ordering:
-     * (wiphy, chan, ftype, bssid, tsf, capab, beacon_interval, ie, ie_len, signal, gfp)
-     *
-     * Use TSF=0 (unknown), conservative RSSI, GFP_ATOMIC because we're in IRQ/NAPI context.
-     */
-    rcu_read_lock();
-    bss = cfg80211_inform_bss(wiphy, chan,
-                              ftype,
-                              bssid,
-                              0ULL,               /* TSF unknown */
-                              u2Cap,              /* capability info */
-                              u2BeaconInt,        /* beacon interval */
-                              ies,                /* IEs pointer */
-                              ies_len,            /* IEs length */
-                              DBM_TO_MBM(-50),    /* signal in mBm */
-                              GFP_ATOMIC);
-    rcu_read_unlock();
-
-    if (!bss) {
-        DBGLOG(RX, WARN, "[RELAY] cfg80211_inform_bss returned NULL for BSSID=%pM\n", bssid);
-        return -EIO;
-    }
-
-    /* balance refcount (safe across kernel versions) */
-    cfg80211_put_bss(wiphy, bss);
-
-    return 0;
-}
-
-
-/* Safely hand frame to scan engine after temporarily adjusting prSwRfb fields.
- * Returns 0 on success, negative otherwise.
- */
-static int relay_pass_to_scan(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb,
-                              uint8_t *frame_start, size_t frame_len)
-{
-    void *pvSavedHeader;
-    uint16_t u2SavedHeaderLen, u2SavedPacketLen;
-    uint16_t new_pkt_len;
-
-    if (!prAdapter || !prSwRfb || !frame_start || frame_len < 36)
-        return -EINVAL;
-
-    new_pkt_len = (uint16_t)min_t(size_t, frame_len, U16_MAX);
-
-    pvSavedHeader = prSwRfb->pvHeader;
-    u2SavedHeaderLen = prSwRfb->u2HeaderLen;
-    u2SavedPacketLen = prSwRfb->u2PacketLen;
-
-    prSwRfb->pvHeader = frame_start;
-    prSwRfb->u2HeaderLen = 0;
-    prSwRfb->u2PacketLen = new_pkt_len;
-
-    /*
-     * Warning: This relies on scanProcessBeaconAndProbeResp being
-     * purely synchronous. If it ever schedules work or queues the RFB,
-     * this will corrupt the stack/state.
-     */
-    scanProcessBeaconAndProbeResp(prAdapter, prSwRfb);
-
-    prSwRfb->pvHeader = pvSavedHeader;
-    prSwRfb->u2HeaderLen = u2SavedHeaderLen;
-    prSwRfb->u2PacketLen = u2SavedPacketLen;
-
-    return 0;
-}
-
-
-/* Main refactored relay function */
-static int __relay_mgmt_to_cfg80211(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb)
-{
-    struct GLUE_INFO *prGlueInfo;
-    struct wiphy *wiphy;
-    struct ieee80211_channel *chan = NULL;
-    uint8_t *frame_start = NULL;
-    uint8_t *buf_start = NULL, *buf_end = NULL;
-    size_t buf_len = 0, frame_len = 0;
-    uint8_t ucChnl, ucFC = 0;
-    uint16_t u2BeaconInt = 0, u2Cap = 0;
-    char ssid_str[33] = {0};
-    uint8_t *ies = NULL;
-    size_t ies_len = 0;
-    int rc, i4Freq;
-
-    if (!prAdapter || !prSwRfb || !prSwRfb->pvHeader || prSwRfb->u2PacketLen == 0)
-        return -EINVAL;
-
-    prGlueInfo = prAdapter->prGlueInfo;
-    if (!prGlueInfo || !prGlueInfo->prDevHandler || !prGlueInfo->prDevHandler->ieee80211_ptr)
-        return -ENODEV;
-
-    wiphy = prGlueInfo->prDevHandler->ieee80211_ptr->wiphy;
-
-    rc = relay_compute_buf_bounds(prSwRfb, &buf_start, &buf_end, &buf_len);
-    if (rc)
-        return rc;
-
-    frame_start = relay_find_frame_start(buf_start, buf_end, &frame_len, &ucFC);
-    if (!frame_start)
-        return -EINVAL;
-
-    /* Only beacons and probe responses carry the fixed beacon fields
-     * (timestamp, beacon interval, capability) starting at offset 24.
-     * Auth, assoc, and other mgmt frames are shorter — skip relay for them.
-     */
-    if ((ucFC & MASK_FRAME_TYPE) != MAC_FRAME_BEACON &&
-        (ucFC & MASK_FRAME_TYPE) != MAC_FRAME_PROBE_RSP)
-        return 0;
-
-    if (frame_len < 36)
-        return -EINVAL;
-
-    ucChnl = prSwRfb->ucChnlNum;
-    i4Freq = relay_channel_to_freq((int)ucChnl);
-    chan = ieee80211_get_channel(wiphy, i4Freq);
-    if (!chan)
-        return -EINVAL;
-
-    /* Extract fixed fields: 8 bytes timestamp (ignored), 2 bytes beacon int, 2 bytes cap */
-    u2BeaconInt = le16_to_cpu(*(const uint16_t *)(frame_start + 32));
-    u2Cap = le16_to_cpu(*(const uint16_t *)(frame_start + 34));
-
-    /* IEs start at offset 36 */
-    ies = frame_start + 36;
-    ies_len = frame_len - 36;
-
-    /* Extract SSID safely for logging */
-    if (ies_len > 0) {
-        uint8_t *ssid_ie = NULL;
-        size_t temp_len = ies_len;
-        uint8_t *p = ies;
-
-        while (temp_len >= 2) {
-            if (p[0] == 0) {
-                ssid_ie = p;
-                break;
-            }
-            temp_len -= (p[1] + 2);
-            p += (p[1] + 2);
-        }
-
-        if (ssid_ie && ssid_ie[1] <= 32) {
-            memcpy(ssid_str, ssid_ie + 2, ssid_ie[1]);
-            ssid_str[ssid_ie[1]] = '\0';
-            DBGLOG(RX, INFO, "[RELAY] SSID='%s'\n", ssid_str);
-        }
-    }
-
-    /* Notify cfg80211 */
-    rc = relay_inform_cfg80211(prGlueInfo, wiphy, ucFC, frame_start + 16,
-                               ies, ies_len, u2Cap, u2BeaconInt, chan);
-    if (rc) {
-        DBGLOG(RX, WARN, "[RELAY] cfg80211_inform_bss failed (%d)\n", rc);
-    }
-
-    /* Pass to scan engine */
-    rc = relay_pass_to_scan(prAdapter, prSwRfb, frame_start, frame_len);
-    if (rc) {
-        DBGLOG(RX, WARN, "[RELAY] scanProcess failed (%d)\n", rc);
-        return rc;
-    }
-
-    return 0;
-}
-
 
 
 void nicRxInitialize(IN struct ADAPTER *prAdapter)
@@ -802,147 +621,65 @@ void nicRxUninitialize(IN struct ADAPTER *prAdapter)
  */
 /*----------------------------------------------------------------------------*/
 void nicRxFillRFB(IN struct ADAPTER *prAdapter,
-                  IN OUT struct SW_RFB *prSwRfb)
+		  IN OUT struct SW_RFB *prSwRfb)
 {
-    struct RX_DESC_OPS_T *prRxDescOps = NULL;
-    struct WLAN_MAC_HEADER *hdr = NULL;
-    struct STA_RECORD *sta = NULL;
-    size_t hexdump_len = 0;
-    unsigned char *p = NULL;
-    int i;
+	struct RX_DESC_OPS_T *prRxDescOps;
+	struct WLAN_MAC_HEADER *hdr;
+	struct STA_RECORD *sta;
+	uint8_t bss_index;
+	static const uint8_t zero_addr[6] = { 0 };
 
-    if (!prAdapter) {
-        DBGLOG(RX, ERROR, "%s: null prAdapter\n", __func__);
-        return;
-    }
+	if (!prAdapter || !prSwRfb) {
+		DBGLOG(RX, ERROR, "%s: invalid adapter/RFB\n", __func__);
+		return;
+	}
 
-    if (!prSwRfb) {
-        DBGLOG(RX, ERROR, "%s: null prSwRfb\n", __func__);
-        return;
-    }
+	if (!prAdapter->chip_info || !prAdapter->chip_info->prRxDescOps) {
+		DBGLOG(RX, ERROR, "%s: RX descriptor ops unavailable\n", __func__);
+		return;
+	}
 
-    prRxDescOps = prAdapter->chip_info ?
-                  prAdapter->chip_info->prRxDescOps : NULL;
+	prRxDescOps = prAdapter->chip_info->prRxDescOps;
+	if (!prRxDescOps->nic_rxd_fill_rfb) {
+		DBGLOG(RX, ERROR, "%s: nic_rxd_fill_rfb unavailable\n", __func__);
+		return;
+	}
 
-    /* Let the RX descriptor implementation populate the SW_RFB. */
-    if (prRxDescOps && prRxDescOps->nic_rxd_fill_rfb) {
-        prRxDescOps->nic_rxd_fill_rfb(prAdapter, prSwRfb);
-    } else {
-        DBGLOG(RX, ERROR, "%s: no nic_rxd_fill_rfb\n", __func__);
-        return;
-    }
+	prRxDescOps->nic_rxd_fill_rfb(prAdapter, prSwRfb);
 
-    /*
-     * Defensive sanity checks after descriptor fill.
-     * If pvHeader is NULL or header length is zero, don't dereference.
-     */
-    if (!prSwRfb->pvHeader || prSwRfb->u2HeaderLen == 0) {
-        DBGLOG(RX, ERROR,
-               "%s: header too short (%u bytes). pvHeader=%p pktLen=%u hdrLen=%u wlanIdx=%u staIdx=%u\n",
-               __func__,
-               prSwRfb->u2HeaderLen,
-               prSwRfb->pvHeader,
-               prSwRfb->u2PacketLen,
-               prSwRfb->u2HeaderLen,
-               prSwRfb->ucWlanIdx,
-               prSwRfb->ucStaRecIdx);
+	if (!prSwRfb->pvHeader) {
+		DBGLOG(RX, WARN, "%s: RX descriptor produced a NULL header\n",
+		       __func__);
+		return;
+	}
 
-        /* hex-dump a small prefix if we have at least some packet length */
-        hexdump_len = prSwRfb->u2PacketLen ? min_t(size_t, prSwRfb->u2PacketLen, 32) : 0;
-        if (prSwRfb->pvHeader && hexdump_len) {
-            p = (unsigned char *)prSwRfb->pvHeader;
-            {
-                char buf[128];
-                int pos = 0;
-                int lim = (int)hexdump_len;
-                pos = 0;
-                for (i = 0; i < lim && pos < (int)sizeof(buf) - 4; i++)
-                    pos += snprintf(buf + pos, sizeof(buf) - pos, "%02x ", p[i]);
-                DBGLOG(RX, ERROR, "%s: first %zu bytes: %s\n", __func__, hexdump_len, buf);
-            }
-        }
-        return;
-    }
+	/* Ethernet-translated headers are shorter; skip the 802.11-only fallback. */
+	if (prSwRfb->u2HeaderLen < sizeof(struct WLAN_MAC_HEADER))
+		return;
 
-    /*
-     * After descriptor fill, if we still lack an associated STA record
-     * but we do have a full 802.11 header, try to resolve by Addr2.
-     */
-    if (prSwRfb->prStaRec == NULL &&
-        prSwRfb->pvHeader &&
-        prSwRfb->u2HeaderLen >= sizeof(struct WLAN_MAC_HEADER)) {
+	/*
+	 * Descriptor parsing is authoritative.  Resolve a missing station only
+	 * when the WLAN index is valid, and use its actual BSS instead of assuming
+	 * BSS 0.  Never guess a MAC address by scanning arbitrary header bytes.
+	 */
+	if (prSwRfb->prStaRec || prSwRfb->ucWlanIdx == 0xff ||
+	    prSwRfb->ucWlanIdx >= WTBL_SIZE)
+		return;
 
-        hdr = (struct WLAN_MAC_HEADER *)prSwRfb->pvHeader;
+	hdr = (struct WLAN_MAC_HEADER *)prSwRfb->pvHeader;
+	if (!memcmp(hdr->aucAddr2, zero_addr, sizeof(zero_addr)))
+		return;
 
-        /* quick sanity: detect obviously invalid Addr2 (all zeros) */
-        if (!memcmp(hdr->aucAddr2, "\x00\x00\x00\x00\x00\x00", 6)) {
-            DBGLOG(RX, INFO,
-                   "[FILL-RFB] Addr2 all-zero (likely parsing offset issue) pvHeader=%p hdrLen=%u pktLen=%u wlanIdx=%u staIdx=%u\n",
-                   prSwRfb->pvHeader,
-                   prSwRfb->u2HeaderLen,
-                   prSwRfb->u2PacketLen,
-                   prSwRfb->ucWlanIdx,
-                   prSwRfb->ucStaRecIdx);
+	bss_index = secGetBssIdxByWlanIdx(prAdapter, prSwRfb->ucWlanIdx);
+	if (bss_index >= MAX_BSSID_NUM)
+		return;
 
-            /*
-             * Heuristic: scan the header buffer for a plausible non-zero 6-byte
-             * sequence (possible mis-parsed MAC). This is only a diagnostic,
-             * don't mutate state on the basis of a heuristic.
-             */
-            p = (unsigned char *)prSwRfb->pvHeader;
-            for (i = 0; i + 6 <= (int)prSwRfb->u2HeaderLen; i++) {
-                if (!(p[i] == 0 && p[i + 1] == 0 && p[i + 2] == 0 &&
-                      p[i + 3] == 0 && p[i + 4] == 0 && p[i + 5] == 0)) {
-                    DBGLOG(RX, INFO,
-                           "%s: heuristic found non-zero 6-byte sequence at hdr offset %d: %02x:%02x:%02x:%02x:%02x:%02x\n",
-                           __func__, i,
-                           p[i], p[i + 1], p[i + 2], p[i + 3], p[i + 4], p[i + 5]);
-                    break;
-                }
-            }
-            return;
-        }
+	sta = cnmGetStaRecByAddress(prAdapter, bss_index, hdr->aucAddr2);
+	if (!sta)
+		return;
 
-        /* Normal path: try to resolve STA by Addr2 */
-        sta = cnmGetStaRecByAddress(prAdapter, 0, hdr->aucAddr2);
-
-        if (sta) {
-            prSwRfb->prStaRec = sta;
-            prSwRfb->ucStaRecIdx = sta->ucIndex;
-            DBGLOG(RX, INFO,
-                   "[FILL-RFB] resolved StaRec idx=%u via Addr2 %pM (pvHeader=%p hdrLen=%u pktLen=%u)\n",
-                   sta->ucIndex, hdr->aucAddr2, prSwRfb->pvHeader,
-                   prSwRfb->u2HeaderLen, prSwRfb->u2PacketLen);
-        } else {
-            DBGLOG(RX, INFO,
-                   "[FILL-RFB] no StaRec for Addr2 %pM (pvHeader=%p hdrLen=%u pktLen=%u wlanIdx=%u staIdx=%u) — leaving prStaRec NULL\n",
-                   hdr->aucAddr2, prSwRfb->pvHeader,
-                   prSwRfb->u2HeaderLen, prSwRfb->u2PacketLen,
-                   prSwRfb->ucWlanIdx, prSwRfb->ucStaRecIdx);
-
-            /* Defensive: print a short hexdump of the header to help debugging */
-            hexdump_len = min_t(size_t, prSwRfb->u2HeaderLen, 32);
-            p = (unsigned char *)prSwRfb->pvHeader;
-            if (hexdump_len) {
-                char buf[128];
-                int pos = 0;
-                int lim = (int)hexdump_len;
-                pos = 0;
-                for (i = 0; i < lim && pos < (int)sizeof(buf) - 4; i++)
-                    pos += snprintf(buf + pos, sizeof(buf) - pos, "%02x ", p[i]);
-                DBGLOG(RX, INFO, "%s: header bytes: %s\n", __func__, buf);
-            }
-        }
-    } else if (prSwRfb->prStaRec == NULL && prSwRfb->pvHeader) {
-        /* We have pvHeader but header length is unexpectedly short */
-        DBGLOG(RX, WARN,
-               "%s: pvHeader present but header length %u < %zu; pvHeader=%p pktLen=%u wlanIdx=%u staIdx=%u\n",
-               __func__, prSwRfb->u2HeaderLen, sizeof(struct WLAN_MAC_HEADER),
-               prSwRfb->pvHeader, prSwRfb->u2PacketLen,
-               prSwRfb->ucWlanIdx, prSwRfb->ucStaRecIdx);
-    }
-
-    /* leave prSwRfb->prStaRec as-is (NULL if unresolved). */
+	prSwRfb->prStaRec = sta;
+	prSwRfb->ucStaRecIdx = sta->ucIndex;
 }
 
 #if CFG_TCP_IP_CHKSUM_OFFLOAD || CFG_TCP_IP_CHKSUM_OFFLOAD_NDIS_60
@@ -1078,6 +815,9 @@ void nicRxClearFrag(IN struct ADAPTER *prAdapter,
 	int j;
 	struct FRAG_INFO *prFragInfo;
 
+	if (!prAdapter || !prStaRec)
+		return;
+
 	for (j = 0; j < MAX_NUM_CONCURRENT_FRAGMENTED_MSDUS; j++) {
 		prFragInfo = &prStaRec->rFragInfo[j];
 
@@ -1107,7 +847,6 @@ struct SW_RFB *nicRxDefragMPDU(IN struct ADAPTER *prAdapter,
 
 	struct SW_RFB *prOutputSwRfb = (struct SW_RFB *) NULL;
 #if CFG_SUPPORT_FRAG_SUPPORT
-	struct RX_CTRL *prRxCtrl;
 	struct FRAG_INFO *prFragInfo;
 	uint32_t i = 0, j;
 	uint16_t u2SeqCtrl, u2FrameCtrl;
@@ -1127,19 +866,41 @@ struct SW_RFB *nicRxDefragMPDU(IN struct ADAPTER *prAdapter,
 
 	DEBUGFUNC("nicRx: rxmDefragMPDU\n");
 
+	if (!prAdapter || !prSWRfb)
+		return NULL;
+
+	if (!prReturnedQue) {
+		DBGLOG(RX, WARN, "%s: missing returned-frame queue\n", __func__);
+		nicRxReturnRFB(prAdapter, prSWRfb);
+		return NULL;
+	}
+
 	ASSERT(prSWRfb);
 
-	prRxCtrl = &prAdapter->rRxCtrl;
-
 	prRxStatus = prSWRfb->prRxStatus;
-	ASSERT(prRxStatus);
+	if (!prRxStatus) {
+		DBGLOG(RX, WARN, "%s: missing RX status\n", __func__);
+		nicRxReturnRFB(prAdapter, prSWRfb);
+		return NULL;
+	}
 
 	if (prSWRfb->fgHdrTran == FALSE) {
+		if (!prSWRfb->pvHeader ||
+		    prSWRfb->u2HeaderLen < sizeof(struct WLAN_MAC_HEADER)) {
+			DBGLOG(RX, WARN, "%s: incomplete 802.11 header\n", __func__);
+			nicRxReturnRFB(prAdapter, prSWRfb);
+			return NULL;
+		}
 		prWlanHeader = (struct WLAN_MAC_HEADER *) prSWRfb->pvHeader;
 		prSWRfb->u2SequenceControl = prWlanHeader->u2SeqCtrl;
 		u2FrameCtrl = prWlanHeader->u2FrameCtrl;
 	} else {
 		prRxStatusGroup4 = prSWRfb->prRxStatusGroup4;
+		if (!prRxStatusGroup4) {
+			DBGLOG(RX, WARN, "%s: missing RX status group 4\n", __func__);
+			nicRxReturnRFB(prAdapter, prSWRfb);
+			return NULL;
+		}
 		prSWRfb->u2SequenceControl = HAL_RX_STATUS_GET_SEQFrag_NUM(
 						     prRxStatusGroup4);
 		u2FrameCtrl = HAL_RX_STATUS_GET_FRAME_CTL_FIELD(
@@ -1190,14 +951,27 @@ struct SW_RFB *nicRxDefragMPDU(IN struct ADAPTER *prAdapter,
 		|| prSWRfb->ucSecMode == CIPHER_SUITE_GCMP_128
 		|| prSWRfb->ucSecMode == CIPHER_SUITE_GCMP_256) {
 		ucSecMode = prSWRfb->ucSecMode;
+		if (!prSWRfb->prRxStatusGroup1) {
+			DBGLOG(QM, WARN, "%s: missing RX status group 1\n", __func__);
+			nicRxReturnRFB(prAdapter, prSWRfb);
+			return NULL;
+		}
 		if (!qmRxPNtoU64(prSWRfb->prRxStatusGroup1->aucPN,
-			CCMPTSCPNNUM, &u8PN)) {
-			DBGLOG(QM, ERROR, "PN2U64 failed\n");
-			/* should not enter here, just fallback */
-			ucSecMode = CIPHER_SUITE_NONE;
+				 CCMPTSCPNNUM, &u8PN)) {
+			DBGLOG(QM, ERROR, "PN2U64 failed; dropping fragment\n");
+			nicRxReturnRFB(prAdapter, prSWRfb);
+			return NULL;
 		}
 	}
 #endif /* CFG_SUPPORT_FRAG_ATTACK_DETECTION */
+
+	if (!prSWRfb->prStaRec) {
+		DBGLOG(RX, WARN,
+		       "%s: dropping fragmented frame without STA record\n",
+		       __func__);
+		nicRxReturnRFB(prAdapter, prSWRfb);
+		return NULL;
+	}
 
 	for (j = 0; j < MAX_NUM_CONCURRENT_FRAGMENTED_MSDUS; j++) {
 		prFragInfo = &prSWRfb->prStaRec->rFragInfo[j];
@@ -1311,14 +1085,41 @@ struct SW_RFB *nicRxDefragMPDU(IN struct ADAPTER *prAdapter,
 
 	ASSERT(prFragInfo);
 
-	/* retrieve Rx payload */
-	prSWRfb->pucPayload = (uint8_t *) ((
-		(unsigned long) prSWRfb->pvHeader) +
-		prSWRfb->u2HeaderLen);
-	prSWRfb->u2PayloadLength =
-		(uint16_t) (prSWRfb->u2RxByteCount - ((
-		unsigned long) prSWRfb->pucPayload -
-		(unsigned long) prRxStatus));
+	/* Derive payload bounds without allowing unsigned length underflow. */
+	{
+		unsigned long buffer_start = (unsigned long)prSWRfb->pucRecvBuff;
+		unsigned long header_start = (unsigned long)prSWRfb->pvHeader;
+		unsigned long header_offset, payload_offset;
+
+		if (!prSWRfb->pucRecvBuff || !prSWRfb->pvHeader ||
+		    header_start < buffer_start) {
+			DBGLOG(RX, WARN, "%s: invalid payload base pointer\n", __func__);
+			nicRxReturnRFB(prAdapter, prSWRfb);
+			return NULL;
+		}
+
+		header_offset = header_start - buffer_start;
+		if (header_offset > CFG_RX_MAX_MPDU_SIZE ||
+		    prSWRfb->u2HeaderLen > CFG_RX_MAX_MPDU_SIZE - header_offset ||
+		    prSWRfb->u2RxByteCount > CFG_RX_MAX_MPDU_SIZE) {
+			DBGLOG(RX, WARN, "%s: RX payload bounds invalid\n", __func__);
+			nicRxReturnRFB(prAdapter, prSWRfb);
+			return NULL;
+		}
+
+		prSWRfb->pucPayload = (uint8_t *)(header_start +
+						   prSWRfb->u2HeaderLen);
+		payload_offset = (unsigned long)prSWRfb->pucPayload -
+				  (unsigned long)prRxStatus;
+		if (payload_offset > prSWRfb->u2RxByteCount) {
+			DBGLOG(RX, WARN, "%s: payload exceeds RX byte count\n", __func__);
+			nicRxReturnRFB(prAdapter, prSWRfb);
+			return NULL;
+		}
+
+		prSWRfb->u2PayloadLength =
+			(uint16_t)(prSWRfb->u2RxByteCount - payload_offset);
+	}
 
 	if (fgFirst) {
 		DBGLOG(RX, LOUD, "rxDefragMPDU first\n");
@@ -1352,53 +1153,61 @@ struct SW_RFB *nicRxDefragMPDU(IN struct ADAPTER *prAdapter,
 		/* prSWRfb->fgFragmented = TRUE; */
 		/* whsu: todo for checksum */
 	} else {
-		prFragInfo->pr1stFrag->u2RxByteCount +=
-			prSWRfb->u2PayloadLength;
+		struct SW_RFB *prFirstFrag = prFragInfo->pr1stFrag;
+		size_t new_rx_byte_count = (size_t)prFirstFrag->u2RxByteCount +
+			(size_t)prSWRfb->u2PayloadLength;
+		size_t new_packet_len = (size_t)prFirstFrag->u2PacketLen +
+			(size_t)prSWRfb->u2PayloadLength;
+		size_t new_payload_len = (size_t)prFirstFrag->u2PayloadLength +
+			(size_t)prSWRfb->u2PayloadLength;
+		unsigned long buffer_start = (unsigned long)prFirstFrag->pucRecvBuff;
+		unsigned long next_start =
+			(unsigned long)prFragInfo->pucNextFragStart;
+		size_t next_offset = 0;
+		bool invalid_destination = !prFirstFrag->pucRecvBuff ||
+			!prFragInfo->pucNextFragStart || next_start < buffer_start;
 
-		if (prFragInfo->pr1stFrag->u2RxByteCount >
-		    CFG_RX_MAX_PKT_SIZE) {
+		if (!invalid_destination)
+			next_offset = next_start - buffer_start;
 
-			prFragInfo->pr1stFrag->eDst = RX_PKT_DESTINATION_NULL;
+		/* Check narrow-field additions before mutating state or copying. */
+		if (new_rx_byte_count > CFG_RX_MAX_PKT_SIZE ||
+		    new_rx_byte_count > 0xffffU || new_packet_len > 0xffffU ||
+		    new_payload_len > 0xffffU ||
+		    invalid_destination || next_offset > CFG_RX_MAX_PKT_SIZE ||
+		    (size_t)prSWRfb->u2PayloadLength >
+			CFG_RX_MAX_PKT_SIZE - next_offset ||
+		    (prSWRfb->u2PayloadLength && !prSWRfb->pucPayload)) {
+			DBGLOG(RX, WARN, "%s: fragment aggregate/destination overflow\n",
+			       __func__);
+			prFirstFrag->eDst = RX_PKT_DESTINATION_NULL;
 			QUEUE_INSERT_TAIL(prReturnedQue,
-				(struct QUE_ENTRY *)
-				prFragInfo->pr1stFrag);
-
-			prFragInfo->pr1stFrag = (struct SW_RFB *) NULL;
-
+				(struct QUE_ENTRY *)prFirstFrag);
+			prFragInfo->pr1stFrag = (struct SW_RFB *)NULL;
 			nicRxReturnRFB(prAdapter, prSWRfb);
 		} else {
-			kalMemCopy(prFragInfo->pucNextFragStart,
-				prSWRfb->pucPayload,
-				prSWRfb->u2PayloadLength);
-			/* [6630] update rx byte count and packet length */
-			prFragInfo->pr1stFrag->u2PacketLen +=
-				prSWRfb->u2PayloadLength;
-			prFragInfo->pr1stFrag->u2PayloadLength +=
-				prSWRfb->u2PayloadLength;
+			if (prSWRfb->u2PayloadLength)
+				kalMemCopy(prFragInfo->pucNextFragStart,
+					prSWRfb->pucPayload,
+					prSWRfb->u2PayloadLength);
+			prFirstFrag->u2RxByteCount = (uint16_t)new_rx_byte_count;
+			prFirstFrag->u2PacketLen = (uint16_t)new_packet_len;
+			prFirstFrag->u2PayloadLength = (uint16_t)new_payload_len;
 
 			if (fgLast) {	/* The last one, free the buffer */
 				DBGLOG(RX, LOUD, "Defrag: finished\n");
-
-				prOutputSwRfb = prFragInfo->pr1stFrag;
-
-				prFragInfo->pr1stFrag = (struct SW_RFB *) NULL;
+				prOutputSwRfb = prFirstFrag;
+				prFragInfo->pr1stFrag = (struct SW_RFB *)NULL;
 			} else {
 				DBGLOG(RX, LOUD, "Defrag: mid fraged\n");
-
 				prFragInfo->pucNextFragStart +=
 					prSWRfb->u2PayloadLength;
-
 				prFragInfo->ucNextFragNo++;
-
 #if CFG_SUPPORT_FRAG_ATTACK_DETECTION
-				if (prFragInfo->ucSecMode !=
-						CIPHER_SUITE_NONE) {
-					/* PN in security protocol header */
+				if (prFragInfo->ucSecMode != CIPHER_SUITE_NONE)
 					prFragInfo->u8NextPN++;
-				}
 #endif /* CFG_SUPPORT_FRAG_ATTACK_DETECTION */
 			}
-
 			nicRxReturnRFB(prAdapter, prSWRfb);
 		}
 	}
@@ -2091,11 +1900,13 @@ void nicRxProcessDataPacket(IN struct ADAPTER *prAdapter,
 
 	DEBUGFUNC("nicRxProcessDataPacket");
 
-	ASSERT(prAdapter);
-	ASSERT(prSwRfb);
+	if (!prAdapter || !prSwRfb) {
+		DBGLOG(RX, ERROR, "%s: invalid adapter/RFB\n", __func__);
+		return;
+	}
 
 #if (CFG_SUPPORT_SNIFFER_RADIOTAP == 1)
-	if (prAdapter->prGlueInfo->fgIsEnableMon) {
+	if (prAdapter->prGlueInfo && prAdapter->prGlueInfo->fgIsEnableMon) {
 		radiotapFillRadiotap(prAdapter, prSwRfb);
 		return;
 	}
@@ -2104,30 +1915,50 @@ void nicRxProcessDataPacket(IN struct ADAPTER *prAdapter,
 	prSwRfb->fgDataFrame = TRUE;
 	nicRxFillRFB(prAdapter, prSwRfb);
 
+	prRxCtrl = &prAdapter->rRxCtrl;
+	prChipInfo = prAdapter->chip_info;
+	if (!prChipInfo || !prChipInfo->prRxDescOps || !prSwRfb->prRxStatus) {
+		DBGLOG(RX, WARN, "%s: RX metadata unavailable\n", __func__);
+		nicRxReturnRFB(prAdapter, prSwRfb);
+		RX_INC_CNT(prRxCtrl, RX_DROP_TOTAL_COUNT);
+		return;
+	}
+	prRxDescOps = prChipInfo->prRxDescOps;
+	prRxStatus = prSwRfb->prRxStatus;
+
 	/*
-	 * Management frames (auth, assoc, deauth, etc.) can arrive on the data
-	 * ring for unassociated wlan_idx. When fgHdrTran=1 the firmware has
-	 * Ethernet-translated the header, so pvHeader no longer points to 802.11
-	 * FC bytes — it points to a MAC address. Use u2RxStatusOffst (set by
-	 * nic_rxd_v3_fill_rfb to the sum of RXD group sizes, without the header
-	 * offset) to reach the raw 802.11 header in either case.
+	 * Some unassociated management frames arrive on the data ring.  When
+	 * header translation is enabled, pvHeader may point at an Ethernet view;
+	 * inspect the raw 802.11 header only after checking the receive-buffer
+	 * bounds.  Decode FC bytes explicitly to avoid unaligned word accesses.
 	 */
-	{
+	if (prSwRfb->pucRecvBuff &&
+	    prSwRfb->u2RxStatusOffst <= CFG_RX_MAX_MPDU_SIZE &&
+	    prSwRfb->u2PacketLen >= 2 &&
+	    prSwRfb->u2PacketLen <= CFG_RX_MAX_MPDU_SIZE -
+					 prSwRfb->u2RxStatusOffst) {
 		uint8_t *pDot11Hdr = (uint8_t *)prSwRfb->pucRecvBuff +
 			prSwRfb->u2RxStatusOffst;
-		uint16_t fc = le16_to_cpu(*(uint16_t *)pDot11Hdr);
+		uint16_t fc = (uint16_t)pDot11Hdr[0] |
+			      ((uint16_t)pDot11Hdr[1] << 8);
 		uint8_t fc_type = (fc >> 2) & 0x3;
-
-		DBGLOG(RX, WARN,
-			"[RX-DATA-HDR] fgHdrTran=%u fc=0x%04x type=%u wlan_idx=%u b0=0x%02x b1=0x%02x\n",
-			prSwRfb->fgHdrTran, fc, fc_type, prSwRfb->ucWlanIdx,
-			pDot11Hdr[0], pDot11Hdr[1]);
+		size_t available = prSwRfb->u2PacketLen;
 
 		if (fc_type == 0x0) {
-			DBGLOG(RX, WARN,
-				"[RX-REROUTE] mgmt on data ring: fc=0x%04x wlan_idx=%u -> mgmt path\n",
-				fc, prSwRfb->ucWlanIdx);
+			if (available < sizeof(struct WLAN_MAC_HEADER)) {
+				DBGLOG(RX, WARN,
+				       "[RX-REROUTE] short management frame (%zu bytes)\n",
+				       available);
+				nicRxReturnRFB(prAdapter, prSwRfb);
+				RX_INC_CNT(&prAdapter->rRxCtrl, RX_DROP_TOTAL_COUNT);
+				return;
+			}
+
+			DBGLOG(RX, TRACE,
+			       "[RX-REROUTE] management frame fc=0x%04x wlan_idx=%u\n",
+			       fc, prSwRfb->ucWlanIdx);
 			prSwRfb->pvHeader = pDot11Hdr;
+			prSwRfb->u2HeaderLen = sizeof(struct WLAN_MAC_HEADER);
 			prSwRfb->fgHdrTran = FALSE;
 			prSwRfb->ucPacketType = RX_PKT_TYPE_SW_DEFINED;
 			nicRxProcessMgmtPacket(prAdapter, prSwRfb);
@@ -2136,11 +1967,6 @@ void nicRxProcessDataPacket(IN struct ADAPTER *prAdapter,
 	}
 
 	fgDrop = FALSE;
-
-	prRxCtrl = &prAdapter->rRxCtrl;
-	prChipInfo = prAdapter->chip_info;
-	prRxDescOps = prChipInfo->prRxDescOps;
-	prRxStatus = prSwRfb->prRxStatus;
 
 	/* Check AMPDU_nERR_Bitmap */
 	prSwRfb->fgDataFrame = TRUE;
@@ -2417,15 +2243,21 @@ void nicRxProcessMgmtPacket(IN struct ADAPTER *prAdapter,
 	/* BOOL   fgMfgDrop = FALSE; */
 #endif
 
-	ASSERT(prAdapter);
-	ASSERT(prSwRfb);
+	if (!prAdapter || !prSwRfb) {
+		DBGLOG(RX, ERROR, "%s: invalid adapter/RFB\n", __func__);
+		return;
+	}
 
 	if (!prSwRfb->pvHeader)
 		nicRxFillRFB(prAdapter, prSwRfb);
 
-	if (!prSwRfb->pvHeader) {
-		DBGLOG(RX, ERROR, "[MGMT-RX] pvHeader NULL after fill, dropping\n");
+	if (!prSwRfb->pvHeader ||
+	    prSwRfb->u2PacketLen < sizeof(struct WLAN_MAC_HEADER)) {
+		DBGLOG(RX, WARN,
+		       "[MGMT-RX] invalid frame header ptr=%p len=%u, dropping\n",
+		       prSwRfb->pvHeader, prSwRfb->u2PacketLen);
 		nicRxReturnRFB(prAdapter, prSwRfb);
+		RX_INC_CNT(&prAdapter->rRxCtrl, RX_DROP_TOTAL_COUNT);
 		return;
 	}
 
@@ -2433,11 +2265,45 @@ void nicRxProcessMgmtPacket(IN struct ADAPTER *prAdapter,
 
     /* Extract management subtype from the 802.11 header */
     ucSubtype = (*(uint8_t *)(prSwRfb->pvHeader) & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
+#if CFG_MGMT_FRAME_HANDLING
+    if (ucSubtype >= ARRAY_SIZE(apfnProcessRxMgtFrame)) {
+        DBGLOG(RX, WARN, "[MGMT-RX] invalid management subtype=%u\n",
+               ucSubtype);
+        nicRxReturnRFB(prAdapter, prSwRfb);
+        RX_INC_CNT(&prAdapter->rRxCtrl, RX_DROP_TOTAL_COUNT);
+        return;
+    }
+#endif
     DBGLOG(RX, WARN, "[MGMT-RX] subtype=0x%02x wlanIdx=%d staRecIdx=%d pktType=%d\n",
 		   ucSubtype, prSwRfb->ucWlanIdx, prSwRfb->ucStaRecIdx, prSwRfb->ucPacketType);
 
     /* Extract the frame type (beacon/probe vs other mgmt) */
     u2TxFrameCtrl = (*(uint8_t *)(prSwRfb->pvHeader) & MASK_FRAME_TYPE);
+
+    if (ucSubtype == 5 || ucSubtype == 8) {
+        const uint8_t *ies;
+        size_t ies_len;
+
+        /* A beacon/probe response needs fixed fields plus an IE stream. */
+        if (prSwRfb->u2PacketLen < 38) {
+            DBGLOG(RX, WARN,
+                   "[MGMT-RX] short beacon/probe response (%u bytes), dropping\n",
+                   prSwRfb->u2PacketLen);
+            nicRxReturnRFB(prAdapter, prSwRfb);
+            RX_INC_CNT(&prAdapter->rRxCtrl, RX_DROP_TOTAL_COUNT);
+            return;
+        }
+
+        ies = (const uint8_t *)prSwRfb->pvHeader + 36;
+        ies_len = prSwRfb->u2PacketLen - 36;
+        if (!relay_validate_ies(ies, ies_len)) {
+            DBGLOG(RX, WARN,
+                   "[MGMT-RX] malformed beacon/probe response IEs, dropping\n");
+            nicRxReturnRFB(prAdapter, prSwRfb);
+            RX_INC_CNT(&prAdapter->rRxCtrl, RX_DROP_TOTAL_COUNT);
+            return;
+        }
+    }
 
     /*
      * Log management frames only when associated (WIdx != 0xff).
@@ -2514,16 +2380,6 @@ void nicRxProcessMgmtPacket(IN struct ADAPTER *prAdapter,
 #if CFG_MGMT_FRAME_HANDLING
         prGlueInfo = prAdapter->prGlueInfo;
 
-		/* 0x3801 Bypass: Frame was already relayed above. Skip internal processing. */
-        if (prSwRfb->ucPacketType == RX_PKT_TYPE_SW_DEFINED) {
-            if (u2TxFrameCtrl == MAC_FRAME_BEACON ||
-                u2TxFrameCtrl == MAC_FRAME_PROBE_RSP) {
-                DBGLOG(RX, INFO, "[0x3801] Bypassing beacon/probe-rsp\n");
-                nicRxReturnRFB(prAdapter, prSwRfb);
-                return;
-            }
-            DBGLOG(RX, INFO, "[0x3801] subtype=0x%02x FC=0x%04x passing to apfnProcessRxMgtFrame\n", ucSubtype, u2TxFrameCtrl);
-        }
         if ((prGlueInfo == NULL) || (prGlueInfo->u4ReadyFlag == 0)) {
             /* glue not ready, fall through to return RFB */
         } else if (apfnProcessRxMgtFrame[ucSubtype]) {
@@ -2980,16 +2836,34 @@ void nicRxProcessPacketType(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb)
 {
 	struct RX_CTRL *prRxCtrl;
 	struct mt66xx_chip_info *prChipInfo;
-	struct GLUE_INFO *prGlueInfo = prAdapter->prGlueInfo;
+	struct GLUE_INFO *prGlueInfo;
+
+	if (!prAdapter || !prSwRfb) {
+		DBGLOG(RX, ERROR, "%s: invalid adapter/RFB\n", __func__);
+		return;
+	}
 
 	prRxCtrl = &prAdapter->rRxCtrl;
 	prChipInfo = prAdapter->chip_info;
+	prGlueInfo = prAdapter->prGlueInfo;
+	if (!prChipInfo || !prSwRfb->prRxStatus) {
+		DBGLOG(RX, WARN, "%s: missing chip/RX status metadata\n", __func__);
+		nicRxReturnRFB(prAdapter, prSwRfb);
+		RX_INC_CNT(prRxCtrl, RX_DROP_TOTAL_COUNT);
+		return;
+	}
 
 	DBGLOG(RX, LOUD, "[PKT-TYPE] ucPacketType=0x%02x\n", prSwRfb->ucPacketType);
 
 	switch (prSwRfb->ucPacketType) {
 	case RX_PKT_TYPE_RX_DATA:
 		if (HAL_IS_RX_DIRECT(prAdapter)) {
+			if (!prGlueInfo) {
+				DBGLOG(RX, WARN, "%s: RX-direct without GLUE_INFO\n", __func__);
+				nicRxReturnRFB(prAdapter, prSwRfb);
+				RX_INC_CNT(prRxCtrl, RX_DROP_TOTAL_COUNT);
+				break;
+			}
 			spin_lock_bh(&prGlueInfo->rSpinLock[SPIN_LOCK_RX_DIRECT]);
 			nicRxProcessDataPacket(prAdapter, prSwRfb);
 			spin_unlock_bh(&prGlueInfo->rSpinLock[SPIN_LOCK_RX_DIRECT]);
@@ -2999,12 +2873,29 @@ void nicRxProcessPacketType(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb)
 		break;
 
 	case RX_PKT_TYPE_SW_DEFINED:
+	{
+		size_t frame_offset = prChipInfo->rxd_size;
+		size_t frame_available;
+		uint8_t *p;
+
+		if (!prSwRfb->pucRecvBuff ||
+		    frame_offset > CFG_RX_MAX_MPDU_SIZE ||
+		    prSwRfb->u2RxByteCount < 6 ||
+		    prSwRfb->u2RxByteCount > CFG_RX_MAX_MPDU_SIZE - frame_offset) {
+			DBGLOG(RX, WARN, "%s: invalid software-defined RX bounds/length\n",
+			       __func__);
+			nicRxReturnRFB(prAdapter, prSwRfb);
+			RX_INC_CNT(prRxCtrl, RX_DROP_TOTAL_COUNT);
+			return;
+		}
+		frame_available = prSwRfb->u2RxByteCount;
+		p = (uint8_t *)prSwRfb->pucRecvBuff + frame_offset;
+
 		if ((NIC_RX_GET_U2_SW_PKT_TYPE(prSwRfb->prRxStatus) &
 		     prChipInfo->u2RxSwPktBitMap) == prChipInfo->u2RxSwPktEvent) {
-			if (IS_UNI_EVENT(prSwRfb->pucRecvBuff + prChipInfo->rxd_size)) {
+			if (IS_UNI_EVENT(p)) {
 				nicRxProcessUniEventPacket(prAdapter, prSwRfb);
 			} else {
-				uint8_t *p = prSwRfb->pucRecvBuff + prChipInfo->rxd_size;
 				DBGLOG(RX, WARN,
 				       "[EVT-RAW] opt=0x%02x eid=0x%02x seq=%u len=%u b0=%02x b1=%02x b2=%02x b3=%02x\n",
 				       p[2], p[4], p[5], p[0] | (p[1] << 8),
@@ -3013,11 +2904,18 @@ void nicRxProcessPacketType(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb)
 			}
 		} else if ((NIC_RX_GET_U2_SW_PKT_TYPE(prSwRfb->prRxStatus) &
 			    prChipInfo->u2RxSwPktBitMap) == prChipInfo->u2RxSwPktFrame) {
-			/* Log incoming auth frames for debugging */
-			if (prSwRfb->u2RxByteCount > 24) {
-				struct ieee80211_hdr *hdr =
-					(void *)(prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
+			/* Header reads must fit after the chip-specific RX descriptor. */
+			if (frame_available < sizeof(struct ieee80211_hdr)) {
+				DBGLOG(RX, WARN, "%s: short software-defined 802.11 frame\n",
+				       __func__);
+				nicRxReturnRFB(prAdapter, prSwRfb);
+				RX_INC_CNT(prRxCtrl, RX_DROP_TOTAL_COUNT);
+				return;
+			}
+			{
+				struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)p;
 				u16 fc = le16_to_cpu(hdr->frame_control);
+
 				if (ieee80211_is_mgmt(fc) &&
 				    WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_AUTH) {
 					DBGLOG(RX, INFO,
@@ -3027,12 +2925,27 @@ void nicRxProcessPacketType(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb)
 					       prSwRfb->u2RxByteCount);
 				}
 			}
+			if (!prChipInfo->prRxDescOps) {
+				DBGLOG(RX, WARN, "%s: RX descriptor ops unavailable\n",
+				       __func__);
+				nicRxReturnRFB(prAdapter, prSwRfb);
+				RX_INC_CNT(prRxCtrl, RX_DROP_TOTAL_COUNT);
+				return;
+			}
 			RX_STATUS_GET(prChipInfo->prRxDescOps, prSwRfb->ucOFLD,
 				      get_ofld, prSwRfb->prRxStatus);
 			RX_STATUS_GET(prChipInfo->prRxDescOps, prSwRfb->fgHdrTran,
 				      get_HdrTrans, prSwRfb->prRxStatus);
 			if (prSwRfb->ucOFLD || prSwRfb->fgHdrTran) {
 				if (HAL_IS_RX_DIRECT(prAdapter)) {
+					if (!prGlueInfo) {
+						DBGLOG(RX, WARN,
+						       "%s: RX-direct without GLUE_INFO\n",
+						       __func__);
+						nicRxReturnRFB(prAdapter, prSwRfb);
+						RX_INC_CNT(prRxCtrl, RX_DROP_TOTAL_COUNT);
+						break;
+					}
 					spin_lock_bh(&prGlueInfo->rSpinLock[SPIN_LOCK_RX_DIRECT]);
 					nicRxProcessDataPacket(prAdapter, prSwRfb);
 					spin_unlock_bh(&prGlueInfo->rSpinLock[SPIN_LOCK_RX_DIRECT]);
@@ -3050,6 +2963,7 @@ void nicRxProcessPacketType(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb)
 			RX_INC_CNT(prRxCtrl, RX_DROP_TOTAL_COUNT);
 		}
 		break;
+	}
 
 	case RX_PKT_TYPE_MSDU_REPORT:
 		nicRxProcessMsduReport(prAdapter, prSwRfb);

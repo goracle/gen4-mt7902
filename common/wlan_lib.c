@@ -8868,14 +8868,6 @@ void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 	/* Update internal RLM state only after validating the country code. */
 	rlmDomainSetCountryCode(aucValue, 2);
 
-	/* Avoid redundant pushes. */
-	if (u2NewCode == u2LastPushedCode) {
-		DBGLOG(INIT, INFO,
-		       "Country code 0x%04x already pushed; skipping duplicate\n",
-		       u2NewCode);
-		return;
-	}
-
 	/* Defer hardware commands until firmware is ready. */
 	if (!prAdapter->fgIsFwDownloaded) {
 		DBGLOG(INIT, INFO,
@@ -8883,6 +8875,17 @@ void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 		       u2NewCode);
 		return;
 	}
+
+	/*
+	 * The cache is diagnostic only. Do not use a process-global country-code
+	 * value to skip a regulatory update: it cannot distinguish adapters and
+	 * can become stale across firmware resets. Re-applying the code is safer
+	 * than assuming firmware/cfg80211 state is still synchronized.
+	 */
+	if (u2NewCode == u2LastPushedCode)
+		DBGLOG(INIT, LOUD,
+		       "Reapplying country code 0x%04x to resynchronize regulatory state\n",
+		       u2NewCode);
 
 	DBGLOG(INIT, INFO, "Applying country code 0x%04x [%c%c]\n",
 	       u2NewCode, aucValue[0], aucValue[1]);
@@ -8997,7 +9000,12 @@ uint32_t wlanCfgGet(IN struct ADAPTER *prAdapter,
 	struct WLAN_CFG_ENTRY *prWlanCfgEntry;
 	struct WLAN_CFG *prWlanCfg;
 
+	if (!prAdapter || !pucKey || !pucValue)
+		return WLAN_STATUS_INVALID_DATA;
+
 	prWlanCfg = prAdapter->prWlanCfg;
+	if (!prWlanCfg)
+		return WLAN_STATUS_FAILURE;
 
 	ASSERT(prWlanCfg);
 	ASSERT(pucValue);
@@ -9106,6 +9114,10 @@ uint32_t wlanCfgSet(IN struct ADAPTER *prAdapter,
 	uint32_t i;
 	uint8_t ucExist = 0;
 	u_int8_t fgGetCfgRec = (u4Flags & WLAN_CFG_REC_FLAG_BIT);
+
+	/* This routine dereferences both values throughout the storage path. */
+	if (!prAdapter || !pucKey || !pucValue)
+		return WLAN_STATUS_INVALID_DATA;
 
 	ASSERT(pucKey);
 
@@ -9290,102 +9302,140 @@ enum {
 uint32_t wlanCfgParseToFW(int8_t **args, int8_t *args_size,
 			  uint8_t nargs, int8_t *buffer, uint8_t times)
 {
-	uint8_t *data = NULL;
 	char ch;
-	int32_t i = 0, j = 0;
-	uint32_t bufferindex = 0, base = 0;
-	uint32_t sum = 0, startOffset = 0;
+	int32_t i;
+	int digit;
+	uint32_t base = 10;
+	uint32_t sum = 0;
+	uint32_t bufferindex = 0;
+	uint32_t startOffset = 0;
+	size_t key_len;
+	size_t value_len;
+	size_t buffer_offset;
 	struct CMD_FORMAT_V1 cmd_v1;
 
-	memset(&cmd_v1, 0, sizeof(struct CMD_FORMAT_V1));
+	memset(&cmd_v1, 0, sizeof(cmd_v1));
 
 #if 0
 	cmd_v1.itemType = kalAtoi(*args[ED_ITEMTYPE_SITE]);
 #else
 	cmd_v1.itemType = ITEM_TYPE_DEC;
 #endif
-	if (buffer == NULL ||
-	    args_size[ED_STRING_SITE] == 0 ||
-	    args_size[ED_VALUE_SITE] == 0 ||
-	    (cmd_v1.itemType < ITEM_TYPE_DEC
-	     || cmd_v1.itemType > ITEM_TYPE_STR)) {
+	if (!args || !args_size || !buffer ||
+	    nargs <= ED_STRING_SITE || nargs <= ED_VALUE_SITE ||
+	    !args[ED_STRING_SITE] || !args[ED_VALUE_SITE] ||
+	    args_size[ED_STRING_SITE] <= 0 ||
+	    args_size[ED_VALUE_SITE] <= 0 ||
+	    (cmd_v1.itemType < ITEM_TYPE_DEC ||
+	     cmd_v1.itemType > ITEM_TYPE_STR)) {
 		DBGLOG(INIT, ERROR, "cfg args wrong\n");
 		return WLAN_STATUS_FAILURE;
 	}
 
-	cmd_v1.itemStringLength = args_size[ED_STRING_SITE];
-	strscpy(cmd_v1.itemString, args[ED_STRING_SITE],
-		cmd_v1.itemStringLength);
-	DBGLOG(INIT, INFO, "itemString:");
-	for (i = 0; i <  cmd_v1.itemStringLength; i++)
-		DBGLOG(INIT, INFO, "%c", cmd_v1.itemString[i]);
-	DBGLOG(INIT, INFO, "\n");
+	key_len = (size_t)args_size[ED_STRING_SITE];
+	value_len = (size_t)args_size[ED_VALUE_SITE];
 
-	DBGLOG(INIT, INFO, "cmd_v1.itemType = %d\n",
-	       cmd_v1.itemType);
-	if (cmd_v1.itemType == ITEM_TYPE_DEC
-	    || cmd_v1.itemType == ITEM_TYPE_HEX) {
-		data = args[ED_VALUE_SITE];
+	/* The wire format carries explicit lengths. Keep a trailing NUL in the
+	 * fixed-size fields for diagnostics, and reject rather than truncate a
+	 * key: truncating it could address a different firmware setting.
+	 */
+	if (key_len >= sizeof(cmd_v1.itemString)) {
+		DBGLOG(INIT, WARN,
+		       "cfg key too long for firmware command (%zu bytes)\n",
+		       key_len);
+		return WLAN_STATUS_FAILURE;
+	}
 
-		switch (cmd_v1.itemType) {
-		case ITEM_TYPE_DEC:
-			base = 10;
-			startOffset = 0;
-			break;
-		case ITEM_TYPE_HEX:
-			ch = *data;
-			if (args_size[ED_VALUE_SITE] < 3 || ch != '0') {
+	/* The caller owns a MAX_CMD_BUFFER_LENGTH-sized command buffer. */
+	if (times >= MAX_CMD_ITEM_MAX) {
+		DBGLOG(INIT, WARN, "cfg command item index out of range: %u\n",
+		       (unsigned int)times);
+		return WLAN_STATUS_FAILURE;
+	}
+	buffer_offset = (size_t)times * sizeof(cmd_v1);
+	if (buffer_offset > MAX_CMD_BUFFER_LENGTH ||
+	    sizeof(cmd_v1) > MAX_CMD_BUFFER_LENGTH - buffer_offset) {
+		DBGLOG(INIT, WARN,
+		       "cfg command would exceed firmware buffer (item %u)\n",
+		       (unsigned int)times);
+		return WLAN_STATUS_FAILURE;
+	}
+
+	cmd_v1.itemStringLength = (uint16_t)key_len;
+	memcpy(cmd_v1.itemString, args[ED_STRING_SITE], key_len);
+	DBGLOG(INIT, INFO, "cfg itemString: %.*s\n",
+	       (int)key_len, cmd_v1.itemString);
+	DBGLOG(INIT, INFO, "cmd_v1.itemType = %d\n", cmd_v1.itemType);
+
+	if (cmd_v1.itemType == ITEM_TYPE_DEC ||
+	    cmd_v1.itemType == ITEM_TYPE_HEX) {
+		if (cmd_v1.itemType == ITEM_TYPE_HEX) {
+			if (value_len < 3 || args[ED_VALUE_SITE][0] != '0' ||
+			    (args[ED_VALUE_SITE][1] != 'x' &&
+			     args[ED_VALUE_SITE][1] != 'X')) {
 				DBGLOG(INIT, WARN,
-				       "Hex args must have prefix '0x'\n");
+				       "Hex args must have prefix '0x' and at least one digit\n");
 				return WLAN_STATUS_FAILURE;
 			}
-
-			data++;
-			ch = *data;
-			if (ch != 'x' && ch != 'X') {
-				DBGLOG(INIT, WARN,
-				       "Hex args must have prefix '0x'\n");
-				return WLAN_STATUS_FAILURE;
-			}
-			data++;
 			base = 16;
 			startOffset = 2;
-			break;
 		}
 
-		for (j = args_size[ED_VALUE_SITE] - 1 - startOffset; j >= 0;
-		     j--) {
-			sum = sum * base + kalAtoi(*data);
-			DBGLOG(INIT, WARN, "size:%d data[%d]=%u, sum=%u\n",
-			       args_size[ED_VALUE_SITE], j,
-				   kalAtoi(*data), sum);
+		/* Validate each digit and detect uint32 overflow before multiply/add. */
+		for (i = (int32_t)startOffset; i < (int32_t)value_len; i++) {
+			ch = args[ED_VALUE_SITE][i];
+			if (base == 16) {
+				digit = hexval(ch);
+			} else if (ch >= '0' && ch <= '9') {
+				digit = ch - '0';
+			} else {
+				digit = -1;
+			}
 
-			data++;
+			if (digit < 0 || (uint32_t)digit >= base) {
+				DBGLOG(INIT, WARN,
+				       "Invalid numeric character in firmware config value\n");
+				return WLAN_STATUS_FAILURE;
+			}
+			if (sum > ((~(uint32_t)0) - (uint32_t)digit) / base) {
+				DBGLOG(INIT, WARN,
+				       "Numeric firmware config value exceeds 32-bit range\n");
+				return WLAN_STATUS_FAILURE;
+			}
+			sum = sum * base + (uint32_t)digit;
 		}
 
-		bufferindex = 0;
+		/* Preserve the driver's existing little-endian byte encoding. */
 		do {
+			if (bufferindex >= sizeof(cmd_v1.itemValue)) {
+				DBGLOG(INIT, WARN,
+				       "Numeric firmware config value is too large\n");
+				return WLAN_STATUS_FAILURE;
+			}
 			cmd_v1.itemValue[bufferindex++] = sum & 0xFF;
-			sum = sum >> 8;
+			sum >>= 8;
 		} while (sum > 0);
 		cmd_v1.itemValueLength = bufferindex;
 	} else if (cmd_v1.itemType == ITEM_TYPE_STR) {
-		cmd_v1.itemValueLength = args_size[ED_VALUE_SITE];
-		strscpy(cmd_v1.itemValue, args[ED_VALUE_SITE],
-			cmd_v1.itemValueLength);
+		if (value_len >= sizeof(cmd_v1.itemValue)) {
+			DBGLOG(INIT, WARN,
+			       "cfg string value too long for firmware command (%zu bytes)\n",
+			       value_len);
+			return WLAN_STATUS_FAILURE;
+		}
+		cmd_v1.itemValueLength = (uint16_t)value_len;
+		memcpy(cmd_v1.itemValue, args[ED_VALUE_SITE], value_len);
 	}
 
-	DBGLOG(INIT, INFO, "Length = %d itemValue:",
-	       cmd_v1.itemValueLength);
-	for (i = cmd_v1.itemValueLength - 1; i >= 0; i--)
-		DBGLOG(INIT, ERROR, "%d,", cmd_v1.itemValue[i]);
+	DBGLOG(INIT, INFO, "Length = %u itemValue:\n",
+	       (unsigned int)cmd_v1.itemValueLength);
+	for (i = (int32_t)cmd_v1.itemValueLength - 1; i >= 0; i--)
+		DBGLOG(INIT, LOUD, "%d,", cmd_v1.itemValue[i]);
 	DBGLOG(INIT, INFO, "\n");
-	memcpy(((struct CMD_FORMAT_V1 *)buffer) + times, &cmd_v1,
-	       sizeof(struct CMD_FORMAT_V1));
 
+	memcpy(buffer + buffer_offset, &cmd_v1, sizeof(cmd_v1));
 	return WLAN_STATUS_SUCCESS;
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -10935,11 +10985,16 @@ uint8_t wlanGetBssIdx(struct net_device *ndev)
 
 u_int8_t wlanIsAisDev(struct net_device *prDev)
 {
-	uint32_t u4Idx = 0;
+	uint32_t u4Idx;
 
-	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++)
-		if (prDev == gprWdev[u4Idx]->netdev)
+	/* Callers can run while AIS interfaces are being created or removed. */
+	if (!prDev)
+		return FALSE;
+
+	for (u4Idx = 0; u4Idx < KAL_AIS_NUM; u4Idx++) {
+		if (gprWdev[u4Idx] && gprWdev[u4Idx]->netdev == prDev)
 			return TRUE;
+	}
 
 	return FALSE;
 }

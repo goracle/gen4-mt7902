@@ -297,12 +297,16 @@ static void halGuardedShowDebugSop(struct ADAPTER *prAdapter,
 	       u4Before, u4After);
 }
 
+/* File-scoped port guard: single reader per RX port (tasklet or sync waiter) */
+static int32_t ai4PortLock[RX_RING_MAX];
+
 uint32_t halRxWaitResponse(IN struct ADAPTER *prAdapter, IN uint8_t ucPortIdx,
 						   OUT uint8_t *pucRspBuffer, IN uint32_t u4MaxRespBufferLen,
 						   OUT uint32_t *pu4Length)
 {
 	struct GLUE_INFO *prGlueInfo;
 	uint32_t u4PktLen = 0, u4Value = 0, u4Time;
+	uint32_t u4Status = WLAN_STATUS_SUCCESS;
 	u_int8_t fgStatus;
 	struct mt66xx_chip_info *prChipInfo;
 	u_int8_t	ucNewPort;
@@ -350,6 +354,18 @@ uint32_t halRxWaitResponse(IN struct ADAPTER *prAdapter, IN uint8_t ucPortIdx,
 #else
 	ucNewPort = ucPortIdx;
 #endif
+	if (ucNewPort >= RX_RING_MAX)
+		return WLAN_STATUS_FAILURE;
+
+	/* Own the port so the RX tasklet (halRxReceiveRFBs) cannot consume the
+	 * response while we poll for it. */
+	while (GLUE_INC_REF_CNT(ai4PortLock[ucNewPort]) > 1) {
+		GLUE_DEC_REF_CNT(ai4PortLock[ucNewPort]);
+		if (halIsTimeout(u4Time, RX_RESPONSE_TIMEOUT))
+			return WLAN_STATUS_FAILURE;
+		kalUdelay(50);
+	}
+
 	prRxRing = &prAdapter->prGlueInfo->rHifInfo.RxRing[ucNewPort];
 	uint32_t u4DmaIdx = 0;
 	kalDevRegRead(prAdapter->prGlueInfo,
@@ -372,7 +388,8 @@ uint32_t halRxWaitResponse(IN struct ADAPTER *prAdapter, IN uint8_t ucPortIdx,
 	do {
 		if (wlanIsChipNoAck(prAdapter)) {
 			DBGLOG(HAL, ERROR, "Chip No Ack\n");
-			return WLAN_STATUS_FAILURE;
+			u4Status = WLAN_STATUS_FAILURE;
+			goto out;
 		}
 
 		fgStatus = kalDevPortRead(
@@ -430,14 +447,17 @@ uint32_t halRxWaitResponse(IN struct ADAPTER *prAdapter, IN uint8_t ucPortIdx,
 					dump_stack();
 				}
 			}
-			return WLAN_STATUS_FAILURE;
+			u4Status = WLAN_STATUS_FAILURE;
+			goto out;
 		}
 
 		/* Response packet is not ready */
 		kalUdelay(50);
 	} while (TRUE);
 
-	return WLAN_STATUS_SUCCESS;
+out:
+	GLUE_DEC_REF_CNT(ai4PortLock[ucNewPort]);
+	return u4Status;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -2085,8 +2105,6 @@ void halSerHifReset(IN struct ADAPTER *prAdapter)
 }
 
 
-/* File-scoped port guard (preserve original static behavior) */
-static int32_t ai4PortLock[RX_RING_MAX];
 
 /* Helper: pull free SW_RFBs into a local queue (minimizes lock hold time)
  * Inputs:
@@ -2186,6 +2204,15 @@ static void hal_rx_process_event_rfbs(struct ADAPTER *prAdapter, struct QUE *prR
 			/* nicRxFillRFB not needed — firmware event, not an 802.11 frame */
 			prSwRfb->prRxStatus = (void *)prSwRfb->pucRecvBuff;
 			prSwRfb->ucPacketType = ucRawPktType;
+			/* nicRxFillRFB is skipped here, so populate the byte count
+			 * ourselves; nicRxProcessPacketType bounds-checks it.
+			 */
+			if (prRxDescOps && prRxDescOps->nic_rxd_get_rx_byte_count)
+				prSwRfb->u2RxByteCount =
+					prRxDescOps->nic_rxd_get_rx_byte_count(
+						prSwRfb->prRxStatus);
+			DBGLOG(RX, WARN, "[EVT-RING] u2RxByteCount=%u\n",
+			       prSwRfb->u2RxByteCount);
 			nicRxProcessPacketType(prAdapter, prSwRfb);
 		} else {
 			/* 802.11 mgmt frame — fill RFB then process */
