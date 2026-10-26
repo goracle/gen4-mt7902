@@ -1068,9 +1068,12 @@ void wlanOnPostFirmwareReady(IN struct ADAPTER *prAdapter,
 	prAdapter->fgWiFiInSleepyState = FALSE;
 	prAdapter->rAcpiState = ACPI_STATE_D0;
 
-// ADD THESE:
-prAdapter->fgIsEfuseValid = TRUE;  // Fake it - we don't need NVRAM
-prAdapter->fgIsEmbbededMacAddrValid = TRUE;  // MAC from wifi.cfg is fine
+	/*
+	 * Do not fabricate efuse or embedded-MAC validity here. These indicators
+	 * must reflect the code that has actually verified the corresponding
+	 * hardware/configuration; forcing them valid can conceal missing RF
+	 * calibration or invalid device identity.
+	 */
 
 
 #if 0
@@ -1279,35 +1282,18 @@ prAdapter->fgIsEmbbededMacAddrValid = TRUE;  // MAC from wifi.cfg is fine
  * \retval WLAN_STATUS_FAILURE: Failed
  */
 /*----------------------------------------------------------------------------*/
+/*
+ * Legacy compatibility shim. Channel availability, DFS/NO_IR restrictions,
+ * and transmit-power limits must be set by the driver's regulatory-domain
+ * logic and cfg80211, not overridden unconditionally after adapter startup.
+ */
 void mt79xx_force_channels_late(struct wiphy *wiphy)
 {
-	int b, i;
-
 	if (!wiphy)
 		return;
 
-	wiphy_lock(wiphy);
-
-	for (b = 0; b < ARRAY_SIZE(wiphy->bands); b++) {
-		struct ieee80211_supported_band *sband = wiphy->bands[b];
-		if (!sband)
-			continue;
-
-		for (i = 0; i < sband->n_channels; i++) {
-			struct ieee80211_channel *c = &sband->channels[i];
-
-			c->flags &= ~(IEEE80211_CHAN_DISABLED |
-				      IEEE80211_CHAN_NO_IR |
-				      IEEE80211_CHAN_RADAR);
-
-			c->max_power = 30;
-			c->max_reg_power = 30;
-		}
-	}
-
-	wiphy_unlock(wiphy);
-
-	DBGLOG(INIT, INFO, "Late channel force applied\n");
+	DBGLOG(INIT, INFO,
+	       "Skipping legacy channel override; preserving regulatory state\n");
 }
 
 /* Rewritten wlanAdapterStart: safer ordering, safe sleeps, centralized cleanup.
@@ -4274,9 +4260,8 @@ uint32_t wlanUpdateNetworkAddress(IN struct ADAPTER *prAdapter)
         rMacAddr[3] = 0x66; rMacAddr[4] = 0x32; rMacAddr[5] = 0xe1;
     }
 
-    /* Commit the validated binary address */
+    /* Commit the selected binary address without rewriting hardware validity. */
     COPY_MAC_ADDR(prAdapter->aucMacAddress, rMacAddr);
-    prAdapter->fgIsEmbbededMacAddrValid = TRUE;
 
     return WLAN_STATUS_SUCCESS;
 }
@@ -8767,6 +8752,22 @@ void wlanCfgSetDebugLevel(IN struct ADAPTER *prAdapter)
 	}
 }
 
+/*
+ * Accept a two-letter uppercase country code or "00" (world regulatory
+ * domain). Never guess a country when the configuration is missing.
+ */
+static bool wlanIsValidCountryCode(uint16_t u2CountryCode)
+{
+	uint8_t ucFirst = (uint8_t)(u2CountryCode >> 8);
+	uint8_t ucSecond = (uint8_t)(u2CountryCode & 0xFF);
+
+	if (u2CountryCode == 0x3030)
+		return true;
+
+	return ucFirst >= 'A' && ucFirst <= 'Z' &&
+	       ucSecond >= 'A' && ucSecond <= 'Z';
+}
+
 static uint16_t u2LastPushedCode = 0;
 
 void wlanCfgResetLastPushedCC(void) { u2LastPushedCode = 0; }
@@ -8779,87 +8780,82 @@ void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 	if (!prAdapter)
 		return;
 
-	/* 1) Resolve the Country Code (No-NVRAM fallback allowed)
-	 * Prefer rWifiVar.u2CountryCode if already set; otherwise
-	 * try config lookups and finally default to 'US' (0x5553).
-	 */
+	/* Prefer an explicitly supplied country code over configuration lookup. */
 	if (prAdapter->rWifiVar.u2CountryCode != 0x0000) {
 		u2NewCode = prAdapter->rWifiVar.u2CountryCode;
 	} else {
-		/* Try a couple of config keys (graceful failure) */
-		if (wlanCfgGet(prAdapter, "CountryCode", aucValue, "", 0) != WLAN_STATUS_SUCCESS &&
-		    wlanCfgGet(prAdapter, "Country", aucValue, "", 0) != WLAN_STATUS_SUCCESS) {
-			/* fallback default */
-			u2NewCode = 0x5553; /* 'US' */
-			prAdapter->rWifiVar.u2CountryCode = u2NewCode;
-			DBGLOG(INIT, WARN, "BOLD: NVRAM/Config missing. Defaulting CC to US (0x5553)\n");
-		} else {
-			/* Expect two-character country code in aucValue[0..1] */
-			u2NewCode = (((uint16_t)(uint8_t)aucValue[0]) << 8) |
-				((uint16_t)(uint8_t)aucValue[1]);
-			prAdapter->rWifiVar.u2CountryCode = u2NewCode;
-			DBGLOG(INIT, INFO, "BOLD: Loaded CC from Config: 0x%04x\n", u2NewCode);
+		/* Do not assume the device is operating in the United States. */
+		if (wlanCfgGet(prAdapter, "CountryCode", aucValue, "", 0) !=
+		    WLAN_STATUS_SUCCESS) {
+			kalMemZero(aucValue, sizeof(aucValue));
+			if (wlanCfgGet(prAdapter, "Country", aucValue, "", 0) !=
+			    WLAN_STATUS_SUCCESS) {
+				DBGLOG(INIT, WARN,
+				       "Country code unavailable; preserving existing regulatory domain\n");
+				return;
+			}
 		}
+
+		/* The regulatory APIs below consume exactly two country-code bytes. */
+		u2NewCode = (((uint16_t)(uint8_t)aucValue[0]) << 8) |
+			((uint16_t)(uint8_t)aucValue[1]);
 	}
 
-	/* Prepare bytes for RLM/FW APIs */
-	aucValue[0] = (int8_t)((u2NewCode >> 8) & 0xFF);
-	aucValue[1] = (int8_t)(u2NewCode & 0xFF);
-
-	/* 2) Update internal RLM state so driver logic knows intended domain */
-	rlmDomainSetCountryCode((int8_t *)aucValue, 2);
-
-	/* 3) Avoid redundant pushes */
-	if (u2NewCode == u2LastPushedCode) {
-		DBGLOG(INIT, WARN, "BOLD: CC 0x%04x same as last pushed; skipping HW push\n", u2NewCode);
-		return;
-	}
-
-	/* 4) If firmware hasn't been downloaded yet, defer the HW push but keep internal state.
-	 *    We still allow pushing if the firmware is present even when prGlueInfo is NULL,
-	 *    because some environments lack a proper NVRAM/glue path but the FW still accepts commands.
-	 */
-	if (!prAdapter->fgIsFwDownloaded) {
-		DBGLOG(INIT, WARN, "BOLD: HW push requested but FW not ready. Deferring CC push (0x%04x).\n",
+	if (!wlanIsValidCountryCode(u2NewCode)) {
+		DBGLOG(INIT, WARN,
+		       "Invalid country code 0x%04x; preserving existing regulatory domain\n",
 		       u2NewCode);
 		return;
 	}
 
-	DBGLOG(INIT, INFO, "BOLD: Committing CC 0x%04x [%c%c] to firmware/hardware.\n",
+	prAdapter->rWifiVar.u2CountryCode = u2NewCode;
+
+	/* Prepare bytes for RLM/FW APIs. */
+	aucValue[0] = (int8_t)((u2NewCode >> 8) & 0xFF);
+	aucValue[1] = (int8_t)(u2NewCode & 0xFF);
+
+	/* Update internal RLM state only after validating the country code. */
+	rlmDomainSetCountryCode(aucValue, 2);
+
+	/* Avoid redundant pushes. */
+	if (u2NewCode == u2LastPushedCode) {
+		DBGLOG(INIT, INFO,
+		       "Country code 0x%04x already pushed; skipping duplicate\n",
+		       u2NewCode);
+		return;
+	}
+
+	/* Defer hardware commands until firmware is ready. */
+	if (!prAdapter->fgIsFwDownloaded) {
+		DBGLOG(INIT, INFO,
+		       "Firmware not ready; deferring country-code push (0x%04x)\n",
+		       u2NewCode);
+		return;
+	}
+
+	DBGLOG(INIT, INFO, "Applying country code 0x%04x [%c%c]\n",
 	       u2NewCode, aucValue[0], aucValue[1]);
 
-	/* 5) Commit to firmware / domain logic.
-	 * If device is single-SKU/regulatory-offload, use the OID path.
-	 * Otherwise request domain re-eval and refresh channel table when possible.
-	 *
-	 * Note: even if prGlueInfo is NULL, attempt firmware-domain commands — but avoid calling
-	 * wlanUpdateChannelTable() unless prGlueInfo is present to prevent NULL deref.
-	 */
 	if (regd_is_single_sku_en()) {
 		rlmDomainOidSetCountry(prAdapter, (uint8_t *)aucValue, 2);
 	} else {
-		/* ask RLM to re-evaluate domain and send commands to fw */
 		rlmDomainSendCmd(prAdapter);
 
-		/* update kernel-visible channel table only when glue exists */
 		if (prAdapter->prGlueInfo) {
 			wlanUpdateChannelTable(prAdapter->prGlueInfo);
 		} else if (gprWdev[0] && gprWdev[0]->wiphy) {
 			regulatory_hint(gprWdev[0]->wiphy, (const char *)aucValue);
-			DBGLOG(INIT, INFO, "BOLD: prGlueInfo NULL — used regulatory_hint(%c%c) via gprWdev[0]\n",
-				aucValue[0], aucValue[1]);
 		} else {
-			DBGLOG(INIT, WARN, "BOLD: prGlueInfo AND wiphy NULL — CC stuck at 00\n");
+			DBGLOG(INIT, WARN,
+			       "No glue or wiphy available to refresh regulatory state\n");
 		}
 	}
 
-	/* 6) record the last pushed value to avoid duplicates later */
+	/* Record only after passing validation and issuing the update path. */
 	u2LastPushedCode = u2NewCode;
-	DBGLOG(INIT, INFO, "BOLD: CC push complete (0x%04x).\n", u2NewCode);
+	DBGLOG(INIT, INFO, "Country-code update path completed (0x%04x)\n",
+	       u2NewCode);
 }
-
-
-
 
 struct WLAN_CFG_ENTRY *wlanCfgGetEntry(IN struct ADAPTER *prAdapter,
 				       const int8_t *pucKey,
