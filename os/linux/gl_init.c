@@ -570,127 +570,70 @@ static struct ieee80211_channel mtk_6ghz_channels[] = {
 #endif /* CFG_SUPPORT_WIFI_6G */
 // To this (specifically for modern kernels):
 
-/* NSS=1 (1 Spatial Stream) supporting MCS 0-11 
- * Fixed casing to standard kernel cpu_to_le16
+/* HE MCS/NSS map for one supported spatial stream, MCS 0-11.
+ * The remaining spatial streams and unsupported channel widths are marked
+ * unsupported rather than being advertised accidentally.
  */
 #define HE_MCS_SUPP_1SS 0xFFFE
 #define HE_MCS_DONOT_SUPP 0xFFFF
 
 #define HE_MCS_NSS_SUPP_1x1 \
 { \
-    .rx_mcs_80    = cpu_to_le16(HE_MCS_SUPP_1SS), \
-    .tx_mcs_80    = cpu_to_le16(HE_MCS_SUPP_1SS), \
-    .rx_mcs_160   = cpu_to_le16(HE_MCS_DONOT_SUPP), \
-    .tx_mcs_160   = cpu_to_le16(HE_MCS_DONOT_SUPP), \
-    .rx_mcs_80p80 = cpu_to_le16(HE_MCS_DONOT_SUPP), \
-    .tx_mcs_80p80 = cpu_to_le16(HE_MCS_DONOT_SUPP), \
+	.rx_mcs_80    = cpu_to_le16(HE_MCS_SUPP_1SS), \
+	.tx_mcs_80    = cpu_to_le16(HE_MCS_SUPP_1SS), \
+	.rx_mcs_160   = cpu_to_le16(HE_MCS_DONOT_SUPP), \
+	.tx_mcs_160   = cpu_to_le16(HE_MCS_DONOT_SUPP), \
+	.rx_mcs_80p80 = cpu_to_le16(HE_MCS_DONOT_SUPP), \
+	.tx_mcs_80p80 = cpu_to_le16(HE_MCS_DONOT_SUPP), \
 }
 
-
-//begin radioactive area
-
-
-
-
-
-
-
-
-
-
-/* 
- * CORRECTED HE (802.11ax / WiFi 6) Capabilities for 1x1 MT7921/MT7902
- * 
- * CRITICAL FIX: Midamble Rx Max NSTS field spans TWO bytes:
- * - Byte 1, bit 7 (0x80) - must be 0 for 1 stream
- * - Byte 2, bit 0 (0x01) - must be 0 for 1 stream
- * 
- * Changed byte 2 from 0x11 to 0x10 to clear bit 0
+/*
+ * Conservative HE capability advertisement for the 1x1 radio.
+ * Keep optional MAC/PHY features clear unless the exact firmware/SKU is known
+ * to implement them. In particular, do not set Doppler or midamble fields by
+ * hand: their bit positions are easy to misinterpret.
  */
-
-#define WLAN_HE_CAP \
+#define WLAN_HE_CAP(_widths) \
 { \
-    .has_he = true, \
-    .he_cap_elem = { \
-        .mac_cap_info = { 0x08, 0x01, 0x40, 0x00, 0x00, 0x00 }, \
-        /* Index:        0     1     2     3     4     5     6... */ \
-        /* MAC capabilities preserved from original */ \
-        .phy_cap_info = { \
-            0x06,  /* Byte 0: Channel width support */ \
-            0x00,  /* Byte 1: bit 7=0 for NSTS (part 1) */ \
-            0x10,  /* Byte 2: bit 0=0 for NSTS (part 2), bit 4=Doppler - CHANGED from 0x11! */ \
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 \
-        }, \
-    }, \
-    .he_mcs_nss_supp = HE_MCS_NSS_SUPP_1x1, \
+	.has_he = true, \
+	.he_cap_elem = { \
+		.mac_cap_info = { IEEE80211_HE_MAC_CAP0_HTC_HE, 0, 0, 0, 0, 0 }, \
+		.phy_cap_info = { \
+			(_widths), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 \
+		}, \
+	}, \
+	.he_mcs_nss_supp = HE_MCS_NSS_SUPP_1x1, \
 }
 
-/* 
- * WHAT CHANGED:
- * - Byte 2: 0x11 → 0x10 (cleared bit 0 to fix NSTS=2 bug)
- * 
- * WHAT STAYED THE SAME:
- * - MAC capabilities: 0x08, 0x01, 0x40, 0x00, 0x00, 0x00
- * - Byte 0: 0x08 (channel width)
- * - Byte 1: 0x00 (NSTS bit 1 = 0)
- * - Byte 3-10: All 0x00
- * - MCS/NSS support: HE_MCS_NSS_SUPP_1x1
- * 
- * WHY IT WORKS:
- * 0x11 = 0b00010001 (bit 0=1, bit 4=1) → NSTS field reads as 0b01 = 2 streams ✗
- * 0x10 = 0b00010000 (bit 0=0, bit 4=1) → NSTS field reads as 0b00 = 1 stream ✓
- * 
- * Bit 4 stays set for Doppler Tx support, which is fine for 1x1.
- */
-
-/* 
- * EXPLANATION OF KEY BYTES:
- * 
- * Byte 0 (0x08):
- *   - Bit 3 set = Channel width support
- *   - Bits 1-2 clear = No extra channel width bits
- * 
- * Byte 1 (0x00):
- *   - Bit 7 CLEAR = Midamble NSTS bit 1 = 0
- *   - All other bits clear
- * 
- * Byte 2 (0x10):
- *   - Bit 0 CLEAR = Midamble NSTS bit 0 = 0 (CRITICAL!)
- *   - Bit 4 SET = Doppler Tx support
- *   - Combined NSTS bits = 0b00 = 1 stream ✓
- * 
- * NSTS Field Calculation:
- *   bit_1 (byte1[7]) = 0
- *   bit_0 (byte2[0]) = 0
- *   NSTS = (bit_1 << 1) | bit_0 = 0b00 = 1 spatial stream
- */
-
-
-
-
-
-
-
-
-// end radioactive area
-
-
-
-
-/* Now that the macro is defined, we can use it in the iftype data */
-#define IFTYPE_HE_ONLY(_maskbit) \
+#define IFTYPE_HE_ONLY(_maskbit, _widths) \
 { \
-    .types_mask = BIT(_maskbit), \
-    .he_cap     = WLAN_HE_CAP, \
+	.types_mask = BIT(_maskbit), \
+	.he_cap = WLAN_HE_CAP(_widths), \
 }
 
-static struct ieee80211_sband_iftype_data mtk_he_iftype_data[] = {
-    IFTYPE_HE_ONLY(NL80211_IFTYPE_STATION),
-    IFTYPE_HE_ONLY(NL80211_IFTYPE_AP),
-    IFTYPE_HE_ONLY(NL80211_IFTYPE_P2P_CLIENT),
-    IFTYPE_HE_ONLY(NL80211_IFTYPE_P2P_GO),
+static struct ieee80211_sband_iftype_data mtk_he_iftype_data_2ghz[] = {
+	IFTYPE_HE_ONLY(NL80211_IFTYPE_STATION,
+		IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_IN_2G),
+	IFTYPE_HE_ONLY(NL80211_IFTYPE_AP,
+		IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_IN_2G),
+	IFTYPE_HE_ONLY(NL80211_IFTYPE_P2P_CLIENT,
+		IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_IN_2G),
+	IFTYPE_HE_ONLY(NL80211_IFTYPE_P2P_GO,
+		IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_IN_2G),
 };
-// --- END FIXED DISASTER AREA ---
+
+static struct ieee80211_sband_iftype_data mtk_he_iftype_data_5ghz[] = {
+	IFTYPE_HE_ONLY(NL80211_IFTYPE_STATION,
+		IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_80MHZ_IN_5G),
+	IFTYPE_HE_ONLY(NL80211_IFTYPE_AP,
+		IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_80MHZ_IN_5G),
+	IFTYPE_HE_ONLY(NL80211_IFTYPE_P2P_CLIENT,
+		IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_80MHZ_IN_5G),
+	IFTYPE_HE_ONLY(NL80211_IFTYPE_P2P_GO,
+		IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_80MHZ_IN_5G),
+};
+
+/* --- End of conservative HE capability definitions --- */
 
 
 
@@ -781,8 +724,8 @@ struct ieee80211_supported_band mtk_band_2ghz = {
     .n_bitrates = mtk_g_rates_size,
     .ht_cap = WLAN_HT_CAP,
 #if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
-    .n_iftype_data = ARRAY_SIZE(mtk_he_iftype_data), // <--- ADD THIS LINE
-    .iftype_data = mtk_he_iftype_data,
+    .n_iftype_data = ARRAY_SIZE(mtk_he_iftype_data_2ghz),
+    .iftype_data = mtk_he_iftype_data_2ghz,
 #endif
 };
 
@@ -796,8 +739,8 @@ struct ieee80211_supported_band mtk_band_5ghz = {
     .ht_cap = WLAN_HT_CAP,
     .vht_cap = WLAN_VHT_CAP,
 #if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
-    .n_iftype_data = ARRAY_SIZE(mtk_he_iftype_data), // <--- ADD THIS LINE
-    .iftype_data = mtk_he_iftype_data,
+    .n_iftype_data = ARRAY_SIZE(mtk_he_iftype_data_5ghz),
+    .iftype_data = mtk_he_iftype_data_5ghz,
 #endif
 };
 
@@ -811,11 +754,9 @@ struct ieee80211_supported_band mtk_band_6ghz = {
     /* 6 GHz operation does not use legacy 802.11a/b/g rates. */
     .bitrates = NULL,
     .n_bitrates = 0,
-#if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
-    /* Use the new unified 1x1 HE data name here */
-    .n_iftype_data = ARRAY_SIZE(mtk_he_iftype_data),
-    .iftype_data = mtk_he_iftype_data,
-#endif
+    /* Intentionally not advertised: a complete 6 GHz capability payload,
+     * including 6 GHz-specific HE capability data, has not been validated.
+     */
 };
 #endif
 
@@ -2349,11 +2290,22 @@ static int wlanSetMacAddress(struct net_device *ndev, void *addr)
 	 **********************************************************************
 	 */
 	sa = (struct sockaddr *)addr;
-	prGlueInfo = *((struct GLUE_INFO **) netdev_priv(ndev));
+	/* A randomized station address is valid, but it must still be a
+	 * unicast Ethernet address. Reject zero/multicast addresses before
+	 * changing either the netdev or the firmware-facing BSS state.
+	 */
+	if (!is_valid_ether_addr((const u8 *)sa->sa_data))
+		return -EADDRNOTAVAIL;
+
+	prGlueInfo = *((struct GLUE_INFO **)netdev_priv(ndev));
+	if (!prGlueInfo || !prGlueInfo->prAdapter)
+		return -ENODEV;
 	prAdapter = prGlueInfo->prAdapter;
 
 	prAisBssInfo = aisGetAisBssInfo(prAdapter,
 		wlanGetBssIdx(ndev));
+	if (!prAisBssInfo)
+		return -ENODEV;
 
 	COPY_MAC_ADDR(prAisBssInfo->aucOwnMacAddr, sa->sa_data);
 	kal_eth_hw_addr_set(ndev, sa->sa_data);
@@ -2428,8 +2380,7 @@ static int wlanStop(struct net_device *prDev)
 
 /*----------------------------------------------------------------------------*/
 /*!
- * \brief Apply firmware-specific channel availability without overriding
- *        cfg80211 regulatory restrictions
+ * \brief Check the firmware's country-dependent channel list for diagnostics
  *
  * \param[in] prGlueInfo      Pointer to glue info
  *
@@ -2437,45 +2388,15 @@ static int wlanStop(struct net_device *prDev)
  */
 /*----------------------------------------------------------------------------*/
 /*
- * Add firmware-specific channel restrictions without removing restrictions
- * already applied by cfg80211. In particular, do not clear CHAN_DISABLED or
- * rewrite orig_flags: cfg80211 owns the regulatory state and uses orig_flags
- * as the hardware's baseline when a regulatory domain changes.
- */
-static void wlanRestrictChannelsToFirmwareDomain(
-	struct ieee80211_channel *channels, uint32_t n_channels,
-	enum ENUM_BAND eBand,
-	const struct RF_CHANNEL_INFO *channelList, uint8_t n_channel_list)
-{
-	uint32_t i, j;
-
-	for (i = 0; i < n_channels; i++) {
-		bool found = false;
-
-		for (j = 0; j < n_channel_list; j++) {
-			if (channelList[j].eBand == eBand &&
-			    channelList[j].ucChannelNum == channels[i].hw_value) {
-				found = true;
-				break;
-			}
-		}
-
-		/* Tighten the intersection; never re-enable a regulatory block. */
-		if (!found)
-			channels[i].flags |= IEEE80211_CHAN_DISABLED;
-	}
-}
-
-/*----------------------------------------------------------------------------*/
-/*
- * Apply firmware-specific channel availability to cfg80211 conservatively.
- * The regulatory core remains authoritative for country restrictions, NO_IR,
- * DFS and transmit-power limits.
+ * Check the firmware's current country-dependent channel list without
+ * rewriting cfg80211 channel flags. A firmware list reflects the current
+ * domain, not a permanent hardware capability mask; cfg80211 owns channel
+ * availability, NO_IR, DFS and transmit-power enforcement.
  */
 /*----------------------------------------------------------------------------*/
 void wlanUpdateChannelTable(struct GLUE_INFO *prGlueInfo)
 {
-	uint8_t ucNumOfChannel = 0;
+	uint8_t ucNumOfChannel;
 	uint32_t u4BandIdx;
 	struct RF_CHANNEL_INFO *pucChannelList;
 
@@ -2507,43 +2428,14 @@ void wlanUpdateChannelTable(struct GLUE_INFO *prGlueInfo)
 			ucNumOfChannel = MAX_PER_BAND_CHN_NUM;
 		}
 
-		/* An empty result can mean the domain data is not ready yet.
-		 * Do not turn an entire band off on an unverified empty response.
-		 */
-		if (!ucNumOfChannel) {
-			DBGLOG(INIT, WARN,
-			       "No firmware channel data for band %u; preserving cfg80211 state\n",
-			       u4BandIdx);
-			continue;
-		}
-
-		switch (u4BandIdx) {
-		case BAND_2G4:
-			wlanRestrictChannelsToFirmwareDomain(
-				mtk_2ghz_channels, ARRAY_SIZE(mtk_2ghz_channels),
-				BAND_2G4, pucChannelList, ucNumOfChannel);
-			break;
-		case BAND_5G:
-			wlanRestrictChannelsToFirmwareDomain(
-				mtk_5ghz_channels, ARRAY_SIZE(mtk_5ghz_channels),
-				BAND_5G, pucChannelList, ucNumOfChannel);
-			break;
-#if (CFG_SUPPORT_WIFI_6G == 1)
-		case BAND_6G:
-			wlanRestrictChannelsToFirmwareDomain(
-				mtk_6ghz_channels, ARRAY_SIZE(mtk_6ghz_channels),
-				BAND_6G, pucChannelList, ucNumOfChannel);
-			break;
-#endif
-		default:
-			break;
-		}
+		DBGLOG(INIT, TRACE,
+		       "Firmware reports %u current-domain channels for band %u; cfg80211 flags unchanged\n",
+		       ucNumOfChannel, u4BandIdx);
 	}
 
 	kalMemFree(pucChannelList, VIR_MEM_TYPE,
 		   sizeof(struct RF_CHANNEL_INFO) * MAX_PER_BAND_CHN_NUM);
 }
-
 
 #if CFG_SUPPORT_SAP_DFS_CHANNEL
 static u_int8_t wlanIsAdjacentChnl(struct GL_P2P_INFO *prGlueP2pInfo,
@@ -2993,8 +2885,10 @@ static int wlanCreateWirelessDevice(void)
 	prWiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
 	prWiphy->cipher_suites = (const u32 *)mtk_cipher_suites;
 	prWiphy->n_cipher_suites = ARRAY_SIZE(mtk_cipher_suites);
+#if KERNEL_VERSION(5, 4, 0) <= LINUX_VERSION_CODE
 	prWiphy->akm_suites = (const u32 *)mtk_akm_suites;
 	prWiphy->n_akm_suites = ARRAY_SIZE(mtk_akm_suites);
+#endif
 
 	prWiphy->flags = WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL;
 #if (CFG_SUPPORT_ROAMING == 1) && (CFG_SUPPORT_SUPPLICANT_SME == 0)
@@ -3013,7 +2907,10 @@ static int wlanCreateWirelessDevice(void)
 
 	/* Leave regulatory_flags at cfg80211 defaults; no custom domain is used. */
 
+	/* SAE user-space authentication is exposed only with the auth op. */
+#if CFG_SUPPORT_SUPPLICANT_SME == 1
 	prWiphy->features |= NL80211_FEATURE_SAE;
+#endif
 	prWiphy->features |= NL80211_FEATURE_SCAN_RANDOM_MAC_ADDR;
 	prWiphy->features |= NL80211_FEATURE_INACTIVITY_TIMER;
 	prWiphy->features |= NL80211_FEATURE_DS_PARAM_SET_IE_IN_PROBES;
@@ -3045,9 +2942,9 @@ static int wlanCreateWirelessDevice(void)
 	prWiphy->ap_sme_capa = 1;
 #endif
 
-	/* Install the notifier before registration.  Do not guess a country:
-	 * cfg80211 starts from its world domain and applies the real regulatory
-	 * domain when userspace, firmware or a trusted country IE supplies it.
+	/* Install the notifier before registration. Do not guess a country or
+	 * install a permissive custom domain; let cfg80211 select and enforce the
+	 * active regulatory domain, then mirror that country into the firmware.
 	 */
 	prWiphy->reg_notifier = mt79xx_reg_notifier;
 
@@ -3103,9 +3000,8 @@ static void wlanDestroyAllWdev(void)
 	/* There is only one wiphy, avoid that double free the wiphy */
 	struct wiphy *wiphy = NULL;
 #endif
-#if CFG_ENABLE_WIFI_DIRECT
+	/* Also used by the AIS cleanup below when Wi-Fi Direct is disabled. */
 	int i = 0;
-#endif
 
 #if CFG_ENABLE_WIFI_DIRECT
 	/* free P2P wdev */
@@ -3473,25 +3369,49 @@ static struct wireless_dev *wlanNetCreate(void *pvData,
 	skb_queue_head_init(&(prGlueInfo->rFwDumpSkbQueue));
 #endif
 
-	/* Inject config MAC into the main net_device */
-	if (!is_zero_ether_addr(prAdapter->rWifiVar.aucMacAddress)) {
+	/* Inject a configured address only when it is a valid unicast MAC.
+	 * A merely nonzero address can still be multicast or broadcast, which
+	 * is not a valid source address for a normal station interface.
+	 */
+	if (is_valid_ether_addr(prAdapter->rWifiVar.aucMacAddress)) {
 		uint8_t *pucCfgMac = prAdapter->rWifiVar.aucMacAddress;
 
-		DBGLOG(INIT, WARN, "SAA: Injecting Config MAC %pM into net_device\n", pucCfgMac);
+		DBGLOG(INIT, INFO, "Using configured station MAC %pM\n", pucCfgMac);
 		eth_hw_addr_set(prGlueInfo->prDevHandler, pucCfgMac);
-		kalMemCopy(prAdapter->rMyMacAddr, pucCfgMac, 6);
+		kalMemCopy(prAdapter->rMyMacAddr, pucCfgMac, ETH_ALEN);
 	} else {
-		DBGLOG(INIT, ERROR, "SAA: Config MAC is zero! NetDev will use random/HW MAC.\n");
+		DBGLOG(INIT, WARN,
+		       "Configured station MAC is invalid/unavailable; deferring address selection until hardware initialization\n");
 	}
 
 	return prWdev;
 
 netcreate_err:
-	if (prAdapter != NULL) {
-		wlanAdapterDestroy(prAdapter);
-		prGlueInfo->prAdapter = NULL;
+	/* wlanNetCreate() can fail after allocating one or more netdevs.
+	 * They have not been registered yet, so non-persistent instances can
+	 * be released directly. Persistent netdevs stay allocated for retry.
+	 */
+#if !CFG_SUPPORT_PERSIST_NETDEV
+	for (i = 0; i < KAL_AIS_NUM; i++) {
+		if (gprWdev[i] && gprWdev[i]->netdev) {
+			free_netdev(gprWdev[i]->netdev);
+			gprWdev[i]->netdev = NULL;
+		}
 	}
-	prGlueInfo->prDevHandler = NULL;
+#endif
+	if (prGlueInfo) {
+		prGlueInfo->prDevHandler = NULL;
+		prGlueInfo->prDev = NULL;
+	}
+	/* The shared wiphy outlives this failed probe. Do not leave it parented
+	 * to a device which may be freed as probe unwinds.
+	 */
+	if (prWdev && prWdev->wiphy)
+		set_wiphy_dev(prWdev->wiphy, NULL);
+	if (prAdapter)
+		wlanAdapterDestroy(prAdapter);
+	if (prGlueInfo)
+		prGlueInfo->prAdapter = NULL;
 	return NULL;
 }				/* end of wlanNetCreate() */
 
@@ -4945,11 +4865,21 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 		kalMemCopy(prGlueInfo->prDevHandler->perm_addr,
 				prGlueInfo->prDevHandler->dev_addr,
 				ETH_ALEN);
+		/* Keep the adapter's primary identity aligned with the address that
+		 * the kernel-facing netdev will actually use.
+		 */
+		kalMemCopy(prAdapter->rMyMacAddr,
+			    prGlueInfo->prDevHandler->dev_addr, ETH_ALEN);
+		/* Keep the adapter's runtime MAC setting consistent as well, so later
+		 * reset/reinitialization paths do not restore a stale invalid value.
+		 */
+		kalMemCopy(prWifiVar->aucMacAddress,
+			    prGlueInfo->prDevHandler->dev_addr, ETH_ALEN);
 
-/* CRITICAL FOR IWD: Sync physical radio permanent address */
-if (prWiphy) {
-    kalMemCopy(prWiphy->perm_addr, MacAddr.sa_data, ETH_ALEN);
-}
+		/* The wiphy was created before hardware probe revealed the real MAC. */
+		if (prWiphy)
+			kalMemCopy(prWiphy->perm_addr,
+				    prGlueInfo->prDevHandler->dev_addr, ETH_ALEN);
 
 #if CFG_SHOW_MACADDR_SOURCE
 		DBGLOG(INIT, INFO, "MAC address confirmed: " MACSTR,
@@ -4983,19 +4913,43 @@ if (prWiphy) {
 		}
 		g_mtk_regd_control.pending_regdom_update = FALSE;
 	}
-		/* wlan1 */
+		/* wlan1, when this build exposes a second AIS interface. */
 		if (KAL_AIS_NUM > 1) {
+			uint8_t aucMacAddress[ETH_ALEN];
+
 			prDevHandler = wlanGetNetDev(prGlueInfo, 1);
-			kal_eth_hw_addr_set(prDevHandler,
-					    prWifiVar->aucMacAddress1);
-			kalMemCopy(prDevHandler->perm_addr,
-				prDevHandler->dev_addr,
-				ETH_ALEN);
+			if (prDevHandler) {
+				if (is_valid_ether_addr(prWifiVar->aucMacAddress1) &&
+				    !ether_addr_equal(prWifiVar->aucMacAddress1,
+						      prGlueInfo->prDevHandler->dev_addr)) {
+					kalMemCopy(aucMacAddress,
+						   prWifiVar->aucMacAddress1,
+						   ETH_ALEN);
+				} else {
+					/* Never configure wlan1 with a zero, multicast, or
+					 * duplicate station address.
+					 */
+					eth_random_addr(aucMacAddress);
+					if (ether_addr_equal(aucMacAddress,
+							     prGlueInfo->prDevHandler->dev_addr))
+						aucMacAddress[ETH_ALEN - 1] ^= 0x01;
+					DBGLOG(INIT, WARN,
+					       "Invalid/duplicate wlan1 MAC configured; using a local unicast address\n");
+				}
+				kal_eth_hw_addr_set(prDevHandler, aucMacAddress);
+				kalMemCopy(prDevHandler->perm_addr,
+					    prDevHandler->dev_addr, ETH_ALEN);
+				kalMemCopy(prWifiVar->aucMacAddress1,
+					    prDevHandler->dev_addr, ETH_ALEN);
 #if CFG_SHOW_MACADDR_SOURCE
-			DBGLOG(INIT, INFO,
-				"MAC1 address: " MACSTR,
-				MAC2STR(prDevHandler->dev_addr));
+				DBGLOG(INIT, INFO,
+					"MAC1 address: " MACSTR,
+					MAC2STR(prDevHandler->dev_addr));
 #endif
+			} else {
+				DBGLOG(INIT, WARN,
+					       "Second AIS netdev unavailable during MAC setup\n");
+			}
 		}
 	}
 
@@ -7145,11 +7099,15 @@ static void wlanGlobalReset(void)
  * \retval 0     Success
  */
 /*----------------------------------------------------------------------------*/
+/* The module-init error path may need to unwind a fully initialized driver. */
+static void exitWlan(void);
+
 /* 1 Module Entry Point */
 static int initWlan(void)
 {
 	int ret = 0;
 	struct GLUE_INFO *prGlueInfo = NULL;
+	struct wiphy *prWiphy = NULL;
 
 	pr_info("initWlan entered\n");
 
@@ -7213,13 +7171,20 @@ static int initWlan(void)
 	if (ret < 0) {
 		DBGLOG(INIT, ERROR,
 		       "initWlan: wlanCreateWirelessDevice failed: %d\n", ret);
-		return ret;
+		goto err_init_resources;
 	}
 
-	prGlueInfo = (struct GLUE_INFO *)wiphy_priv(wlanGetWiphy());
+	prWiphy = wlanGetWiphy();
+	if (!prWiphy) {
+		DBGLOG(INIT, ERROR, "initWlan: wiphy is NULL\n");
+		ret = -ENODEV;
+		goto err_destroy_wdev;
+	}
+	prGlueInfo = (struct GLUE_INFO *)wiphy_priv(prWiphy);
 	if (!prGlueInfo) {
 		DBGLOG(INIT, ERROR, "initWlan: prGlueInfo is NULL\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto err_destroy_wdev;
 	}
 
 	if (gprWdev[0]) {
@@ -7230,7 +7195,21 @@ static int initWlan(void)
 
 	gPrDev = NULL;
 
+	/*
+	 * Bus registration is the point where probe() gets invoked.
+	 * Do not duplicate bring-up here.
+	 */
+	DBGLOG(INIT, INFO, "initWlan: registering bus\n");
+	ret = (glRegisterBus(wlanProbe, wlanRemove) == WLAN_STATUS_SUCCESS) ? 0 : -EIO;
+	if (ret) {
+		DBGLOG(INIT, ERROR, "initWlan: glRegisterBus failed (%d)\n", ret);
+		goto err_destroy_wdev;
+	}
+
 #if CFG_DC_USB_WOW_CALLBACK
+	/* Register the optional callback only after bus registration succeeds,
+	 * so failed module initialization cannot leave a dangling callback.
+	 */
 	do {
 		typedef void (*func_ptr)(int (*f)(void));
 		char *func_name = "WifiRegisterPdwncCallback";
@@ -7245,24 +7224,12 @@ static int initWlan(void)
 		} else if (pFunc2) {
 			DBGLOG(INIT, INFO, "initWlan: Wow callback2 registered\n");
 			pFunc2(&kalDcSetWow);
-			GLUE_SYMBOL_PUT(pFunc2);
+			GLUE_SYMBOL_PUT(func_name2);
 		} else {
 			DBGLOG(INIT, WARN, "initWlan: no exported wow callback found\n");
 		}
 	} while (0);
 #endif
-
-	/*
-	 * Bus registration is the point where probe() gets invoked.
-	 * Do not duplicate bring-up here.
-	 */
-	DBGLOG(INIT, INFO, "initWlan: registering bus\n");
-	ret = (glRegisterBus(wlanProbe, wlanRemove) == WLAN_STATUS_SUCCESS) ? 0 : -EIO;
-	if (ret) {
-		DBGLOG(INIT, ERROR, "initWlan: glRegisterBus failed (%d)\n", ret);
-		kalUninitIOBuffer();
-		return ret;
-	}
 
 #ifdef CFG_CHIP_RESET_SUPPORT
 	glResetInit(prGlueInfo);
@@ -7296,12 +7263,31 @@ static int initWlan(void)
 	nl_sk = netlink_kernel_create(&init_net, NETLINK_OSS_KERNEL, NULL);
 	if (!nl_sk) {
 		DBGLOG(INIT, ERROR, "initWlan: netlink create failed\n");
-		return -EBUSY;
+		/* The bus, reset hooks, notifiers and optional reboot notifier have
+		 * already been registered. Reuse the normal reverse-order teardown
+		 * rather than returning from module init with a partially live driver.
+		 */
+		ret = -EBUSY;
+		exitWlan();
+		return ret;
 	}
 #endif /* CFG_AP_80211KVR_INTERFACE */
 
 	DBGLOG(INIT, INFO, "initWlan::End\n");
 	return 0;
+
+err_destroy_wdev:
+	/* No bus/notifier registration remains active on these paths. */
+	wlanDestroyAllWdev();
+err_init_resources:
+#if WLAN_INCLUDE_SYS
+	sysUninitSysFs();
+#endif
+#if WLAN_INCLUDE_PROC
+	procUninitProcFs();
+#endif
+	kalUninitIOBuffer();
+	return ret;
 }
 /*----------------------------------------------------------------------------*/
 /*!
@@ -7369,7 +7355,7 @@ static void exitWlan(void)
 	 * after rmmod
 	 */
 	prGlueInfo = wlanGetGlueInfo();
-	if (prGlueInfo != NULL)
+	if (prGlueInfo != NULL && prGlueInfo->prAdapter != NULL)
 		wlanPowerOffWifi(prGlueInfo->prAdapter);
 #endif
 
