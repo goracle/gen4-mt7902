@@ -1078,6 +1078,45 @@ void halProcessTxInterrupt(IN struct ADAPTER *prAdapter)
 }
 
 
+/* Rebuild the token free-stack while rTokenLock is held.
+ *
+ * With preallocated TX buffers, an allocation failure permanently removes that
+ * token from the usable pool until buffers are successfully allocated again.
+ * Keep usable entries contiguous at [u4UsedCnt, HIF_TX_MSDU_TOKEN_NUM), because
+ * acquire/return use u4UsedCnt as the active/free boundary.
+ */
+static void halRebuildMsduTokenFreeStackLocked(
+	struct MSDU_TOKEN_INFO *prTokenInfo)
+{
+	struct MSDU_TOKEN_ENTRY *prToken;
+	uint32_t u4Idx;
+	uint32_t u4FreeCnt = 0;
+	uint32_t u4UnavailableCnt = 0;
+
+	/* Put unavailable entries first so the active/free boundary remains
+	 * well-formed even when some preallocated buffers failed to allocate.
+	 */
+#if HIF_TX_PREALLOC_DATA_BUFFER
+	for (u4Idx = 0; u4Idx < HIF_TX_MSDU_TOKEN_NUM; u4Idx++) {
+		prToken = &prTokenInfo->arToken[u4Idx];
+		if (!prToken->prPacket)
+			prTokenInfo->aprTokenStack[u4UnavailableCnt++] = prToken;
+	}
+#endif
+
+	for (u4Idx = 0; u4Idx < HIF_TX_MSDU_TOKEN_NUM; u4Idx++) {
+		prToken = &prTokenInfo->arToken[u4Idx];
+#if HIF_TX_PREALLOC_DATA_BUFFER
+		if (!prToken->prPacket)
+			continue;
+#endif
+		prTokenInfo->aprTokenStack[u4UnavailableCnt + u4FreeCnt++] =
+			prToken;
+	}
+
+	prTokenInfo->u4UsedCnt = u4UnavailableCnt;
+}
+
 void halInitMsduTokenInfo(IN struct ADAPTER *prAdapter)
 {
 	struct GL_HIF_INFO *prHifInfo;
@@ -1085,6 +1124,7 @@ void halInitMsduTokenInfo(IN struct ADAPTER *prAdapter)
 	struct MSDU_TOKEN_INFO *prTokenInfo;
 	struct MSDU_TOKEN_ENTRY *prToken;
 	struct mt66xx_chip_info *prChipInfo;
+	unsigned long flags;
 	uint32_t u4Idx;
 	uint32_t u4TxHeadRoomSize;
 
@@ -1093,6 +1133,7 @@ void halInitMsduTokenInfo(IN struct ADAPTER *prAdapter)
 	prTokenInfo = &prHifInfo->rTokenInfo;
 	prChipInfo = prAdapter->chip_info;
 
+	spin_lock_init(&prTokenInfo->rTokenLock);
 	prTokenInfo->u4UsedCnt = 0;
 	u4TxHeadRoomSize = NIC_TX_DESC_AND_PADDING_LENGTH +
 		prChipInfo->txd_append_size;
@@ -1101,6 +1142,8 @@ void halInitMsduTokenInfo(IN struct ADAPTER *prAdapter)
 		prToken = &prTokenInfo->arToken[u4Idx];
 		prToken->fgInUsed = FALSE;
 		prToken->prMsduInfo = NULL;
+		prToken->u4Token = u4Idx;
+		prToken->u4CpuIdx = TX_RING_SIZE;
 
 #if HIF_TX_PREALLOC_DATA_BUFFER
 		prToken->u4DmaLength = NIC_TX_MAX_SIZE_PER_FRAME +
@@ -1114,7 +1157,6 @@ void halInitMsduTokenInfo(IN struct ADAPTER *prAdapter)
 				   prToken, u4Idx, prToken->prPacket,
 				   prToken->u4DmaLength);
 		} else {
-			prTokenInfo->u4UsedCnt++;
 			DBGLOG(HAL, WARN,
 				   "Msdu Token Memory alloc failed[%u]\n",
 				   u4Idx);
@@ -1127,13 +1169,11 @@ void halInitMsduTokenInfo(IN struct ADAPTER *prAdapter)
 #endif
 		prToken->rPktDmaAddr = 0;
 		prToken->u4PktDmaLength = 0;
-		prToken->u4Token = u4Idx;
-		prToken->u4CpuIdx = TX_RING_SIZE;
-
-		prTokenInfo->aprTokenStack[u4Idx] = prToken;
 	}
 
-	spin_lock_init(&prTokenInfo->rTokenLock);
+	spin_lock_irqsave(&prTokenInfo->rTokenLock, flags);
+	halRebuildMsduTokenFreeStackLocked(prTokenInfo);
+	spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
 
 	DBGLOG(HAL, INFO, "Msdu Token Init: Tot[%u] Used[%u]\n",
 		   HIF_TX_MSDU_TOKEN_NUM, prTokenInfo->u4UsedCnt);
@@ -1418,8 +1458,6 @@ static void halResetMsduToken(IN struct ADAPTER *prAdapter)
 			prToken->u4DmaLength = 0;
 			prToken->fgInUsed = FALSE;
 		}
-		/* Return token to the free stack */
-		prTokenInfo->aprTokenStack[u4Idx] = prToken;
 		spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
 
 		if (!was_in_use)
@@ -1472,7 +1510,7 @@ static void halResetMsduToken(IN struct ADAPTER *prAdapter)
 	}
 
 	spin_lock_irqsave(&prTokenInfo->rTokenLock, flags);
-	prTokenInfo->u4UsedCnt = 0;
+	halRebuildMsduTokenFreeStackLocked(prTokenInfo);
 	spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
 }
 
@@ -1489,26 +1527,48 @@ static bool halReturnMsduTokenLocked(
 	struct MSDU_TOKEN_INFO *prTokenInfo,
 	struct MSDU_TOKEN_ENTRY *prToken)
 {
+	uint32_t u4Idx;
+	uint32_t u4LastUsedIdx;
+
 	if (unlikely(!prTokenInfo->u4UsedCnt ||
 		     prTokenInfo->u4UsedCnt > HIF_TX_MSDU_TOKEN_NUM ||
 		     !prToken->fgInUsed))
 		return false;
+#if HIF_TX_PREALLOC_DATA_BUFFER
+	if (unlikely(!prToken->prPacket))
+		return false;
+#endif
 
-	prToken->fgInUsed = FALSE;
-	prTokenInfo->u4UsedCnt--;
-	prTokenInfo->aprTokenStack[prTokenInfo->u4UsedCnt] = prToken;
+	/* Completions may arrive in any order.  Remove this token from the
+	 * active prefix by swapping it with the last active entry before
+	 * shrinking the boundary; simply overwriting the boundary loses the
+	 * token that happened to occupy that slot.
+	 */
+	u4LastUsedIdx = prTokenInfo->u4UsedCnt - 1;
+	for (u4Idx = 0; u4Idx < prTokenInfo->u4UsedCnt; u4Idx++) {
+		if (prTokenInfo->aprTokenStack[u4Idx] != prToken)
+			continue;
+
+		prTokenInfo->aprTokenStack[u4Idx] =
+			prTokenInfo->aprTokenStack[u4LastUsedIdx];
+		prTokenInfo->aprTokenStack[u4LastUsedIdx] = prToken;
+		prToken->fgInUsed = FALSE;
+		prTokenInfo->u4UsedCnt--;
 
 #if CFG_SUPPORT_PCIE_ASPM_IMPROVE
-	if (prTokenInfo->u4UsedCnt == 0) {
-		struct BUS_INFO *prBusInfo = prAdapter->chip_info->bus_info;
+		if (prTokenInfo->u4UsedCnt == 0) {
+			struct BUS_INFO *prBusInfo = prAdapter->chip_info->bus_info;
 
-		if (prBusInfo && prBusInfo->configPcieASPM)
-			prBusInfo->configPcieASPM(prAdapter->prGlueInfo, FALSE);
-	}
+			if (prBusInfo && prBusInfo->configPcieASPM)
+				prBusInfo->configPcieASPM(prAdapter->prGlueInfo, FALSE);
+		}
 #else
-	(void)prAdapter;
+		(void)prAdapter;
 #endif
-	return true;
+		return true;
+	}
+
+	return false;
 }
 
 void halReturnMsduToken(IN struct ADAPTER *prAdapter, uint32_t u4TokenNum)
@@ -1535,6 +1595,10 @@ void halReturnMsduToken(IN struct ADAPTER *prAdapter, uint32_t u4TokenNum)
 			DBGLOG(HAL, WARN, "Invalid MSDU token count[%u]\n", u4UsedCnt);
 		else if (!fgInUsed)
 			DBGLOG(HAL, ERROR, "Return unused token[%u]\n", u4TokenNum);
+		else
+			DBGLOG(HAL, WARN,
+				   "Token[%u] missing from active token stack\n",
+				   u4TokenNum);
 		return;
 	}
 	spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
