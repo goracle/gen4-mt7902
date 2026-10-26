@@ -56,6 +56,11 @@
  *    This file contains all routines which are exported from MediaTek 802.11
  *    Wireless LAN driver stack to GLUE Layer.
  */
+/*
+ * Local revision 3: preserve revision 2 regulatory validation, release the
+ * PM power-control hold on every startup failure path, and reject malformed
+ * MAC strings including valid addresses followed by trailing junk.
+ */
 
 
 /*******************************************************************************
@@ -612,19 +617,23 @@ static int parse_mac_address_string(struct ADAPTER *prAdapter,
     /* 4. Defensive Parsing (No Overreads) */
     memset(hexDigits, 0, sizeof(hexDigits));
     
-    /* Strict loop: cannot exceed 'len' (input) or 12 (output) */
-    for (i = 0; i < len && digit_count < 12; i++) {
-        /* Reject anything that isn't a hex digit immediately */
+    /* Validate every input byte, including characters after the 12th digit. */
+    for (i = 0; i < len; i++) {
         if (isxdigit((unsigned char)macStr[i])) {
+            if (digit_count >= 12) {
+                DBGLOG(INIT, ERROR,
+                       "MAC: Too many hexadecimal digits in config\n");
+                return -EINVAL;
+            }
             hexDigits[digit_count++] = macStr[i];
-        } else if (macStr[i] == ':' || macStr[i] == '-' || macStr[i] == ' ') {
-            /* Valid separators - skip silently */
+        } else if (macStr[i] == ':' || macStr[i] == '-' ||
+                   macStr[i] == ' ') {
+            /* Preserve support for common MAC separators. */
             continue;
-        } else if (macStr[i] == '\0') {
-            break;
         } else {
-            /* Malicious or corrupted junk detected */
-            DBGLOG(INIT, ERROR, "MAC: Illegal character 0x%x in config\n", (unsigned char)macStr[i]);
+            DBGLOG(INIT, ERROR,
+                   "MAC: Illegal character 0x%x in config\n",
+                   (unsigned char)macStr[i]);
             return -EILSEQ;
         }
     }
@@ -1356,7 +1365,9 @@ wlanAdapterStart_AllocAndInit(struct ADAPTER *prAdapter,
 static uint32_t
 wlanAdapterStart_PowerAndHif(struct ADAPTER *prAdapter,
                              struct REG_INFO *prRegInfo,
-                             u_int8_t bAtResetFlow)
+                             u_int8_t bAtResetFlow,
+                             u_int8_t *pfgPowerControlHeld,
+                             u_int8_t *pfgSysServiceInited)
 {
     if (wlanWakeUpWiFi(prAdapter) != WLAN_STATUS_SUCCESS) {
         DBGLOG(INIT, ERROR, "wlanWakeUpWiFi failed\n");
@@ -1364,6 +1375,7 @@ wlanAdapterStart_PowerAndHif(struct ADAPTER *prAdapter,
     }
 
     ACQUIRE_POWER_CONTROL_FROM_PM(prAdapter);
+    *pfgPowerControlHeld = TRUE;
 
 #if (CFG_ENABLE_FULL_PM == 0)
     nicpmSetDriverOwn(prAdapter);
@@ -1377,6 +1389,7 @@ wlanAdapterStart_PowerAndHif(struct ADAPTER *prAdapter,
 #endif
 
     wlanOnPostNicInitAdapter(prAdapter, prRegInfo, bAtResetFlow);
+    *pfgSysServiceInited = TRUE;
 
     if (!halHifSwInfoInit(prAdapter)) {
         DBGLOG(INIT, ERROR, "halHifSwInfoInit failed\n");
@@ -1530,7 +1543,6 @@ wlanAdapterStart_NicCapAndConfig(struct ADAPTER *prAdapter,
         u4Status = wlanQueryNicCapabilityV2(prAdapter);
         if (u4Status != WLAN_STATUS_SUCCESS) {
             DBGLOG(INIT, WARN, "wlanQueryNicCapabilityV2 failed\n");
-            RECLAIM_POWER_CONTROL_TO_PM(prAdapter, FALSE);
             return WLAN_STATUS_FAILURE;
         }
     }
@@ -1599,6 +1611,7 @@ uint32_t wlanAdapterStart(struct ADAPTER *prAdapter,
 {
     uint32_t u4Status = WLAN_STATUS_SUCCESS;
     u_int8_t fgSysServiceInited = FALSE;
+    u_int8_t fgPowerControlHeld = FALSE;
     enum ENUM_ADAPTER_START_FAIL_REASON {
         ALLOC_ADAPTER_MEM_FAIL,
         DRIVER_OWN_FAIL,
@@ -1628,13 +1641,13 @@ uint32_t wlanAdapterStart(struct ADAPTER *prAdapter,
             }
         }
 
-        u4Status = wlanAdapterStart_PowerAndHif(prAdapter, prRegInfo,
-                                                bAtResetFlow);
+        u4Status = wlanAdapterStart_PowerAndHif(
+            prAdapter, prRegInfo, bAtResetFlow,
+            &fgPowerControlHeld, &fgSysServiceInited);
         if (u4Status != WLAN_STATUS_SUCCESS) {
             eFailReason = INIT_HIFINFO_FAIL;
             break;
         }
-        fgSysServiceInited = TRUE;
 
 #if CFG_ENABLE_FW_DOWNLOAD
         u4Status = wlanAdapterStart_FirmwareDownload(prAdapter);
@@ -1665,6 +1678,7 @@ uint32_t wlanAdapterStart(struct ADAPTER *prAdapter,
         }
 
         wlanAdapterStart_FinalizeInterrupts(prAdapter, bAtResetFlow);
+        fgPowerControlHeld = FALSE;
 
     } while (FALSE);
 
@@ -1672,6 +1686,12 @@ uint32_t wlanAdapterStart(struct ADAPTER *prAdapter,
         prAdapter->u4HifDbgFlag |= DEG_HIF_DEFAULT_DUMP;
         halPrintHifDbgInfo(prAdapter);
         DBGLOG(INIT, WARN, "Fail reason: %d\n", eFailReason);
+
+        /* Release the PM hold exactly once after collecting failure diagnostics. */
+        if (fgPowerControlHeld) {
+            RECLAIM_POWER_CONTROL_TO_PM(prAdapter, FALSE);
+            fgPowerControlHeld = FALSE;
+        }
 
         if (!bAtResetFlow) {
             switch (eFailReason) {
@@ -4244,8 +4264,13 @@ void wlanoidClearTimeoutCheck(IN struct ADAPTER *prAdapter)
 /*----------------------------------------------------------------------------*/
 uint32_t wlanUpdateNetworkAddress(IN struct ADAPTER *prAdapter)
 {
-    uint8_t rMacAddr[6];
-    struct WIFI_VAR *prWifiVar = &prAdapter->rWifiVar;
+    uint8_t rMacAddr[ETH_ALEN];
+    struct WIFI_VAR *prWifiVar;
+
+    if (!prAdapter)
+        return WLAN_STATUS_INVALID_DATA;
+
+    prWifiVar = &prAdapter->rWifiVar;
 
     /* 1. Get the string from the config store */
     /* We call our hardened parser here because wlanCfgParse has finished */
@@ -4253,15 +4278,31 @@ uint32_t wlanUpdateNetworkAddress(IN struct ADAPTER *prAdapter)
         DBGLOG(INIT, INFO, "MAC: Applied override from wifi.cfg\n");
         COPY_MAC_ADDR(rMacAddr, prWifiVar->aucMacAddress); // Use the binary field!
     } 
-    else {
-        /* 2. Emergency fallback */
-        DBGLOG(INIT, WARN, "MAC: No valid config found, using emergency LAA\n");
-        rMacAddr[0] = 0x02; rMacAddr[1] = 0x0c; rMacAddr[2] = 0xe7;
-        rMacAddr[3] = 0x66; rMacAddr[4] = 0x32; rMacAddr[5] = 0xe1;
+    else if (is_valid_ether_addr(prAdapter->aucMacAddress)) {
+        /* Prefer the adapter's existing permanent/previously selected address. */
+        DBGLOG(INIT, WARN,
+               "MAC: No valid override; preserving existing adapter address %pM\n",
+               prAdapter->aucMacAddress);
+        COPY_MAC_ADDR(rMacAddr, prAdapter->aucMacAddress);
+    } else if (is_valid_ether_addr(prWifiVar->aucMacAddress)) {
+        /* Some init paths populate WIFI_VAR before ADAPTER. */
+        DBGLOG(INIT, WARN,
+               "MAC: No valid override; preserving existing Wi-Fi address %pM\n",
+               prWifiVar->aucMacAddress);
+        COPY_MAC_ADDR(rMacAddr, prWifiVar->aucMacAddress);
+    } else {
+        /* Never ship the same hard-coded fallback MAC on every device. */
+        eth_random_addr(rMacAddr);
+        DBGLOG(INIT, WARN,
+               "MAC: No valid configured or existing address; generated local address %pM\n",
+               rMacAddr);
     }
 
-    /* Commit the selected binary address without rewriting hardware validity. */
+    /* Keep both software representations consistent with the selected address. */
     COPY_MAC_ADDR(prAdapter->aucMacAddress, rMacAddr);
+    COPY_MAC_ADDR(prWifiVar->aucMacAddress, rMacAddr);
+    snprintf(prWifiVar->aucMacAddrStr, sizeof(prWifiVar->aucMacAddrStr),
+             "%pM", rMacAddr);
 
     return WLAN_STATUS_SUCCESS;
 }
@@ -8796,6 +8837,16 @@ void wlanCfgSetCountryCode(IN struct ADAPTER *prAdapter)
 			}
 		}
 
+		/* Country identifiers are exactly two bytes; do not silently accept
+		 * a longer value by truncating it to its first two characters.
+		 */
+		if (aucValue[0] == '\0' || aucValue[1] == '\0' ||
+		    aucValue[2] != '\0') {
+			DBGLOG(INIT, WARN,
+			       "Country code must contain exactly two characters; preserving existing regulatory domain\n");
+			return;
+		}
+
 		/* The regulatory APIs below consume exactly two country-code bytes. */
 		u2NewCode = (((uint16_t)(uint8_t)aucValue[0]) << 8) |
 			((uint16_t)(uint8_t)aucValue[1]);
@@ -9058,30 +9109,45 @@ uint32_t wlanCfgSet(IN struct ADAPTER *prAdapter,
 
 	ASSERT(pucKey);
 
-	/* --- BOLD INTERCEPT: Force User Responsibility --- */
-	if (kalStrniCmp(pucKey, "CountryCode", 11) == 0) {
+	/* Validate country-code overrides before they reach regulatory APIs. */
+	if (kalStrniCmp(pucKey, "CountryCode", 11) == 0 &&
+	    pucKey[11] == '\0') {
 		int8_t *pVal = pucValue;
+		uint16_t u2CC;
+		struct wiphy *pWiphy;
 
-		/* Handle the 'CountryCode=US' case from the config file */
+		/* Some config parsers pass the value with a leading '='. */
 		if (pVal && pVal[0] == '=')
 			pVal++;
 
-		if (pVal && pVal[0] != '\0' && pVal[1] != '\0') {
-			uint32_t u4CC = (pVal[0] << 8) | pVal[1];
-			struct wiphy *pWiphy = wlanGetWiphy();
-
-			DBGLOG(INIT, WARN, "BOLD: wifi.cfg setting CountryCode to [%c%c]\n", 
-			       pVal[0], pVal[1]);
-
-			/* 1. Update the internal RLM domain state */
-			rlmDomainSetCountryCode(pVal, 2);
-
-			/* 2. Force the update through the adapter logic */
-			rlmDomainCountryCodeUpdate(prAdapter, pWiphy, u4CC);
-
-			/* Return success to skip standard table storage for this key */
-			return WLAN_STATUS_SUCCESS;
+		/* Require a complete, exact two-character identifier. */
+		if (!pVal || pVal[0] == '\0' || pVal[1] == '\0' ||
+		    pVal[2] != '\0') {
+			DBGLOG(INIT, WARN,
+			       "Rejecting malformed CountryCode value; expected exactly two characters\n");
+			return WLAN_STATUS_INVALID_DATA;
 		}
+
+		u2CC = (((uint16_t)(uint8_t)pVal[0]) << 8) |
+			((uint16_t)(uint8_t)pVal[1]);
+		if (!wlanIsValidCountryCode(u2CC)) {
+			DBGLOG(INIT, WARN,
+			       "Rejecting invalid CountryCode value 0x%04x\n",
+			       u2CC);
+			return WLAN_STATUS_INVALID_DATA;
+		}
+
+		pWiphy = wlanGetWiphy();
+		prAdapter->rWifiVar.u2CountryCode = u2CC;
+		DBGLOG(INIT, INFO, "Applying validated CountryCode [%c%c]\n",
+		       pVal[0], pVal[1]);
+
+		/* Keep the driver's regulatory state and cfg80211 update in sync. */
+		rlmDomainSetCountryCode(pVal, 2);
+		rlmDomainCountryCodeUpdate(prAdapter, pWiphy, u2CC);
+
+		/* This special path deliberately bypasses generic config storage. */
+		return WLAN_STATUS_SUCCESS;
 	}
 
 	/* --- Standard Storage Logic --- */
