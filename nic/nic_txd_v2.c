@@ -77,6 +77,21 @@
 #include <linux/types.h>
 #include <linux/printk.h>
 
+/* TXS destination: 1 = HOST (bit10, mt76 parity), 0 = MCU (bit9, legacy).
+ * Build with -DMT7902_TXS_TO_HOST=0 to A/B. */
+#ifndef MT7902_TXS_TO_HOST
+#define MT7902_TXS_TO_HOST 1
+#endif
+static inline void mt7902_txd_set_txs_dest(void *prTxDesc)
+{
+	uint32_t *dw = (uint32_t *)prTxDesc;
+#if MT7902_TXS_TO_HOST
+	dw[5] = (dw[5] & ~BIT(9)) | BIT(10);
+#else
+	dw[5] |= BIT(9);
+#endif
+}
+
 
 
 /*******************************************************************************
@@ -520,41 +535,28 @@ static u_int8_t nic_txd_choose_and_set_queue(struct ADAPTER *prAdapter,
 		ucTarQueue += ucWmmAdd;
 	}
 
-#if CFG_SUPPORT_ALTX_MGMT
-	if (prMsduInfo->fgIs802_11 &&
-	    (prMsduInfo->ucPacketType == TX_PACKET_TYPE_MGMT ||
-	     prMsduInfo->ucPktType == ENUM_PKT_802_11_MGMT) &&
-	    prMsduInfo->prPacket) {
-
+	/* mt76 MT_DRV_HW_MGMT_TXQ: non-bufferable mgmt (probe-req/auth/assoc-req/
+	 * reassoc-req) -> ALTX0; bufferable (disassoc/deauth/action) -> AC_VO.
+	 * No CFG_SUPPORT_ALTX_MGMT / packet-type gate: that gate left deauth on
+	 * Q_IDX 0 (CMDDUMP slot 24), so key off fgIs802_11 + the frame header. */
+	if (prMsduInfo->fgIs802_11 && prMsduInfo->prPacket) {
 		struct WLAN_MAC_HEADER *prWlanHeader =
-			(struct WLAN_MAC_HEADER *)((uint8_t *)prMsduInfo->prPacket + MAC_TX_RESERVED_FIELD);
+			(struct WLAN_MAC_HEADER *)((uint8_t *)prMsduInfo->prPacket +
+						   MAC_TX_RESERVED_FIELD);
+		uint16_t u2Fc = prWlanHeader->u2FrameCtrl;
 
-		if (likely(prWlanHeader)) {
-			u_int8_t subtype = (prWlanHeader->u2FrameCtrl & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
+		if ((u2Fc & 0x000C) == 0 /* FC type 0 = mgmt */) {
+			uint8_t subtype = (u2Fc & MASK_FC_SUBTYPE) >> OFFSET_OF_FC_SUBTYPE;
 
-			if (subtype == 4 || subtype == 13) {
-				/* probe-req / action: ALTX (unchanged) */
-				DBGLOG(TX, INFO, "Routing mgmt subtype %u via ALTX\n", subtype);
+			if (subtype == 4 || subtype == 0 || subtype == 2 ||
+			    subtype == 11) {
 				ucTarQueue = MAC_TXQ_ALTX_0_INDEX;
-			} else if (ucTarPort == PORT_INDEX_LMAC &&
-				   (subtype == 0 || subtype == 2 || subtype == 10 ||
-				    subtype == 11 || subtype == 12)) {
-				/*
-				 * assoc-req / reassoc-req / disassoc / auth / deauth.
-				 * ALTX never drains for these (life-timeout, status=1).
-				 * mt76 gets them from mac80211 as non-data frames, which
-				 * mac80211 classifies as priority 7 = AC_VO, so they go out
-				 * on AC_VO of the BSS's WMM set, not on the TC0 (AC_BK)
-				 * queue the TC mapping gave us. Take the VO queue from the
-				 * driver's own TC3 mapping instead of hardcoding 3.
-				 */
+			} else if (subtype == 10 || subtype == 12 || subtype == 13) {
 				ucTarQueue = nicTxGetTxDestQIdxByTc(TC3_INDEX) + ucWmmAdd;
-				DBGLOG(TX, INFO, "Routing mgmt subtype %u via AC_VO queue %u\n",
-				       subtype, ucTarQueue);
 			}
+			DBGLOG(TX, WARN, "mgmt subtype %u -> queue %u\n", subtype, ucTarQueue);
 		}
 	}
-#endif
 
 	ucTarQueue = clamp_queue_index(ucTarQueue);
 	HAL_MAC_CONNAC2X_TXD_SET_QUEUE_INDEX(prTxDesc, ucTarQueue);
@@ -629,10 +631,10 @@ static void nic_txd_set_pid_txs(struct ADAPTER *prAdapter,
             DBGLOG(TX, WARN, "assigned PID 0xff suspicious\n");
         }
         HAL_MAC_CONNAC2X_TXD_SET_PID(prTxDesc, prMsduInfo->ucPID);
-        HAL_MAC_CONNAC2X_TXD_SET_TXS_TO_MCU(prTxDesc);
+        mt7902_txd_set_txs_dest(prTxDesc);
     } else if (prAdapter->rWifiVar.ucDataTxDone == 2) {
         HAL_MAC_CONNAC2X_TXD_SET_PID(prTxDesc, NIC_TX_DESC_PID_RESERVED);
-        HAL_MAC_CONNAC2X_TXD_SET_TXS_TO_MCU(prTxDesc);
+        mt7902_txd_set_txs_dest(prTxDesc);
     }
 }
 
@@ -988,7 +990,7 @@ void nic_txd_v2_compose_security_frame(
 		prMsduInfo->ucPID =
 			nicTxAssignPID(prAdapter, prMsduInfo->ucWlanIndex);
 		HAL_MAC_CONNAC2X_TXD_SET_PID(prTxDesc, prMsduInfo->ucPID);
-		HAL_MAC_CONNAC2X_TXD_SET_TXS_TO_MCU(prTxDesc);
+		mt7902_txd_set_txs_dest(prTxDesc);
 	}
 
 	if (pucTxDescLength)

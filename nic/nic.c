@@ -1865,8 +1865,9 @@ uint32_t nicDeactivateNetwork(IN struct ADAPTER *prAdapter,
  * @retval -
  */
 /*----------------------------------------------------------------------------*/
-uint32_t nicUpdateBss(IN struct ADAPTER *prAdapter,
-					  IN uint8_t ucBssIndex)
+static uint32_t nicUpdateBssImpl(IN struct ADAPTER *prAdapter,
+				 IN uint8_t ucBssIndex,
+				 IN u_int8_t fgCleanupOnDisconnect)
 {
 	uint32_t u4Status = WLAN_STATUS_NOT_ACCEPTED;
 	struct BSS_INFO *prBssInfo;
@@ -2084,9 +2085,7 @@ uint32_t nicUpdateBss(IN struct ADAPTER *prAdapter,
 	/* if BSS-INFO is going to be disconnected state,
 	 * free all correlated station records
 	 */
-	if (prBssInfo->eConnectionState ==
-	    MEDIA_STATE_DISCONNECTED) {
-		/* clear client list */
+	if (fgCleanupOnDisconnect && prBssInfo->eConnectionState == MEDIA_STATE_DISCONNECTED) {		/* clear client list */
 		bssInitializeClientList(prAdapter, prBssInfo);
 
 #if DBG
@@ -2114,6 +2113,20 @@ uint32_t nicUpdateBss(IN struct ADAPTER *prAdapter,
 	}
 
 	return u4Status;
+}
+
+
+uint32_t nicUpdateBss(IN struct ADAPTER *prAdapter, IN uint8_t ucBssIndex)
+{
+	return nicUpdateBssImpl(prAdapter, ucBssIndex, TRUE);
+}
+
+/* Send SET_BSS_INFO only. Skips the DISCONNECTED-state teardown that frees
+ * every STA record on the network, so it is safe once the AP STA record
+ * exists. */
+uint32_t nicUpdateBssSend(IN struct ADAPTER *prAdapter, IN uint8_t ucBssIndex)
+{
+	return nicUpdateBssImpl(prAdapter, ucBssIndex, FALSE);
 }
 
 /* BSS-INFO Indication (PM) */

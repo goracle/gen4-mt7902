@@ -1023,7 +1023,7 @@ static __maybe_unused void cnmStaRecHandleEventPkt(struct ADAPTER *prAdapter,
  */
 /*----------------------------------------------------------------------------*/
 void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
-						 u_int8_t fgNeedResp)
+			 u_int8_t fgNeedResp)
 {
 	struct CMD_UPDATE_STA_RECORD *prCmdContent;
 	uint32_t rStatus;
@@ -1051,23 +1051,22 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 	 *        One is here, the other is in wlanSendQueryCmd()
 	 */
 	prCmdContent = cnmMemAlloc(prAdapter, RAM_TYPE_BUF,
-							   sizeof(struct CMD_UPDATE_STA_RECORD));
+				   sizeof(struct CMD_UPDATE_STA_RECORD));
 
 	/* To do: exception handle */
 	if (!prCmdContent) {
 		log_dbg(MEM, WARN, "%s: CMD_ID_UPDATE_STA_RECORD command allocation failed\n",
 				__func__);
-
 		return;
 	}
 
 	DBGLOG(REQ, WARN,
-		   "STA_UPDATE: idx=%d wlanIdx=%d type=%d state=%d bss=%d\n",
-		   prStaRec->ucIndex,
-		   prStaRec->ucWlanIndex,
-		   prStaRec->eStaType,
-		   prStaRec->ucStaState,
-		   prStaRec->ucBssIndex);
+	       "STA_UPDATE: idx=%d wlanIdx=%d type=%d state=%d bss=%d\n",
+	       prStaRec->ucIndex,
+	       prStaRec->ucWlanIndex,
+	       prStaRec->eStaType,
+	       prStaRec->ucStaState,
+	       prStaRec->ucBssIndex);
 
 	/* Reset command buffer */
 	kalMemZero(prCmdContent, sizeof(struct CMD_UPDATE_STA_RECORD));
@@ -1075,7 +1074,7 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 	prCmdContent->ucStaIndex = prStaRec->ucIndex;
 	prCmdContent->ucStaType = (uint8_t) prStaRec->eStaType;
 	kalMemCopy(&prCmdContent->aucMacAddr[0], &prStaRec->aucMacAddr[0],
-			   MAC_ADDR_LEN);
+		   MAC_ADDR_LEN);
 	prCmdContent->u2AssocId = prStaRec->u2AssocId;
 	DBGLOG(REQ, WARN, "Update StaRec[%u] MAC=" MACSTR " wlanIdx=%u state=%u\n",
 		prStaRec->ucIndex, MAC2STR(prCmdContent->aucMacAddr),
@@ -1093,7 +1092,7 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 
 	/* Size is SUP_MCS_RX_BITMASK_OCTET_NUM */
 	kalMemCopy(prCmdContent->aucRxMcsBitmask, prStaRec->aucRxMcsBitmask,
-			   sizeof(prCmdContent->aucRxMcsBitmask));
+		   sizeof(prCmdContent->aucRxMcsBitmask));
 	prCmdContent->u2RxHighestSupportedRate
 		= prStaRec->u2RxHighestSupportedRate;
 	prCmdContent->u4TxRateInfo = prStaRec->u4TxRateInfo;
@@ -1105,15 +1104,26 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 	if (prAdapter->rWifiVar.eRateSetting != FIXED_RATE_NONE) {
 		/* override rate configuration */
 		nicUpdateRateParams(prAdapter,
-							prAdapter->rWifiVar.eRateSetting,
-							&(prCmdContent->ucDesiredPhyTypeSet),
-							&(prCmdContent->u2DesiredNonHTRateSet),
-							&(prCmdContent->u2BSSBasicRateSet),
-							&(prCmdContent->ucMcsSet),
-							&(prCmdContent->ucSupMcs32),
-							&(prCmdContent->u2HtCapInfo));
+				    prAdapter->rWifiVar.eRateSetting,
+				    &(prCmdContent->ucDesiredPhyTypeSet),
+				    &(prCmdContent->u2DesiredNonHTRateSet),
+				    &(prCmdContent->u2BSSBasicRateSet),
+				    &(prCmdContent->ucMcsSet),
+				    &(prCmdContent->ucSupMcs32),
+				    &(prCmdContent->u2HtCapInfo));
 	}
 #endif
+
+	/* Diagnostic: the rate fields exactly as they go to the firmware */
+	DBGLOG(REQ, WARN,
+	       "[RATECHK] idx=%u widx=%u desiredNonHT=0x%04x basic=0x%04x phy=0x%02x rxMcs=%02x %02x %02x %02x eRateSetting=%d\n",
+	       prStaRec->ucIndex, prStaRec->ucWlanIndex,
+	       prCmdContent->u2DesiredNonHTRateSet,
+	       prCmdContent->u2BSSBasicRateSet,
+	       prCmdContent->ucDesiredPhyTypeSet,
+	       prCmdContent->aucRxMcsBitmask[0], prCmdContent->aucRxMcsBitmask[1],
+	       prCmdContent->aucRxMcsBitmask[2], prCmdContent->aucRxMcsBitmask[3],
+	       (int) prAdapter->rWifiVar.eRateSetting);
 
 	prCmdContent->ucIsQoS = prStaRec->fgIsQoS;
 	prCmdContent->ucIsUapsdSupported = prStaRec->fgIsUapsdSupported;
@@ -1151,7 +1161,7 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 #if CFG_SUPPORT_MTK_SYNERGY
 	if (IS_FEATURE_ENABLED(prAdapter->rWifiVar.ucMtkOui)) {
 		if (IS_FEATURE_ENABLED(
-							   prAdapter->rWifiVar.ucGbandProbe256QAM)) {
+			    prAdapter->rWifiVar.ucGbandProbe256QAM)) {
 			prCmdContent->u4Flags
 				|= MTK_SYNERGY_CAP_SUPPORT_24G_MCS89_PROBING;
 		}
@@ -1240,26 +1250,29 @@ void cnmStaSendUpdateCmd(struct ADAPTER *prAdapter, struct STA_RECORD *prStaRec,
 			prCmdContent->ucIsUapsdSupported);
 
 	rStatus = wlanSendSetQueryCmd(prAdapter,	/* prAdapter */
-								  CMD_ID_UPDATE_STA_RECORD,		/* ucCID */
-								  TRUE,					/* fgSetQuery */
-								  fgNeedResp,				/* fgNeedResp */
-								  FALSE,					/* fgIsOid */
-								  fgNeedResp ? nicUniCmdStaRecHandleEventPkt : NULL, NULL,
-								  /* pfCmdTimeoutHandler */
-								  sizeof(struct CMD_UPDATE_STA_RECORD),	/* u4SetQueryInfoLen */
-								  (uint8_t *) prCmdContent,	/* pucInfoBuffer */
-								  NULL,				/* pvSetQueryBuffer */
-								  0				/* u4SetQueryBufferLen */
-								  );
+				  CMD_ID_UPDATE_STA_RECORD,	/* ucCID */
+				  TRUE,			/* fgSetQuery */
+				  fgNeedResp,		/* fgNeedResp */
+				  FALSE,		/* fgIsOid */
+				  fgNeedResp ? nicUniCmdStaRecHandleEventPkt : NULL, NULL,
+				  /* pfCmdTimeoutHandler */
+				  sizeof(struct CMD_UPDATE_STA_RECORD),	/* u4SetQueryInfoLen */
+				  (uint8_t *) prCmdContent,	/* pucInfoBuffer */
+				  NULL,			/* pvSetQueryBuffer */
+				  0			/* u4SetQueryBufferLen */
+				  );
 
 	cnmMemFree(prAdapter, prCmdContent);
 
 	if (rStatus != WLAN_STATUS_PENDING) {
 		log_dbg(MEM, WARN,
-				"%s: CMD_ID_UPDATE_STA_RECORD result 0x%08x\n",
-				__func__, rStatus);
+			"%s: CMD_ID_UPDATE_STA_RECORD result 0x%08x\n",
+			__func__, rStatus);
 	}
 }
+
+
+
 
 /*----------------------------------------------------------------------------*/
 /*!

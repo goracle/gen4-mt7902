@@ -2323,74 +2323,77 @@ typedef uint32_t (*PROCESS_LEGACY_TO_UNI_FUNCTION) (struct ADAPTER *,
  * especially with the added BSS and STA idx parameters.
  */
 void nicRxProcessEventPacket(IN struct ADAPTER *prAdapter,
-                             IN OUT struct SW_RFB *prSwRfb)
+			     IN OUT struct SW_RFB *prSwRfb)
 {
-    struct mt66xx_chip_info *prChipInfo;
-    struct CMD_INFO *prCmdInfo;
-    struct WIFI_EVENT *prEvent;
-    uint32_t u4Idx, u4Size;
+	struct mt66xx_chip_info *prChipInfo;
+	struct CMD_INFO *prCmdInfo;
+	struct WIFI_EVENT *prEvent;
+	uint32_t u4Idx, u4Size;
 
-    ASSERT(prAdapter);
-    ASSERT(prSwRfb);
+	ASSERT(prAdapter);
+	ASSERT(prSwRfb);
 
-    prChipInfo = prAdapter->chip_info;
-    prEvent = (struct WIFI_EVENT *)
-        (prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
+	prChipInfo = prAdapter->chip_info;
+	prEvent = (struct WIFI_EVENT *)
+		(prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
 
-    /* MT7902: ring 0 is shared for MCU events and Tx Free Done.
-     * Zero-EID zero-length descriptors are phantom completions; discard. */
-    if (prEvent->ucEID == 0 && prEvent->u2PacketLength == 0) {
-        nicRxReturnRFB(prAdapter, prSwRfb);
-        return;
-    }
+	/* MT7902: ring 0 is shared for MCU events and Tx Free Done.
+	 * Zero-EID zero-length descriptors are phantom completions; discard. */
+	if (prEvent->ucEID == 0 && prEvent->u2PacketLength == 0) {
+		nicRxReturnRFB(prAdapter, prSwRfb);
+		return;
+	}
 
-    DBGLOG(RX, LOUD,
-        "[RX EVT] EID=0x%02x SEQ=%u LEN=%u\n",
-        prEvent->ucEID,
-        prEvent->ucSeqNum,
-        prEvent->u2PacketLength);
+	DBGLOG(RX, LOUD,
+		"[RX EVT] EID=0x%02x SEQ=%u LEN=%u\n",
+		prEvent->ucEID,
+		prEvent->ucSeqNum,
+		prEvent->u2PacketLength);
 
-    /* ===== LEGACY EVENT TABLE ===== */
-    u4Size = sizeof(arEventTable) / sizeof(struct RX_EVENT_HANDLER);
-    for (u4Idx = 0; u4Idx < u4Size; u4Idx++) {
-        if (prEvent->ucEID == arEventTable[u4Idx].eEID) {
-            DBGLOG(RX, LOUD,
-                "[LEGACY EVT] EID=0x%02x handler=%ps\n",
-                prEvent->ucEID,
-                arEventTable[u4Idx].pfnHandler);
-            arEventTable[u4Idx].pfnHandler(prAdapter, prEvent);
-            nicRxReturnRFB(prAdapter, prSwRfb);
-            return;
-        }
-    }
+	/* ===== LEGACY EVENT TABLE ===== */
+	u4Size = sizeof(arEventTable) / sizeof(struct RX_EVENT_HANDLER);
+	for (u4Idx = 0; u4Idx < u4Size; u4Idx++) {
+		if (prEvent->ucEID == arEventTable[u4Idx].eEID) {
+			DBGLOG(RX, LOUD,
+				"[LEGACY EVT] EID=0x%02x handler=%ps\n",
+				prEvent->ucEID,
+				arEventTable[u4Idx].pfnHandler);
+			arEventTable[u4Idx].pfnHandler(prAdapter, prEvent);
+			nicRxReturnRFB(prAdapter, prSwRfb);
+			return;
+		}
+	}
 
-    /* ===== CMD RESPONSE MATCH ===== */
-    prCmdInfo = nicGetPendingCmdInfo(prAdapter, prEvent->ucSeqNum);
-    if (prCmdInfo) {
-        DBGLOG(RX, LOUD,
-            "[CMD RSP] EID=0x%02x SEQ=%u CID=0x%02x\n",
-            prEvent->ucEID,
-            prEvent->ucSeqNum,
-            prCmdInfo->ucCID);
-        if (prCmdInfo->pfCmdDoneHandler)
-            prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
-                                        prEvent->aucBuffer);
-        else if (prCmdInfo->fgIsOid)
-            kalOidComplete(prAdapter->prGlueInfo,
-                           prCmdInfo->fgSetQuery, 0,
-                           WLAN_STATUS_SUCCESS);
-        cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
-    } else {
-        DBGLOG_LIMITED(RX, WARN,
-            "[UNHANDLED EVT] EID=0x%02x SEQ=%u LEN=%u\n",
-            prEvent->ucEID,
-            prEvent->ucSeqNum,
-            prEvent->u2PacketLength);
-    }
+	/* ===== CMD RESPONSE MATCH ===== */
+	prCmdInfo = nicGetPendingCmdInfo(prAdapter, prEvent->ucSeqNum);
+	if (prCmdInfo) {
+		DBGLOG(RX, WARN,
+			"[RXEVT-MATCH] EID=0x%02x SEQ=%u LEN=%u pendCID=0x%02x done=%ps payload[0..7]=%8ph\n",
+			prEvent->ucEID,
+			prEvent->ucSeqNum,
+			prEvent->u2PacketLength,
+			prCmdInfo->ucCID,
+			prCmdInfo->pfCmdDoneHandler,
+			prEvent->aucBuffer);
+		if (prCmdInfo->pfCmdDoneHandler)
+			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+						    prEvent->aucBuffer);
+		else if (prCmdInfo->fgIsOid)
+			kalOidComplete(prAdapter->prGlueInfo,
+				       prCmdInfo->fgSetQuery, 0,
+				       WLAN_STATUS_SUCCESS);
+		cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+	} else {
+		DBGLOG_LIMITED(RX, WARN,
+			"[UNHANDLED EVT] EID=0x%02x SEQ=%u LEN=%u\n",
+			prEvent->ucEID,
+			prEvent->ucSeqNum,
+			prEvent->u2PacketLength);
+	}
 
-    prAdapter->ucOidTimeoutCount = 0;
-    prAdapter->fgIsChipNoAck = FALSE;
-    nicRxReturnRFB(prAdapter, prSwRfb);
+	prAdapter->ucOidTimeoutCount = 0;
+	prAdapter->fgIsChipNoAck = FALSE;
+	nicRxReturnRFB(prAdapter, prSwRfb);
 }
 
 /*----------------------------------------------------------------------------*/
@@ -2833,7 +2836,7 @@ void nicUniEventScanDone(struct ADAPTER *ad, struct WIFI_UNI_EVENT *evt)
 
 
 void nicRxProcessUniEventPacket(IN struct ADAPTER *prAdapter,
-                                IN OUT struct SW_RFB *prSwRfb)
+				IN OUT struct SW_RFB *prSwRfb)
 {
 	struct mt66xx_chip_info *prChipInfo;
 	struct CMD_INFO *prCmdInfo = NULL;
@@ -2854,7 +2857,6 @@ void nicRxProcessUniEventPacket(IN struct ADAPTER *prAdapter,
 	prEvent = (struct WIFI_UNI_EVENT *)(prSwRfb->pucRecvBuff + prChipInfo->rxd_size);
 
 	rawEid = prEvent->ucEID;
-	//DBGLOG_MEM8(RX, LOUD, (uint8_t *)prEvent, 16);
 	eid = GET_UNI_EVENT_ID(prEvent);
 
 	if (eid >= UNI_EVENT_ID_NUM) {
@@ -2872,43 +2874,37 @@ void nicRxProcessUniEventPacket(IN struct ADAPTER *prAdapter,
 		if (arUniEventTable[eid]) {
 			arUniEventTable[eid](prAdapter, prEvent);
 		} else {
-		  DBGLOG(RX, INFO,
-			 "UNHANDLED RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
-			 eid, prEvent->ucSeqNum,
-			 prEvent->u2PacketLength);
-		  //DBGLOG_MEM8(RX, INFO, (uint8_t *)prEvent, min_t(u32, prEvent->u2PacketLength, 64));
-
-		}
-	} else {
-		if (!prCmdInfo)
-			prCmdInfo = nicGetPendingCmdInfo(prAdapter,
-							 prEvent->ucSeqNum);
-		if (prCmdInfo != NULL) {
-			if (prCmdInfo->pfCmdDoneHandler)
-				prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
-					(uint8_t *)prEvent->aucBuffer);
-			else if (prCmdInfo->fgIsOid)
-				kalOidComplete(prAdapter->prGlueInfo,
-					prCmdInfo->fgSetQuery, 0,
-					WLAN_STATUS_SUCCESS);
-			cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
-		} else {
-
-			/* Legacy unhandled logging for other IDs */
-			DBGLOG(RX, LOUD,
+			DBGLOG(RX, INFO,
 			       "UNHANDLED RX EVENT: ID[0x%02X] SEQ[%u] LEN[%u]\n",
 			       eid, prEvent->ucSeqNum,
 			       prEvent->u2PacketLength);
 		}
+	} else {
+		DBGLOG(RX, WARN,
+		       "[UNIMATCH] rawEID=0x%02x eid=0x%02x SEQ=%u LEN=%u pendCID=0x%02x done=%ps payload[0..7]=%8ph\n",
+		       rawEid, eid, prEvent->ucSeqNum,
+		       prEvent->u2PacketLength,
+		       prCmdInfo->ucCID,
+		       prCmdInfo->pfCmdDoneHandler,
+		       prEvent->aucBuffer);
+
+		if (prCmdInfo->pfCmdDoneHandler)
+			prCmdInfo->pfCmdDoneHandler(prAdapter, prCmdInfo,
+				(uint8_t *)prEvent->aucBuffer);
+		else if (prCmdInfo->fgIsOid)
+			kalOidComplete(prAdapter->prGlueInfo,
+				prCmdInfo->fgSetQuery, 0,
+				WLAN_STATUS_SUCCESS);
+		cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
 	}
-
-
 
 	prAdapter->ucOidTimeoutCount = 0;
 	prAdapter->fgIsChipNoAck = FALSE;
 
 	nicRxReturnRFB(prAdapter, prSwRfb);
 }
+
+
 
 
 #if ((CFG_SUPPORT_ICS == 1) || (CFG_SUPPORT_PHY_ICS == 1))
@@ -3081,6 +3077,20 @@ void nicRxProcessPacketType(struct ADAPTER *prAdapter, struct SW_RFB *prSwRfb)
 		break;
 
 	case RX_PKT_TYPE_TX_STATUS:
+	{
+		uint8_t *pucB = (uint8_t *)prSwRfb->pucRecvBuff;
+		static int i4TxsRxCnt;
+
+		if (i4TxsRxCnt++ < 128 && pucB)
+			DBGLOG(RX, WARN,
+			  "[TXS-RX] #%d %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+			  i4TxsRxCnt, pucB[0], pucB[1], pucB[2], pucB[3],
+			  pucB[4], pucB[5], pucB[6], pucB[7], pucB[8],
+			  pucB[9], pucB[10], pucB[11], pucB[12], pucB[13],
+			  pucB[14], pucB[15]);
+		nicRxReturnRFB(prAdapter, prSwRfb);
+		break;
+	}
 	case RX_PKT_TYPE_RX_VECTOR:
 	case RX_PKT_TYPE_TM_REPORT:
 	default:

@@ -193,136 +193,134 @@ uint8_t nic_rxd_v2_get_ofld(
  *
  */
 /*----------------------------------------------------------------------------*/
+#ifndef MT7902_RXD_DBG_MAX
+#define MT7902_RXD_DBG_MAX 8
+#endif
+#define MT7902_HW_WLAN_IDX_INVALID 0x3FF
+#ifndef STA_REC_INDEX_NOT_FOUND
+#define STA_REC_INDEX_NOT_FOUND 0xFE
+#endif
+
 void nic_rxd_v2_fill_rfb(
 	struct ADAPTER *prAdapter,
 	struct SW_RFB *prSwRfb)
 {
-	struct mt66xx_chip_info *prChipInfo;
-	struct HW_MAC_CONNAC2X_RX_DESC *prRxStatus;
-
-	uint32_t u4PktLen = 0;
-	/* UINT_32 u4MacHeaderLen; */
-	uint32_t u4HeaderOffset;
+	static atomic_t rxd_dbg_cnt = ATOMIC_INIT(0);
+	struct mt66xx_chip_info *prChipInfo = prAdapter->chip_info;
+	struct HW_MAC_CONNAC2X_RX_DESC *prRxStatus = prSwRfb->prRxStatus;
+	uint32_t u4PktLen, u4HwHeaderOffset, u4HeaderOffset;
+	uint32_t u4Consumed;
 	uint16_t u2RxStatusOffset;
+	uint16_t u2WlanIdx;
+	uint8_t ucKnownGroups, ucUnknownGroups;
+	u_int8_t fgDbg;
 
-	DEBUGFUNC("nicRxFillRFB");
+	DEBUGFUNC("nic_rxd_v2_fill_rfb");
 
-	prChipInfo = prAdapter->chip_info;
-	prRxStatus = prSwRfb->prRxStatus;
+	fgDbg = (atomic_inc_return(&rxd_dbg_cnt) <= MT7902_RXD_DBG_MAX);
 
 	u4PktLen = (uint32_t) HAL_MAC_CONNAC2X_RX_STATUS_GET_RX_BYTE_CNT(
-				prRxStatus);
-	u4HeaderOffset = (uint32_t) (
-		HAL_MAC_CONNAC2X_RX_STATUS_GET_HEADER_OFFSET(prRxStatus));
+		prRxStatus);
+	u4HwHeaderOffset = (uint32_t)
+		HAL_MAC_CONNAC2X_RX_STATUS_GET_HEADER_OFFSET(prRxStatus);
 
-	/* MT7902: firmware sets a 2-byte alignment pad in header_offset
-	 * for non-translated (raw 802.11) frames. This is only valid when
-	 * header translation is active; for raw frames it misaligns the
-	 * 802.11 header. Force to zero. */
-	if (!HAL_MAC_CONNAC2X_RX_STATUS_IS_HEADER_TRAN(prRxStatus))
-		u4HeaderOffset = 0;
+	/* MT7902: the 2-byte pad in header_offset is only meaningful when
+	 * header translation is on; for raw 802.11 frames force it to 0.
+	 */
+	u4HeaderOffset = HAL_MAC_CONNAC2X_RX_STATUS_IS_HEADER_TRAN(prRxStatus)
+		? u4HwHeaderOffset : 0;
 
+	/* ---- optional groups, in the order the hardware lays them out ---- */
 	u2RxStatusOffset = prChipInfo->rxd_size;
-	prSwRfb->ucGroupVLD =
-		(uint8_t) HAL_MAC_CONNAC2X_RX_STATUS_GET_GROUP_VLD(prRxStatus);
+	prSwRfb->ucGroupVLD = (uint8_t)
+		HAL_MAC_CONNAC2X_RX_STATUS_GET_GROUP_VLD(prRxStatus);
+
 	if (prSwRfb->ucGroupVLD & BIT(RX_GROUP_VLD_4)) {
 		prSwRfb->prRxStatusGroup4 = (struct HW_MAC_RX_STS_GROUP_4 *)
 			((uint8_t *) prRxStatus + u2RxStatusOffset);
 		u2RxStatusOffset += sizeof(struct HW_MAC_RX_STS_GROUP_4);
-
 	}
 	if (prSwRfb->ucGroupVLD & BIT(RX_GROUP_VLD_1)) {
 		prSwRfb->prRxStatusGroup1 = (struct HW_MAC_RX_STS_GROUP_1 *)
 			((uint8_t *) prRxStatus + u2RxStatusOffset);
 		u2RxStatusOffset += sizeof(struct HW_MAC_RX_STS_GROUP_1);
-
 	}
 	if (prSwRfb->ucGroupVLD & BIT(RX_GROUP_VLD_2)) {
 		prSwRfb->prRxStatusGroup2 = (struct HW_MAC_RX_STS_GROUP_2 *)
 			((uint8_t *) prRxStatus + u2RxStatusOffset);
 		u2RxStatusOffset += sizeof(struct HW_MAC_RX_STS_GROUP_2);
-
 	}
 	if (prSwRfb->ucGroupVLD & BIT(RX_GROUP_VLD_3)) {
 		prSwRfb->prRxStatusGroup3 = (void *)
 			((uint8_t *) prRxStatus + u2RxStatusOffset);
 		u2RxStatusOffset += sizeof(struct HW_MAC_RX_STS_GROUP_3_V2);
 	}
-
 	if (prSwRfb->ucGroupVLD & BIT(RX_GROUP_VLD_5)) {
 		prSwRfb->prRxStatusGroup5 = (struct HW_MAC_RX_STS_GROUP_5 *)
 			((uint8_t *) prRxStatus + u2RxStatusOffset);
 		u2RxStatusOffset += prChipInfo->group5_size;
 	}
 
-
-	// NEW: Cross-reference the hardware-reported header offset vs our calculated offset
-	uint32_t u4HwHeaderOffset = HAL_MAC_CONNAC2X_RX_STATUS_GET_HEADER_OFFSET(prRxStatus);
-
-	if (u4HwHeaderOffset != u4HeaderOffset) {
-		DBGLOG(RX, WARN, "[DEBUG_RX] OFFSET MISMATCH! HW_Reported=%u, SW_Calculated=%u (Raw Frame? %u)\n",
-			   u4HwHeaderOffset, u4HeaderOffset, 
-			   !HAL_MAC_CONNAC2X_RX_STATUS_IS_HEADER_TRAN(prRxStatus));
-	}
-
-	// Check for "Phantom Groups" - bits set in GroupVLD that we didn't account for
-	uint32_t u4UnhandledGroups = prSwRfb->ucGroupVLD & ~(BIT(1)|BIT(2)|BIT(3)|BIT(4)|BIT(5));
-	if (u4UnhandledGroups) {
-		DBGLOG(RX, ERROR, "[DEBUG_RX] UNHANDLED GROUPS DETECTED: 0x%02x\n", u4UnhandledGroups);
-	}
-
+	/* Only flag bits that no RX_GROUP_VLD_* constant covers. */
+	ucKnownGroups = BIT(RX_GROUP_VLD_1) | BIT(RX_GROUP_VLD_2) |
+		BIT(RX_GROUP_VLD_3) | BIT(RX_GROUP_VLD_4) |
+		BIT(RX_GROUP_VLD_5);
+	ucUnknownGroups = prSwRfb->ucGroupVLD & ~ucKnownGroups;
+	if (ucUnknownGroups)
+		DBGLOG(RX, ERROR, "[RXD] unknown group bits 0x%02x (vld=0x%02x)\n",
+		       ucUnknownGroups, prSwRfb->ucGroupVLD);
 
 	prSwRfb->u2RxStatusOffst = u2RxStatusOffset;
 	prSwRfb->pvHeader = (uint8_t *) prRxStatus +
 		u2RxStatusOffset + u4HeaderOffset;
 
-
-	print_hex_dump(KERN_WARNING, "RXDMA: ",
-				   DUMP_PREFIX_OFFSET, 16, 1,
-				   prRxStatus, 128, false);
-
-	print_hex_dump(KERN_WARNING, "HDR: ",
-				   DUMP_PREFIX_OFFSET, 16, 1,
-				   prSwRfb->pvHeader, 64, false);
-
-	DBGLOG(RX, WARN,
-		   "RXDBG rxd_size=%u grpVLD=0x%x rxStatusOff=%u hdrOff=%u pktLen=%u\n",
-		   prChipInfo->rxd_size,
-		   prSwRfb->ucGroupVLD,
-		   u2RxStatusOffset,
-		   u4HeaderOffset,
-		   u4PktLen);
-
-
-	prSwRfb->u2RxByteCount = u4PktLen;
-	prSwRfb->u2PacketLen = (uint16_t) (u4PktLen -
-		(u2RxStatusOffset + u4HeaderOffset));
+	/* ---- length sanity ---- */
+	u4Consumed = (uint32_t) u2RxStatusOffset + u4HeaderOffset;
+	prSwRfb->u2RxByteCount = (uint16_t) u4PktLen;
+	if (u4PktLen < u4Consumed) {
+		DBGLOG(RX, ERROR,
+		       "[RXD] pktLen=%u < rxsts+hdrofs=%u (vld=0x%02x), clamping\n",
+		       u4PktLen, u4Consumed, prSwRfb->ucGroupVLD);
+		prSwRfb->u2PacketLen = 0;
+	} else {
+		prSwRfb->u2PacketLen = (uint16_t) (u4PktLen - u4Consumed);
+	}
 	prSwRfb->u2HeaderLen = (uint16_t)
 		HAL_MAC_CONNAC2X_RX_STATUS_GET_HEADER_LEN(prRxStatus);
-	prSwRfb->ucWlanIdx =
-		(uint8_t) HAL_MAC_CONNAC2X_RX_STATUS_GET_WLAN_IDX(prRxStatus);
-	prSwRfb->ucStaRecIdx = secGetStaIdxByWlanIdx(prAdapter,
-		(uint8_t) HAL_MAC_CONNAC2X_RX_STATUS_GET_WLAN_IDX(prRxStatus));
-	prSwRfb->prStaRec = cnmGetStaRecByIndex(prAdapter,
-		prSwRfb->ucStaRecIdx);
 
+	/* ---- wlanIdx: 10 bits in hardware, 0x3FF = no WTBL entry ---- */
+	u2WlanIdx = (uint16_t) HAL_MAC_CONNAC2X_RX_STATUS_GET_WLAN_IDX(prRxStatus);
+	prSwRfb->ucWlanIdx = (u2WlanIdx > 0xFF) ? 0xFF : (uint8_t) u2WlanIdx;
+	if (u2WlanIdx == MT7902_HW_WLAN_IDX_INVALID || u2WlanIdx > 0xFF) {
+		prSwRfb->ucStaRecIdx = STA_REC_INDEX_NOT_FOUND;
+		prSwRfb->prStaRec = NULL;
+	} else {
+		prSwRfb->ucStaRecIdx =
+			secGetStaIdxByWlanIdx(prAdapter, (uint8_t) u2WlanIdx);
+		prSwRfb->prStaRec =
+			cnmGetStaRecByIndex(prAdapter, prSwRfb->ucStaRecIdx);
+	}
 
+	if (fgDbg) {
+		print_hex_dump(KERN_WARNING, "RXDMA: ", DUMP_PREFIX_OFFSET,
+			       16, 1, prRxStatus, min_t(uint32_t, u4PktLen, 128),
+			       false);
+		DBGLOG(RX, WARN,
+		       "[RXD] rxd_size=%u vld=0x%02x rxStsOff=%u hwHdrOfs=%u hdrOfs=%u pktLen=%u hdrTran=%u hwWlanIdx=0x%03x staRecIdx=%u prStaRec=%p\n",
+		       prChipInfo->rxd_size, prSwRfb->ucGroupVLD,
+		       u2RxStatusOffset, u4HwHeaderOffset, u4HeaderOffset,
+		       u4PktLen,
+		       HAL_MAC_CONNAC2X_RX_STATUS_IS_HEADER_TRAN(prRxStatus),
+		       u2WlanIdx, prSwRfb->ucStaRecIdx, prSwRfb->prStaRec);
+	}
 
-DBGLOG(RX, WARN, "[RXD-FILL] wlanIdx=%u staRecIdx=%u prStaRec=%p fgIsValid=%u\n",
-	       prSwRfb->ucWlanIdx, prSwRfb->ucStaRecIdx,
-	       prSwRfb->prStaRec,
-	       prSwRfb->prStaRec ? prSwRfb->prStaRec->fgIsValid : 0xFF);
-
-	prSwRfb->ucTid =
-		(uint8_t) HAL_MAC_CONNAC2X_RX_STATUS_GET_TID(prRxStatus);
-	prSwRfb->fgHdrTran =
-		HAL_MAC_CONNAC2X_RX_STATUS_IS_HEADER_TRAN(prRxStatus);
+	/* ---- plain field extraction ---- */
+	prSwRfb->ucTid = (uint8_t) HAL_MAC_CONNAC2X_RX_STATUS_GET_TID(prRxStatus);
+	prSwRfb->fgHdrTran = HAL_MAC_CONNAC2X_RX_STATUS_IS_HEADER_TRAN(prRxStatus);
 	prSwRfb->ucPayloadFormat =
 		HAL_MAC_CONNAC2X_RX_STATUS_GET_PAYLOAD_FORMAT(prRxStatus);
-	prSwRfb->fgIcvErr =
-		HAL_MAC_CONNAC2X_RX_STATUS_IS_ICV_ERROR(prRxStatus);
-	prSwRfb->ucSecMode =
-		HAL_MAC_CONNAC2X_RX_STATUS_GET_SEC_MODE(prRxStatus);
+	prSwRfb->fgIcvErr = HAL_MAC_CONNAC2X_RX_STATUS_IS_ICV_ERROR(prRxStatus);
+	prSwRfb->ucSecMode = HAL_MAC_CONNAC2X_RX_STATUS_GET_SEC_MODE(prRxStatus);
 	prSwRfb->ucOFLD = HAL_MAC_CONNAC2X_RX_STATUS_GET_OFLD(prRxStatus);
 	prSwRfb->fgIsBC = HAL_MAC_CONNAC2X_RX_STATUS_IS_BC(prRxStatus);
 	prSwRfb->fgIsMC = HAL_MAC_CONNAC2X_RX_STATUS_IS_MC(prRxStatus);
@@ -332,49 +330,16 @@ DBGLOG(RX, WARN, "[RXD-FILL] wlanIdx=%u staRecIdx=%u prStaRec=%p fgIsValid=%u\n"
 		HAL_MAC_CONNAC2X_RX_STATUS_IS_CLM_ERROR(prRxStatus);
 	prSwRfb->fgIsFrag = HAL_MAC_CONNAC2X_RX_STATUS_IS_FRAG(prRxStatus);
 	prSwRfb->fgIsFCS = HAL_MAC_CONNAC2X_RX_STATUS_IS_FCS_ERROR(prRxStatus);
-	prSwRfb->fgIsSecDone =
-		HAL_MAC_CONNAC2X_RX_STATUS_IS_SEC_DONE(prRxStatus);
+	prSwRfb->fgIsSecDone = HAL_MAC_CONNAC2X_RX_STATUS_IS_SEC_DONE(prRxStatus);
 	prSwRfb->fgIsAmpdu = HAL_MAC_CONNAC2X_RX_STATUS_IS_NAMP(prRxStatus);
-	prSwRfb->ucRxvSeqNo =
-		HAL_MAC_CONNAC2X_RX_STATUS_GET_RXV_SEQ_NO(prRxStatus);
-	prSwRfb->ucChnlNum =
-		HAL_MAC_CONNAC2X_RX_STATUS_GET_CHNL_NUM(prRxStatus);
+	prSwRfb->ucRxvSeqNo = HAL_MAC_CONNAC2X_RX_STATUS_GET_RXV_SEQ_NO(prRxStatus);
+	prSwRfb->ucChnlNum = HAL_MAC_CONNAC2X_RX_STATUS_GET_CHNL_NUM(prRxStatus);
 	prSwRfb->ucKeyID = HAL_MAC_CONNAC2X_RX_STATUS_GET_KID(prRxStatus);
-	prSwRfb->ucHeaderOffset =
-		HAL_MAC_CONNAC2X_RX_STATUS_GET_HEADER_OFFSET(prRxStatus);
-
-#if 0
-	if (prHifRxHdr->ucReorder &
-	    HIF_RX_HDR_80211_HEADER_FORMAT) {
-		prSwRfb->u4HifRxHdrFlag |= HIF_RX_HDR_FLAG_802_11_FORMAT;
-		DBGLOG(RX, TRACE, "HIF_RX_HDR_FLAG_802_11_FORMAT\n");
-	}
-
-	if (prHifRxHdr->ucReorder & HIF_RX_HDR_DO_REORDER) {
-		prSwRfb->u4HifRxHdrFlag |= HIF_RX_HDR_FLAG_DO_REORDERING;
-		DBGLOG(RX, TRACE, "HIF_RX_HDR_FLAG_DO_REORDERING\n");
-
-		/* Get Seq. No and TID, Wlan Index info */
-		if (prHifRxHdr->u2SeqNoTid & HIF_RX_HDR_BAR_FRAME) {
-			prSwRfb->u4HifRxHdrFlag |= HIF_RX_HDR_FLAG_BAR_FRAME;
-			DBGLOG(RX, TRACE, "HIF_RX_HDR_FLAG_BAR_FRAME\n");
-		}
-
-		prSwRfb->u2SSN = prHifRxHdr->u2SeqNoTid &
-				 HIF_RX_HDR_SEQ_NO_MASK;
-		prSwRfb->ucTid = (uint8_t) ((prHifRxHdr->u2SeqNoTid &
-					     HIF_RX_HDR_TID_MASK)
-					    >> HIF_RX_HDR_TID_OFFSET);
-		DBGLOG(RX, TRACE, "u2SSN = %d, ucTid = %d\n",
-		       prSwRfb->u2SSN, prSwRfb->ucTid);
-	}
-
-	if (prHifRxHdr->ucReorder & HIF_RX_HDR_WDS) {
-		prSwRfb->u4HifRxHdrFlag |= HIF_RX_HDR_FLAG_AMP_WDS;
-		DBGLOG(RX, TRACE, "HIF_RX_HDR_FLAG_AMP_WDS\n");
-	}
-#endif
+	prSwRfb->ucHeaderOffset = (uint8_t) u4HwHeaderOffset;
 }
+
+
+
 
 u_int8_t nic_rxd_v2_sanity_check(
 	struct ADAPTER *prAdapter,

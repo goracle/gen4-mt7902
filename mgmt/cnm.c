@@ -769,6 +769,20 @@ struct MSG_HDR *prMsgHdr)
 	prTlv->ucRfCenterFreqSeg2FromAP = 0;
 #endif
 
+
+	/* mt76 mt7921_mcu_set_roc: center_chan is the real center channel even
+	 * at 20 MHz (center == primary); the vendor path leaves it 0.
+	 */
+	if (prTlv->ucRfChannelWidth == 0 && prTlv->ucRfSco == 0 &&
+	    prTlv->ucRfCenterFreqSeg1 == 0) {
+		prTlv->ucRfCenterFreqSeg1 = prTlv->ucPrimaryChannel;
+		prTlv->ucRfCenterFreqSeg1FromAP = prTlv->ucPrimaryChannel;
+		log_dbg(CNM, ERROR,
+			"[ROC-CHK] center fix: pri=%u seg1=%u band=%u dbdc=%u\n",
+			prTlv->ucPrimaryChannel, prTlv->ucRfCenterFreqSeg1,
+			prTlv->ucRfBand, prTlv->ucDBDCBand);
+	}
+
 	ASSERT(prTlv->ucBssIndex <= prAdapter->ucHwBssIdNum);
 	if (prTlv->ucBssIndex > prAdapter->ucHwBssIdNum)
 		log_dbg(CNM, ERROR, "CNM: ChReq with wrong netIdx=%d\n",

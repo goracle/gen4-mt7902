@@ -2389,19 +2389,20 @@ static void scanCopyRawIEIfNeeded(struct BSS_DESC *prBssDesc,
 }
 #endif
 
-
 void scanParseIEs(struct ADAPTER *prAdapter,
-	struct SW_RFB *prSwRfb,
-	struct WLAN_BEACON_FRAME *prWlanBeaconFrame,
-	struct BSS_DESC *prBssDesc,
-	uint16_t u2IELength,
-	enum ENUM_BAND eBand,
-	u_int8_t fgIsProbeResp)
+		struct SW_RFB *prSwRfb,
+		struct WLAN_BEACON_FRAME *prWlanBeaconFrame,
+		struct BSS_DESC *prBssDesc,
+		uint16_t u2IELength,
+		enum ENUM_BAND eBand,
+		u_int8_t fgIsProbeResp)
 {
 	uint8_t *pucIE = prWlanBeaconFrame->aucInfoElem;
 	uint16_t u2Offset = 0;
 	u_int8_t fgHasBasicRate = FALSE;
-	
+	struct IE_SUPPORTED_RATE *prSupRate = NULL;
+	struct IE_EXT_SUPPORTED_RATE *prExtSupRate = NULL;
+
 	/* 1. Reset state before re-parsing */
 	prBssDesc->fgIsHTPresent = FALSE;
 	prBssDesc->fgIsVHTPresent = FALSE;
@@ -2413,7 +2414,7 @@ void scanParseIEs(struct ADAPTER *prAdapter,
 	prBssDesc->fgIEWAPI = FALSE;
 	prBssDesc->fgIERSN = FALSE;
 	prBssDesc->fgIEWPA = FALSE;
-	
+
 	/* 2. IE Parsing Loop */
 	IE_FOR_EACH(pucIE, u2IELength, u2Offset) {
 		switch (IE_ID(pucIE)) {
@@ -2424,70 +2425,74 @@ void scanParseIEs(struct ADAPTER *prAdapter,
 				prBssDesc->fgIsHiddenSSID = (IE_LEN(pucIE) == 0);
 			}
 			break;
-			
+
 		case ELEM_ID_SUP_RATES:
-			/* Just mark that we saw rates */
+			/* Remember the IE so the rate sets can be built after the loop.
+			 * Ignore oversize IEs (rateGetRateSetFromIEs only ASSERTs). */
+			if (IE_LEN(pucIE) <= RATE_NUM_SW)
+				prSupRate = (struct IE_SUPPORTED_RATE *) pucIE;
 			fgHasBasicRate = TRUE;
 			if (eBand == BAND_2G4)
 				prBssDesc->ucPhyTypeSet |= PHY_TYPE_BIT_ERP;
 			else
 				prBssDesc->ucPhyTypeSet |= PHY_TYPE_BIT_OFDM;
 			break;
-			
+
 		case ELEM_ID_EXTENDED_SUP_RATES:
+			prExtSupRate = (struct IE_EXT_SUPPORTED_RATE *) pucIE;
 			if (eBand == BAND_2G4)
 				prBssDesc->ucPhyTypeSet |= PHY_TYPE_BIT_ERP;
 			break;
-			
+
 		case ELEM_ID_DS_PARAM_SET:
 			if (IE_LEN(pucIE) == ELEM_MAX_LEN_DS_PARAMETER_SET)
 				prBssDesc->ucChannelNum = DS_PARAM_IE(pucIE)->ucCurrChnl;
 			break;
-			
+
 		case ELEM_ID_TIM:
 			if (IE_LEN(pucIE) >= 4) {
 				prBssDesc->ucDTIMPeriod = TIM_IE(pucIE)->ucDTIMPeriod;
 				prBssDesc->fgTIMPresent = TRUE;
 			}
 			break;
-			
+
 		case ELEM_ID_IBSS_PARAM_SET:
 			if (IE_LEN(pucIE) == ELEM_MAX_LEN_IBSS_PARAMETER_SET)
 				prBssDesc->u2ATIMWindow = IBSS_PARAM_IE(pucIE)->u2ATIMWindow;
 			break;
-			
+
 		case ELEM_ID_ERP_INFO:
 			if (IE_LEN(pucIE) == ELEM_MAX_LEN_ERP)
 				prBssDesc->fgIsERPPresent = TRUE;
 			break;
-			
+
 		case ELEM_ID_HT_CAP:
 			prBssDesc->fgIsHTPresent = TRUE;
 			prBssDesc->ucPhyTypeSet |= PHY_TYPE_BIT_HT;
 			break;
-			
+
 		case ELEM_ID_HT_OP:
 			/* Extract HT channel if present */
 			if (IE_LEN(pucIE) >= sizeof(struct IE_HT_OP) - 2) {
 				struct IE_HT_OP *prHtOp = (struct IE_HT_OP *) pucIE;
+
 				if (prHtOp->ucPrimaryChannel != 0)
 					prBssDesc->ucChannelNum = prHtOp->ucPrimaryChannel;
 			}
 			break;
-			
+
 		case ELEM_ID_VHT_CAP:
 			prBssDesc->fgIsVHTPresent = TRUE;
 			prBssDesc->ucPhyTypeSet |= PHY_TYPE_BIT_VHT;
 			break;
-			
+
 		case ELEM_ID_RSN:
 			if (rsnParseRsnIE(prAdapter, RSN_IE(pucIE), &prBssDesc->rRSNInfo)) {
 				prBssDesc->fgIERSN = TRUE;
 				prBssDesc->u2RsnCap = prBssDesc->rRSNInfo.u2RsnCap;
 			}
 			break;
-			
-			
+
 #if (CFG_SUPPORT_802_11AX == 1)
 		case ELEM_ID_RESERVED:
 			if (IE_ID_EXT(pucIE) == ELEM_EXT_ID_HE_CAP) {
@@ -2498,7 +2503,24 @@ void scanParseIEs(struct ADAPTER *prAdapter,
 #endif
 		}
 	}
-	
+
+	/* Build the rate sets (this was missing: they stayed zero in the BssDesc).
+	 * Locals start at 0 because rateGetRateSetFromIEs can return early on a
+	 * bad extended-rates IE without writing its outputs. */
+	{
+		uint16_t u2OpRate = 0;
+		uint16_t u2BasicRate = 0;
+		u_int8_t fgUnknownBasic = FALSE;
+
+		if (prSupRate || prExtSupRate)
+			rateGetRateSetFromIEs(prSupRate, prExtSupRate,
+					&u2OpRate, &u2BasicRate, &fgUnknownBasic);
+
+		prBssDesc->u2OperationalRateSet = u2OpRate;
+		prBssDesc->u2BSSBasicRateSet = u2BasicRate;
+		prBssDesc->fgIsUnknownBssBasicRate = fgUnknownBasic;
+	}
+
 	/* Fallback: if we saw rates but no HT/VHT, at least mark b/g/a */
 	if (prBssDesc->ucPhyTypeSet == 0 && fgHasBasicRate) {
 		if (eBand == BAND_2G4)
@@ -2506,14 +2528,14 @@ void scanParseIEs(struct ADAPTER *prAdapter,
 		else
 			prBssDesc->ucPhyTypeSet = PHY_TYPE_BIT_OFDM;
 	}
-	
+
 	/* 3. Link to internal scan list if not already present */
 	if (prBssDesc->rLinkEntry.prNext == NULL) {
-		LINK_INSERT_TAIL(&prAdapter->rWifiVar.rScanInfo.rBSSDescList, &prBssDesc->rLinkEntry);
+		LINK_INSERT_TAIL(&prAdapter->rWifiVar.rScanInfo.rBSSDescList,
+				&prBssDesc->rLinkEntry);
 		prAdapter->rWifiVar.rScanInfo.u4NumOfBssDesc++;
 	}
 }
-
 
 void scanUpdateFromRxHeader(struct ADAPTER *prAdapter,
     struct SW_RFB *prSwRfb,

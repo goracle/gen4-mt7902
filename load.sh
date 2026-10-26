@@ -47,7 +47,7 @@ sudo iw reg set US
 # 4. Load the Franken-Driver
 log "🚀 Loading module from $MODULE_PATH..."
 sudo dmesg -C
-sudo insmod "$MODULE_PATH"
+sudo insmod "$MODULE_PATH" sta_skip_tags=0x0 sta_fuzz=0 bss_skip_tags=0x4000000
 # Saving log to your current home directory
 sudo dmesg > "$LOG_PATH"
 # 5. Wait for the new interface to settle

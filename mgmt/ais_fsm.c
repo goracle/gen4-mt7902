@@ -678,7 +678,6 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 	COPY_MAC_ADDR(prAisBssInfo->aucBSSID, prBssDesc->aucBSSID);
 	prAisBssInfo->eBand = prBssDesc->eBand;
 	prAisBssInfo->ucPrimaryChannel = prBssDesc->ucChannelNum;
-	nicUpdateBss(prAdapter, ucBssIndex);
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 	COPY_MAC_ADDR(prConnSettings->aucBSSID, prBssDesc->aucBSSID);
@@ -696,18 +695,14 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 		return;
 	}
 
-	if (prStaRec) {
-		struct BSS_INFO *prBssInfo = prAdapter->aprBssInfo[ucBssIndex];
-		if (prBssInfo) {
-			prBssInfo->prStaRecOfAP = prStaRec;
-			DBGLOG(BSS, INFO, "Bind AP StaRec[%u] %p -> Bss[%u]\n",
-				   prStaRec->ucIndex, prStaRec, ucBssIndex);
-		}
-	}
+	prAisBssInfo->prStaRecOfAP = prStaRec;
+	DBGLOG(BSS, INFO, "Bind AP StaRec[%u] %p -> Bss[%u]\n",
+	       prStaRec->ucIndex, prStaRec, ucBssIndex);
 
 	prAisFsmInfo->prTargetStaRec = prStaRec;
 
-	prStaRec->fgIsReAssoc = (prAisBssInfo->eConnectionState == MEDIA_STATE_CONNECTED);
+	prStaRec->fgIsReAssoc =
+		(prAisBssInfo->eConnectionState == MEDIA_STATE_CONNECTED);
 
 #if (CFG_SUPPORT_SUPPLICANT_SME == 1)
 	prAisFsmInfo->ucAvailableAuthTypes = (uint8_t) prWpaInfo->u4AuthAlg;
@@ -725,8 +720,32 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 	prAisBssInfo->eBand = prBssDesc->eBand;
 	prAisBssInfo->ucPrimaryChannel = prBssDesc->ucChannelNum;
 
+	/* Same copies aisUpdateBssInfoForJOIN does after association, done
+	 * here so the firmware BSS is complete before the STAREC and auth.
+	 * PHY fields must be set before rlmBssInitForAPandIbss().
+	 */
+	prAisBssInfo->u2BeaconInterval = prBssDesc->u2BeaconInterval;
+	prAisBssInfo->ucPhyTypeSet = prStaRec->ucDesiredPhyTypeSet;
+	prAisBssInfo->ucNonHTBasicPhyType = prStaRec->ucNonHTBasicPhyType;
+	prAisBssInfo->u2OperationalRateSet = prStaRec->u2OperationalRateSet;
+	prAisBssInfo->u2BSSBasicRateSet = prStaRec->u2BSSBasicRateSet;
+	nicTxUpdateBssDefaultRate(prAisBssInfo);
+
 	/* Sync RLM channel/BW params to firmware before auth */
 	rlmBssInitForAPandIbss(prAdapter, prAisBssInfo);
+
+	/* One BSS update, with the bound STA record. Must not use the
+	 * cleanup variant: the BSS is still DISCONNECTED here and that path
+	 * frees every STA record on the network, including the one above. */
+	nicUpdateBssSend(prAdapter, ucBssIndex);
+
+	/* diagnostic */
+	pr_err("[JOINBSS] bcn=%u phy=0x%x nonht=%u oprate=0x%x basic=0x%x staIdx=%u wlanIdx=%u\n",
+	       prAisBssInfo->u2BeaconInterval, prAisBssInfo->ucPhyTypeSet,
+	       prAisBssInfo->ucNonHTBasicPhyType,
+	       prAisBssInfo->u2OperationalRateSet,
+	       prAisBssInfo->u2BSSBasicRateSet,
+	       prStaRec->ucIndex, prStaRec->ucWlanIndex);
 
 	if (prAisFsmInfo->ucAvailableAuthTypes & (uint8_t) AUTH_TYPE_SAE)
 		prStaRec->ucAuthAlgNum = (uint8_t) AUTH_ALGORITHM_NUM_SAE;
@@ -747,7 +766,7 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 			  prBssDesc->aucSSID, prBssDesc->ucSSIDLen);
 
 	prJoinReqMsg = (struct MSG_SAA_FSM_START *) cnmMemAlloc(prAdapter,
-				RAM_TYPE_MSG, sizeof(struct MSG_SAA_FSM_START));
+			RAM_TYPE_MSG, sizeof(struct MSG_SAA_FSM_START));
 	if (!prJoinReqMsg)
 		return;
 
@@ -775,7 +794,6 @@ void aisFsmStateInit_JOIN(IN struct ADAPTER *prAdapter,
 	prAisFsmInfo->prPendingSAAMsg = prJoinReqMsg;
 	cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_1);
 }
-
 /*----------------------------------------------------------------------------*/
 /*!
  * @brief Retry JOIN for AUTH_MODE_AUTO_SWITCH
@@ -5304,11 +5322,13 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 	uint8_t ucTokenID;
 	uint32_t u4GrantInterval;
 	uint8_t ucBssIndex = 0;
+	uint8_t ucGrantedChannel;
 
 	prMsgChGrant = (struct MSG_CH_GRANT *)prMsgHdr;
 	ucTokenID = prMsgChGrant->ucTokenID;
 	u4GrantInterval = prMsgChGrant->u4GrantInterval;
 	ucBssIndex = prMsgChGrant->ucBssIndex;
+	ucGrantedChannel = prMsgChGrant->ucPrimaryChannel;
 	prAisBssInfo = aisGetAisBssInfo(prAdapter, ucBssIndex);
 	prAisFsmInfo = aisGetAisFsmInfo(prAdapter, ucBssIndex);
 	if (!prAisFsmInfo) {
@@ -5356,7 +5376,12 @@ void aisFsmRunEventChGrant(IN struct ADAPTER *prAdapter,
 		prAisFsmInfo->u4ChGrantedInterval = u4GrantInterval;
 		prAisBssInfo->fgIsGranted = TRUE;
 		//prAisBssInfo->eBandGranted = prMsgChGrant->eBand;
-		prAisBssInfo->ucPrimaryChannelGranted = prMsgChGrant->ucPrimaryChannel;
+
+		prAisBssInfo->ucPrimaryChannelGranted = ucGrantedChannel;
+		/* nicUpdateBss() below syncs the BSS channel to FW; without this it
+		 * sends the stale one (pch=1) before aisFsmStateInit_JOIN fixes it */
+		prAisBssInfo->ucPrimaryChannel = ucGrantedChannel;
+
 
 		/* Populate BSSID and RSN before nicUpdateBss so firmware gets the correct AP context */
 		if (prAisFsmInfo->prTargetBssDesc) {

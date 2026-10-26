@@ -295,6 +295,8 @@ uint32_t nicDeactivateNetwork(IN struct ADAPTER *prAdapter,
 uint32_t nicUpdateBss(IN struct ADAPTER *prAdapter,
 		      IN uint8_t ucBssIndex);
 
+uint32_t nicUpdateBssSend(IN struct ADAPTER *prAdapter, IN uint8_t ucBssIndex);
+
 /* BSS-INFO Indication (PM) */
 uint32_t nicPmIndicateBssCreated(IN struct ADAPTER
 				 *prAdapter, IN uint8_t ucBssIndex);

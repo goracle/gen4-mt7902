@@ -77,6 +77,26 @@
 #include "nan_txm.h"
 #endif
 
+/* TXS destination: 1 = HOST (bit10, mt76 parity), 0 = MCU (bit9, legacy).
+ * Build with -DMT7902_TXS_TO_HOST=0 to A/B. */
+#ifndef MT7902_TXS_TO_HOST
+#define MT7902_TXS_TO_HOST 1
+#endif
+static inline void mt7902_txd_set_txs_dest(void *prTxDesc)
+{
+	uint32_t *dw = (uint32_t *)prTxDesc;
+#if MT7902_TXS_TO_HOST
+	dw[5] = (dw[5] & ~BIT(9)) | BIT(10);
+#else
+	dw[5] |= BIT(9);
+#endif
+}
+
+/* 1: auth/assoc via data ring (mt76-style CT+TXP); 0: via mgmt cmd ring */
+#ifndef MT7902_AUTH_VIA_DATAQ
+#define MT7902_AUTH_VIA_DATAQ 1
+#endif
+
 /*******************************************************************************
  *                              C O N S T A N T S
  *******************************************************************************
@@ -2550,7 +2570,7 @@ uint32_t nicTxCmd(IN struct ADAPTER *prAdapter,
 			HAL_MAC_CONNAC2X_TXD_SET_PID(
 				(struct HW_MAC_CONNAC2X_TX_DESC *)prMsduInfo->aucTxDescBuffer,
 				prMsduInfo->ucPID);
-			HAL_MAC_CONNAC2X_TXD_SET_TXS_TO_MCU(
+			mt7902_txd_set_txs_dest(
 				(struct HW_MAC_CONNAC2X_TX_DESC *)prMsduInfo->aucTxDescBuffer);
 			DBGLOG(TX, WARN, "[MGMT-PID] WIDX=%u assigned PID=%u written to TXD\n",
 				prMsduInfo->ucWlanIndex, prMsduInfo->ucPID);
@@ -3380,6 +3400,7 @@ u_int8_t nicTxProcessMngPacket(IN struct ADAPTER *prAdapter,
 	       u2FrameCtrl);
 
 	switch (u2FrameCtrl) {
+#if MT7902_AUTH_VIA_DATAQ
 	case MAC_FRAME_AUTH:
 	case MAC_FRAME_ASSOC_REQ:
 	case MAC_FRAME_REASSOC_REQ:
@@ -3388,6 +3409,21 @@ u_int8_t nicTxProcessMngPacket(IN struct ADAPTER *prAdapter,
 		DBGLOG(TX, WARN, "[MGMT] AUTH/ASSOC fc=0x%04x -> TC0 data path\n",
 		       u2FrameCtrl);
 		break;
+#endif
+#if !MT7902_AUTH_VIA_DATAQ
+	/* auth/assoc: force TC4 + mgmt cmd ring, exactly like the deauth, which
+	 * does produce TXDONE/TXFREE events.  fgMgmtUseDataQ must be cleared
+	 * explicitly: the 12:37 capture still showed auth on the data ring
+	 * (halWpdmaFillTxRing) although the TC4 branch was taken. */
+	case MAC_FRAME_AUTH:
+	case MAC_FRAME_ASSOC_REQ:
+	case MAC_FRAME_REASSOC_REQ:
+		prMsduInfo->fgMgmtUseDataQ = FALSE;
+		prMsduInfo->ucTC = TC4_INDEX;
+		DBGLOG(TX, WARN, "[MGMT] AUTH/ASSOC fc=0x%04x -> TC4 cmd ring (useDataQ forced 0)\n",
+		       u2FrameCtrl);
+		break;
+#endif
 
 #if CFG_SUPPORT_ALTX_MGMT
 	case MAC_FRAME_ACTION:
@@ -3705,7 +3741,7 @@ static void nicTxAssignMgmtPidDataPath(struct ADAPTER *prAdapter,
 	HAL_MAC_CONNAC2X_TXD_SET_PID(
 		(struct HW_MAC_CONNAC2X_TX_DESC *)prMsduInfo->aucTxDescBuffer,
 		prMsduInfo->ucPID);
-	HAL_MAC_CONNAC2X_TXD_SET_TXS_TO_MCU(
+	mt7902_txd_set_txs_dest(
 		(struct HW_MAC_CONNAC2X_TX_DESC *)prMsduInfo->aucTxDescBuffer);
 
 	DBGLOG(TX, INFO, "[DATAPATH-PID] WIDX=%u PID=%u stamped\n",

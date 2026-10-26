@@ -4134,6 +4134,43 @@ static bool halWpdmaFillTxRing(struct GLUE_INFO *prGlueInfo,
 			glo, u2Port, prTxRing->TxCpuIdx);
 	}
 
+	{
+		/* [DIDX-CHK] did the DMA engine actually consume this descriptor?
+		 * Read CIDX/DIDX back after a short delay and look at DMADONE. */
+		static int iDidxChk;
+		uint32_t u4Cidx = 0, u4Didx = 0;
+
+		if (iDidxChk < 64 && prTxRing->hw_didx_addr) {
+			iDidxChk++;
+			udelay(200);
+			kalDevRegRead(prGlueInfo, prTxRing->hw_cidx_addr, &u4Cidx);
+			kalDevRegRead(prGlueInfo, prTxRing->hw_didx_addr, &u4Didx);
+			DBGLOG(HAL, ERROR,
+			       "[DIDX-CHK] port=%u cidx=%u didx=%u (cpuidx=%u) DMADONE=%u dw0..3=%08x %08x %08x %08x\n",
+			       u2Port, u4Cidx, u4Didx, prTxRing->TxCpuIdx,
+			       ((struct TXD_STRUCT *)pTxCell->AllocVa)->DMADONE,
+			       ((uint32_t *)pTxCell->AllocVa)[0],
+			       ((uint32_t *)pTxCell->AllocVa)[1],
+			       ((uint32_t *)pTxCell->AllocVa)[2],
+			       ((uint32_t *)pTxCell->AllocVa)[3]);
+			if (iDidxChk <= 3) {
+				/* DMASHDL regs @0x7c026000: is the scheduler bypassed
+				 * (SW_CTRL bit28) or are group quotas set up? Frames the
+				 * FW later flushes with status=5 were queued, not aired. */
+				uint32_t i, w[16];
+
+				for (i = 0; i < 16; i++) {
+					w[i] = 0;
+					kalDevRegRead(prGlueInfo, 0x7c026000 + i * 4, &w[i]);
+				}
+				DBGLOG(HAL, ERROR,
+				       "[DMASHDL] +00..: %08x %08x %08x %08x %08x %08x %08x %08x | %08x %08x %08x %08x %08x %08x %08x %08x\n",
+				       w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7],
+				       w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15]);
+			}
+		}
+	}
+
 
 	spin_unlock_irqrestore(&prTxRing->rTxDmaQLock, flags);
 
@@ -4184,16 +4221,20 @@ static bool halTxBuildMgmtCtTxp(struct GLUE_INFO *prGlueInfo,
 				  prToken->rDmaAddr + u4PayloadOfs,
 				  0, TRUE, pucBuf);
 
-	if (iDumped < 8) {
+	/* limit raised 8 -> 128: scan probe-reqs used up the old budget before
+	 * auth was sent. Also dump the first 32 frame bytes (FC/addrs). */
+	if (iDumped < 128) {
 		iDumped++;
 		DBGLOG(HAL, WARN,
 			   "[MGMT-TXP] tok=%u payload dma=0x%llx len=%u\n",
 			   prToken->u4Token,
 			   (unsigned long long)(prToken->rDmaAddr + u4PayloadOfs),
 			   prToken->prMsduInfo->u2FrameLength);
-		print_hex_dump(KERN_WARNING, "[MGMT-TXP] TXD+TXP: ",
+		print_hex_dump(KERN_WARNING, "[MGMT-TXP] TXD+TXP+frame: ",
 				   DUMP_PREFIX_OFFSET, 16, 1, pucBuf,
-				   u4PayloadOfs, false);
+				   u4PayloadOfs + min_t(uint32_t,
+							   prToken->prMsduInfo->u2FrameLength, 32),
+				   false);
 	}
 	return true;
 }
@@ -4379,7 +4420,7 @@ static bool halWpdmaWriteData(struct GLUE_INFO *prGlueInfo,
 	{
 		static int iTxBufChk;
 
-		if (prFillToken && prFillToken->prPacket && iTxBufChk < 8) {
+		if (prFillToken && prFillToken->prPacket && iTxBufChk < 128) {
 			uint32_t u4Cmp = NIC_TX_DESC_AND_PADDING_LENGTH;
 			bool fgMatch = !memcmp(prFillToken->prPacket,
 					       prMsduInfo->aucTxDescBuffer, u4Cmp);
