@@ -72,7 +72,7 @@
  *******************************************************************************
  */
 #include <linux/pci.h>
-#include <linux/pci.h>
+#include <linux/etherdevice.h>
 #include <linux/sched/debug.h>
 #include "gl_os.h"
 #include "debug.h"
@@ -164,24 +164,6 @@ struct WLANDEV_INFO {
  *******************************************************************************
  */
 
-static const struct ieee80211_regdomain mt79xx_regdom_us = {
-    .n_reg_rules = 4,
-    .alpha2 = "US",
-    .reg_rules = {
-        /* 2.4 GHz - Corrected gain from 0 to 2 */
-        REG_RULE(2402, 2472, 40, 2, 3000, 0),
-
-        /* 5 GHz UNII-1 */
-        REG_RULE(5150, 5250, 80, 2, 2300, 0),
-
-        /* 5 GHz UNII-2 (DFS) - Flag set to 0 to bypass header error */
-        REG_RULE(5250, 5725, 160, 2, 2400, 0),
-
-        /* 5 GHz UNII-3 */
-        REG_RULE(5725, 5850, 80, 2, 3000, 0),
-    },
-};
-
 
 
 MODULE_AUTHOR(NIC_AUTHOR);
@@ -231,7 +213,6 @@ u_int8_t	g_fgIsCalDataBackuped = FALSE;
 #endif
 
 /* Add this near the other 'extern' or 'include' lines at the top of gl_init.c */
-extern const struct ieee80211_regdomain regdom_us;
 extern struct notifier_block wlan_netdev_notifier;
 
 
@@ -268,70 +249,44 @@ EXPORT_SYMBOL(gConEmiSize);
 
 #include <net/cfg80211.h>
 
-/* LEGAL regulatory domain configuration for MT79xx chips
- * This respects actual regulatory domains instead of forcing US everywhere
+
+/*
+ * cfg80211 calls this after applying the regulatory rules for the requested
+ * domain.  Mirror the selected country into the adapter/firmware, but never
+ * relax channel flags or power limits here: NO_IR and RADAR are enforcement
+ * state, not cosmetic flags.
  */
-
-static const struct ieee80211_regdomain mt79xx_regdom_world = {
-	.n_reg_rules = 5,
-	.alpha2 = "00",  /* World regulatory domain */
-	.reg_rules = {
-		/* 2.4 GHz - channels 1-11 (most permissive globally) */
-		REG_RULE(2412, 2462, 40, 0, 2000, 0),
-		
-		/* 5 GHz lower band (UNII-1) - generally allowed worldwide */
-		REG_RULE(5170, 5250, 80, 0, 2000, 0),
-		
-		/* 5 GHz middle band (UNII-2A) - DFS required in most regions */
-		REG_RULE(5250, 5330, 80, 0, 2000, NL80211_RRF_DFS),
-		
-		/* 5 GHz upper band (UNII-2C) - DFS required */
-		REG_RULE(5490, 5730, 80, 0, 2000, NL80211_RRF_DFS),
-		
-		/* 5 GHz highest band (UNII-3) - generally allowed */
-		REG_RULE(5735, 5835, 80, 0, 2000, 0),
-	},
-};
-
-
-
-
 static void mt79xx_reg_notifier(struct wiphy *wiphy,
-                               struct regulatory_request *request)
+				struct regulatory_request *request)
 {
-    struct ADAPTER *prAdapter = wiphy_priv(wiphy);
-    struct ieee80211_supported_band *band;
-    int b, i;
+	struct GLUE_INFO *prGlueInfo;
+	struct ADAPTER *prAdapter;
 
-    DBGLOG(INIT, INFO, "REG NOTIFIER: kernel sent %c%c. Injecting into FW...\n",
-           request->alpha2[0], request->alpha2[1]);
+	if (!wiphy || !request)
+		return;
 
-    /* 1. Update the adapter cache */
-    prAdapter->rWifiVar.u2CountryCode = (((uint16_t)request->alpha2[0]) << 8) | 
-                                         ((uint16_t)request->alpha2[1]);
+	/* wiphy_new() allocates GLUE_INFO as the private wiphy data. */
+	prGlueInfo = (struct GLUE_INFO *)wiphy_priv(wiphy);
+	if (!prGlueInfo || !prGlueInfo->prAdapter) {
+		DBGLOG(INIT, INFO,
+		       "Regulatory update %c%c deferred: adapter not ready\n",
+		       request->alpha2[0], request->alpha2[1]);
+		return;
+	}
 
-    /* 2. Force your BOLD code to run immediately */
-    wlanCfgSetCountryCode(prAdapter);
+	prAdapter = prGlueInfo->prAdapter;
+	DBGLOG(INIT, INFO, "Regulatory domain changed to %c%c\n",
+	       request->alpha2[0], request->alpha2[1]);
 
-    /* 3. Aggressive Channel Flag Cleanup with proper types */
-    for (b = 0; b < NUM_NL80211_BANDS; b++) {
-        band = wiphy->bands[b];
-        if (!band)
-            continue;
+	prAdapter->rWifiVar.u2CountryCode =
+		((uint16_t)(uint8_t)request->alpha2[0] << 8) |
+		 (uint8_t)request->alpha2[1];
 
-        for (i = 0; i < band->n_channels; i++) {
-            /* Clear NO_IR (No-Initiate-Radiation) to allow active probing */
-            band->channels[i].flags &= ~IEEE80211_CHAN_NO_IR;
-            
-            /* Clear RADAR to stop the DFS state machine from locking channels */
-            band->channels[i].flags &= ~IEEE80211_CHAN_RADAR;
-            
-            /* Maximize transmit power (23dBm = 2300 in mBm) */
-            band->channels[i].max_power = 2300;
-        }
-    }
+	/* The country code is mirrored to the firmware; cfg80211 retains the
+	 * authority to enforce the host's allowed channels and transmit power.
+	 */
+	wlanCfgSetCountryCode(prAdapter);
 }
-
 
 
 
@@ -811,12 +766,8 @@ static struct ieee80211_rate mtk_rates[] = {
 {									\
 	.vht_supported  = true,						\
 	.cap            = IEEE80211_VHT_CAP_RXLDPC			\
-			|  0/*IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_MASK*/	\
 			| IEEE80211_VHT_CAP_MAX_MPDU_LENGTH_11454	\
-			| IEEE80211_VHT_CAP_RXLDPC			\
 			| IEEE80211_VHT_CAP_SHORT_GI_80			\
-			| IEEE80211_VHT_CAP_TXSTBC			\
-			| IEEE80211_VHT_CAP_SU_BEAMFORMER_CAPABLE	\
 			| IEEE80211_VHT_CAP_SU_BEAMFORMEE_CAPABLE,	\
 	.vht_mcs        = WLAN_VHT_MCS_INFO,				\
 }
@@ -857,8 +808,9 @@ struct ieee80211_supported_band mtk_band_6ghz = {
     .band = KAL_BAND_6GHZ,
     .channels = mtk_6ghz_channels,
     .n_channels = ARRAY_SIZE(mtk_6ghz_channels),
-    .bitrates = mtk_a_rates,
-    .n_bitrates = mtk_a_rates_size,
+    /* 6 GHz operation does not use legacy 802.11a/b/g rates. */
+    .bitrates = NULL,
+    .n_bitrates = 0,
 #if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
     /* Use the new unified 1x1 HE data name here */
     .n_iftype_data = ARRAY_SIZE(mtk_he_iftype_data),
@@ -2476,152 +2428,120 @@ static int wlanStop(struct net_device *prDev)
 
 /*----------------------------------------------------------------------------*/
 /*!
- * \brief Update Channel table for cfg80211 for Wi-Fi Direct based on current
- *        country code
+ * \brief Apply firmware-specific channel availability without overriding
+ *        cfg80211 regulatory restrictions
  *
  * \param[in] prGlueInfo      Pointer to glue info
  *
  * \return   none
  */
 /*----------------------------------------------------------------------------*/
+/*
+ * Add firmware-specific channel restrictions without removing restrictions
+ * already applied by cfg80211. In particular, do not clear CHAN_DISABLED or
+ * rewrite orig_flags: cfg80211 owns the regulatory state and uses orig_flags
+ * as the hardware's baseline when a regulatory domain changes.
+ */
+static void wlanRestrictChannelsToFirmwareDomain(
+	struct ieee80211_channel *channels, uint32_t n_channels,
+	enum ENUM_BAND eBand,
+	const struct RF_CHANNEL_INFO *channelList, uint8_t n_channel_list)
+{
+	uint32_t i, j;
+
+	for (i = 0; i < n_channels; i++) {
+		bool found = false;
+
+		for (j = 0; j < n_channel_list; j++) {
+			if (channelList[j].eBand == eBand &&
+			    channelList[j].ucChannelNum == channels[i].hw_value) {
+				found = true;
+				break;
+			}
+		}
+
+		/* Tighten the intersection; never re-enable a regulatory block. */
+		if (!found)
+			channels[i].flags |= IEEE80211_CHAN_DISABLED;
+	}
+}
+
+/*----------------------------------------------------------------------------*/
+/*
+ * Apply firmware-specific channel availability to cfg80211 conservatively.
+ * The regulatory core remains authoritative for country restrictions, NO_IR,
+ * DFS and transmit-power limits.
+ */
+/*----------------------------------------------------------------------------*/
 void wlanUpdateChannelTable(struct GLUE_INFO *prGlueInfo)
 {
-	uint8_t i, j;
 	uint8_t ucNumOfChannel = 0;
 	uint32_t u4BandIdx;
-	struct RF_CHANNEL_INFO *pucChannelList = NULL;
+	struct RF_CHANNEL_INFO *pucChannelList;
 
 	if (!prGlueInfo || !prGlueInfo->prAdapter)
 		return;
 
-	/* Allocate channel buffer dynamically to avoid large stack frame */
 	pucChannelList = kalMemAlloc(
 		sizeof(struct RF_CHANNEL_INFO) * MAX_PER_BAND_CHN_NUM,
 		VIR_MEM_TYPE);
-
 	if (!pucChannelList) {
 		DBGLOG(INIT, ERROR,
 		       "Failed to allocate channel list buffer\n");
 		return;
 	}
 
-	kalMemZero(pucChannelList,
-		   sizeof(struct RF_CHANNEL_INFO) * MAX_PER_BAND_CHN_NUM);
-
-	/* 1. Disable all channels */
-	for (i = 0; i < ARRAY_SIZE(mtk_2ghz_channels); i++) {
-		mtk_2ghz_channels[i].flags |= IEEE80211_CHAN_DISABLED;
-		mtk_2ghz_channels[i].orig_flags |= IEEE80211_CHAN_DISABLED;
-	}
-
-	for (i = 0; i < ARRAY_SIZE(mtk_5ghz_channels); i++) {
-		mtk_5ghz_channels[i].flags |= IEEE80211_CHAN_DISABLED;
-		mtk_5ghz_channels[i].orig_flags |= IEEE80211_CHAN_DISABLED;
-	}
-
-#if (CFG_SUPPORT_WIFI_6G == 1)
-	for (i = 0; i < ARRAY_SIZE(mtk_6ghz_channels); i++) {
-		mtk_6ghz_channels[i].flags |= IEEE80211_CHAN_DISABLED;
-		mtk_6ghz_channels[i].orig_flags |= IEEE80211_CHAN_DISABLED;
-	}
-#endif
-
 	for (u4BandIdx = BAND_2G4; u4BandIdx < BAND_NUM; u4BandIdx++) {
-
-		/* Clear buffer before each band query */
 		kalMemZero(pucChannelList,
 			   sizeof(struct RF_CHANNEL_INFO) *
 			   MAX_PER_BAND_CHN_NUM);
+		ucNumOfChannel = 0;
 
-		/* 2. Get current domain channel list */
-		rlmDomainGetChnlList(prGlueInfo->prAdapter,
-				     u4BandIdx,
-				     FALSE,
-				     MAX_PER_BAND_CHN_NUM,
-				     &ucNumOfChannel,
+		rlmDomainGetChnlList(prGlueInfo->prAdapter, u4BandIdx, FALSE,
+				     MAX_PER_BAND_CHN_NUM, &ucNumOfChannel,
 				     pucChannelList);
+		if (ucNumOfChannel > MAX_PER_BAND_CHN_NUM) {
+			DBGLOG(INIT, WARN,
+			       "Invalid channel count %u for band %u\n",
+			       ucNumOfChannel, u4BandIdx);
+			ucNumOfChannel = MAX_PER_BAND_CHN_NUM;
+		}
 
-		/* 3. Enable channels returned by regulatory domain */
-		for (i = 0; i < ucNumOfChannel; i++) {
+		/* An empty result can mean the domain data is not ready yet.
+		 * Do not turn an entire band off on an unverified empty response.
+		 */
+		if (!ucNumOfChannel) {
+			DBGLOG(INIT, WARN,
+			       "No firmware channel data for band %u; preserving cfg80211 state\n",
+			       u4BandIdx);
+			continue;
+		}
 
-			switch (pucChannelList[i].eBand) {
-
-			case BAND_2G4:
-				for (j = 0;
-				     j < ARRAY_SIZE(mtk_2ghz_channels);
-				     j++) {
-
-					if (mtk_2ghz_channels[j].hw_value ==
-					    pucChannelList[i].ucChannelNum) {
-
-						mtk_2ghz_channels[j].flags &=
-							~IEEE80211_CHAN_DISABLED;
-						mtk_2ghz_channels[j].orig_flags &=
-							~IEEE80211_CHAN_DISABLED;
-						break;
-					}
-				}
-				break;
-
-			case BAND_5G:
-				for (j = 0;
-				     j < ARRAY_SIZE(mtk_5ghz_channels);
-				     j++) {
-
-					if (mtk_5ghz_channels[j].hw_value ==
-					    pucChannelList[i].ucChannelNum) {
-
-						mtk_5ghz_channels[j].flags &=
-							~IEEE80211_CHAN_DISABLED;
-						mtk_5ghz_channels[j].orig_flags &=
-							~IEEE80211_CHAN_DISABLED;
-
-						mtk_5ghz_channels[j].dfs_state =
-							(pucChannelList[i].eDFS != 0) ?
-								NL80211_DFS_USABLE :
-								NL80211_DFS_UNAVAILABLE;
-						break;
-					}
-				}
-				break;
-
+		switch (u4BandIdx) {
+		case BAND_2G4:
+			wlanRestrictChannelsToFirmwareDomain(
+				mtk_2ghz_channels, ARRAY_SIZE(mtk_2ghz_channels),
+				BAND_2G4, pucChannelList, ucNumOfChannel);
+			break;
+		case BAND_5G:
+			wlanRestrictChannelsToFirmwareDomain(
+				mtk_5ghz_channels, ARRAY_SIZE(mtk_5ghz_channels),
+				BAND_5G, pucChannelList, ucNumOfChannel);
+			break;
 #if (CFG_SUPPORT_WIFI_6G == 1)
-			case BAND_6G:
-				for (j = 0;
-				     j < ARRAY_SIZE(mtk_6ghz_channels);
-				     j++) {
-
-					if (mtk_6ghz_channels[j].hw_value ==
-					    pucChannelList[i].ucChannelNum) {
-
-						mtk_6ghz_channels[j].flags &=
-							~IEEE80211_CHAN_DISABLED;
-						mtk_6ghz_channels[j].orig_flags &=
-							~IEEE80211_CHAN_DISABLED;
-
-						mtk_6ghz_channels[j].dfs_state =
-							(pucChannelList[i].eDFS != 0) ?
-								NL80211_DFS_USABLE :
-								NL80211_DFS_UNAVAILABLE;
-						break;
-					}
-				}
-				break;
+		case BAND_6G:
+			wlanRestrictChannelsToFirmwareDomain(
+				mtk_6ghz_channels, ARRAY_SIZE(mtk_6ghz_channels),
+				BAND_6G, pucChannelList, ucNumOfChannel);
+			break;
 #endif
-
-			default:
-				DBGLOG(INIT, WARN,
-				       "Unknown band %d\n",
-				       pucChannelList[i].eBand);
-				break;
-			}
+		default:
+			break;
 		}
 	}
 
-	kalMemFree(pucChannelList,
-		   VIR_MEM_TYPE,
-		   sizeof(struct RF_CHANNEL_INFO) *
-		   MAX_PER_BAND_CHN_NUM);
+	kalMemFree(pucChannelList, VIR_MEM_TYPE,
+		   sizeof(struct RF_CHANNEL_INFO) * MAX_PER_BAND_CHN_NUM);
 }
 
 
@@ -2692,55 +2612,49 @@ void wlanUpdateDfsChannelTable(struct GLUE_INFO *prGlueInfo,
 {
 	struct GL_P2P_INFO *prGlueP2pInfo = NULL;
 	uint8_t i, j;
-	uint8_t ucNumOfChannel;
+	uint8_t ucNumOfChannel = 0;
 	struct RF_CHANNEL_INFO aucChannelList[
 			ARRAY_SIZE(mtk_5ghz_channels)] = {};
+
+	if (!prGlueInfo || !prGlueInfo->prAdapter)
+		return;
 
 	DBGLOG(INIT, INFO, "r: %d, chnl %u, b: %d, s: %d, freq: %d\n",
 			ucRoleIdx, ucChannel, ucBandWidth, eBssSCO,
 			u4CenterFreq);
 
-	/* 1. Get current domain DFS channel list */
+	/* Get the firmware's list of DFS-required channels. */
 	rlmDomainGetDfsChnls(prGlueInfo->prAdapter,
 		ARRAY_SIZE(mtk_5ghz_channels),
 		&ucNumOfChannel, aucChannelList);
+	if (ucNumOfChannel > ARRAY_SIZE(aucChannelList))
+		ucNumOfChannel = ARRAY_SIZE(aucChannelList);
 
 	if (ucRoleIdx < KAL_P2P_NUM)
 		prGlueP2pInfo = prGlueInfo->prP2PInfo[ucRoleIdx];
 
-	/* 2. Enable specific channel based on domain channel list */
 	for (i = 0; i < ucNumOfChannel; i++) {
 		for (j = 0; j < ARRAY_SIZE(mtk_5ghz_channels); j++) {
 			if (aucChannelList[i].ucChannelNum !=
-				mtk_5ghz_channels[j].hw_value)
+			    mtk_5ghz_channels[j].hw_value)
 				continue;
 
-			if ((aucChannelList[i].ucChannelNum == ucChannel) ||
-				wlanIsAdjacentChnl(prGlueP2pInfo,
-					u4CenterFreq,
-					ucBandWidth,
-					eBssSCO,
-					aucChannelList[i].ucChannelNum,
-					eBand)) {
-				mtk_5ghz_channels[j].dfs_state
-					= NL80211_DFS_AVAILABLE;
-				mtk_5ghz_channels[j].flags &=
-					~IEEE80211_CHAN_RADAR;
-				mtk_5ghz_channels[j].orig_flags &=
-					~IEEE80211_CHAN_RADAR;
+			/* Keep the DFS requirement. Being selected/adjacent is not
+			 * evidence that a CAC completed successfully. This helper only
+			 * logs the affected channels; cfg80211's CAC/radar event path
+			 * owns channel flags and dfs_state.
+			 */
+			if (aucChannelList[i].ucChannelNum == ucChannel ||
+			    (prGlueP2pInfo && wlanIsAdjacentChnl(prGlueP2pInfo,
+					u4CenterFreq, ucBandWidth, eBssSCO,
+					aucChannelList[i].ucChannelNum, eBand))) {
 				DBGLOG(INIT, INFO,
-					"ch (%d), force NL80211_DFS_AVAILABLE.\n",
-					aucChannelList[i].ucChannelNum);
+				       "ch (%d) overlaps operating channel; preserving DFS state\n",
+				       aucChannelList[i].ucChannelNum);
 			} else {
-				mtk_5ghz_channels[j].dfs_state
-					= NL80211_DFS_USABLE;
-				mtk_5ghz_channels[j].flags |=
-					IEEE80211_CHAN_RADAR;
-				mtk_5ghz_channels[j].orig_flags |=
-					IEEE80211_CHAN_RADAR;
 				DBGLOG(INIT, TRACE,
-					"ch (%d), force NL80211_DFS_USABLE.\n",
-					aucChannelList[i].ucChannelNum);
+				       "ch (%d) remains DFS-required; preserving DFS state\n",
+				       aucChannelList[i].ucChannelNum);
 			}
 		}
 	}
@@ -3003,7 +2917,7 @@ static uint8_t wlanNvramBufHandler(void *ctx,
 #endif
 
 
-static void wlanCreateWirelessDevice(void)
+static int wlanCreateWirelessDevice(void)
 {
 	struct wiphy *prWiphy = NULL;
 	struct GLUE_INFO *prGlueInfo = NULL;
@@ -3052,17 +2966,11 @@ static void wlanCreateWirelessDevice(void)
 	prWiphy->n_iface_combinations = mtk_iface_combinations_sta_num;
 	prWiphy->max_scan_ssids = SCN_SSID_MAX_NUM + 1;
 	prWiphy->max_scan_ie_len = 2048;
-	prWiphy->n_addresses = 1;
-
-	/* Ensure perm_addr exists (avoid zero MAC issues with iwd) */
-	if (is_zero_ether_addr(prWiphy->perm_addr)) {
-		prWiphy->perm_addr[0] = 0x00;
-		prWiphy->perm_addr[1] = 0x0C;
-		prWiphy->perm_addr[2] = 0x43;
-		prWiphy->perm_addr[3] = 0x79;
-		prWiphy->perm_addr[4] = 0x02;
-		prWiphy->perm_addr[5] = 0x01;
-	}
+	/* The hardware address is not known until bus probe.  Use a valid,
+	 * locally administered placeholder rather than a fixed fabricated MAC;
+	 * the real address is copied into perm_addr once bring-up queries it.
+	 */
+	eth_random_addr(prWiphy->perm_addr);
 
 	/* 5) Scanning / sched-scan */
 #if CFG_SUPPORT_SCHED_SCAN
@@ -3077,11 +2985,9 @@ static void wlanCreateWirelessDevice(void)
 	                          BIT(NL80211_IFTYPE_ADHOC);
 	prWiphy->bands[KAL_BAND_2GHZ] = &mtk_band_2ghz;
 	prWiphy->bands[KAL_BAND_5GHZ] = &mtk_band_5ghz;
-#if 0 //mask it for now
-#if (CFG_SUPPORT_WIFI_6G == 1)
-	prWiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
-#endif
-#endif
+/* 6 GHz remains disabled until it can be configured before
+ * wiphy_register(), with verified hardware and regulatory capabilities.
+ */
 
 	/* 7) Crypto, signal and features */
 	prWiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
@@ -3105,9 +3011,7 @@ static void wlanCreateWirelessDevice(void)
 	TDLSEX_WIPHY_FLAGS_INIT(prWiphy->flags);
 #endif
 
-	//prWiphy->regulatory_flags |= REGULATORY_IGNORE_STALE_KICKOFF;
-	prWiphy->regulatory_flags |= REGULATORY_CUSTOM_REG;
-	//prWiphy->regulatory_flags = REGULATORY_DISABLE_BEACON_HINTS;
+	/* Leave regulatory_flags at cfg80211 defaults; no custom domain is used. */
 
 	prWiphy->features |= NL80211_FEATURE_SAE;
 	prWiphy->features |= NL80211_FEATURE_SCAN_RANDOM_MAC_ADDR;
@@ -3141,24 +3045,16 @@ static void wlanCreateWirelessDevice(void)
 	prWiphy->ap_sme_capa = 1;
 #endif
 
-	/* 9) Register our regulatory notifier BEFORE registration so cfg80211 will call back into us */
+	/* Install the notifier before registration.  Do not guess a country:
+	 * cfg80211 starts from its world domain and applies the real regulatory
+	 * domain when userspace, firmware or a trusted country IE supplies it.
+	 */
 	prWiphy->reg_notifier = mt79xx_reg_notifier;
 
-/* 10) Simplified regulatory flags to avoid kernel rejection */
-/* Remove REGULATORY_CUSTOM_REG for the initial register call */
-prWiphy->regulatory_flags = REGULATORY_DISABLE_BEACON_HINTS;
-
-/* COMMENT THIS OUT temporarily to ensure the module loads */
-// wiphy_apply_custom_regulatory(prWiphy, &regdom_us);
-
-/* Use the standard hint instead, which is safer during probe */
-regulatory_hint(prWiphy, "US");
-
-
-	/* 11) Register the wiphy with cfg80211 */
-	if (wiphy_register(prWiphy) < 0) {
-		DBGLOG(INIT, ERROR, "wiphy_register failed\n");
-		ret = -EIO;
+	/* Register the wiphy and preserve the kernel's actual errno on failure. */
+	ret = wiphy_register(prWiphy);
+	if (ret < 0) {
+		DBGLOG(INIT, ERROR, "wiphy_register failed: %d\n", ret);
 		goto free_wiphy;
 	}
 
@@ -3174,7 +3070,7 @@ regulatory_hint(prWiphy, "US");
 
 
 	DBGLOG(INIT, INFO, "wlanCreateWirelessDevice success\n");
-	return;
+	return 0;
 
 /* error handling */
 free_wiphy:
@@ -3186,6 +3082,8 @@ free_wdev:
 			prWdev[u4Idx] = NULL;
 		}
 	}
+
+	return ret;
 }
 
 
@@ -5022,19 +4920,28 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 		struct net_device *prDevHandler;
 		struct wiphy *prWiphy = wlanGetWiphy();
 
+		/* Never consume uninitialized bytes if the hardware query fails. */
+		kalMemZero(&MacAddr, sizeof(MacAddr));
 		rStatus = kalIoctl(prGlueInfo, wlanoidQueryCurrentAddr,
 				&MacAddr.sa_data, PARAM_MAC_ADDR_LEN,
 				TRUE, TRUE, FALSE, &u4SetInfoLen);
 
-if (rStatus != WLAN_STATUS_SUCCESS) {
-    DBGLOG(INIT, WARN, "set MAC addr fail 0x%x - using config fallback\n", rStatus);
-    if (prWifiVar->aucMacAddress[0] != 0 || prWifiVar->aucMacAddress[1] != 0) {
-        kalMemCopy(MacAddr.sa_data, prWifiVar->aucMacAddress, ETH_ALEN);
-    }
-}
- kal_eth_hw_addr_set(prGlueInfo->prDevHandler,
+		if (rStatus != WLAN_STATUS_SUCCESS ||
+		    !is_valid_ether_addr((uint8_t *)MacAddr.sa_data)) {
+			if (is_valid_ether_addr(prWifiVar->aucMacAddress)) {
+				DBGLOG(INIT, WARN,
+				       "Hardware MAC query failed/invalid; using configured MAC\n");
+				kalMemCopy(MacAddr.sa_data,
+					   prWifiVar->aucMacAddress, ETH_ALEN);
+			} else {
+				/* Generates a unicast, locally administered address. */
+				eth_random_addr((uint8_t *)MacAddr.sa_data);
+				DBGLOG(INIT, WARN,
+				       "Hardware/configured MAC unavailable; using random local MAC\n");
+			}
+		}
 
-				    MacAddr.sa_data);
+		kal_eth_hw_addr_set(prGlueInfo->prDevHandler, MacAddr.sa_data);
 		kalMemCopy(prGlueInfo->prDevHandler->perm_addr,
 				prGlueInfo->prDevHandler->dev_addr,
 				ETH_ALEN);
@@ -6724,15 +6631,15 @@ static void wlanProbe_ConfigureBands(struct ADAPTER *prAdapter,
     }
 
 #if (CFG_SUPPORT_WIFI_6G == 1)
-    if (prAdapter->fgIsHwSupport6G) {
-        prWdev->wiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
-        for (i = 0; i < KAL_P2P_NUM; i++) {
-            if (!gprP2pRoleWdev[i])
-                continue;
-            gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_6GHZ] = &mtk_band_6ghz;
-        }
-    } else {
-        prWdev->wiphy->bands[KAL_BAND_6GHZ] = NULL;
+    /* This wiphy is registered before probe knows the chip capabilities.
+     * Adding 6 GHz here would bypass cfg80211's registration-time regulatory
+     * processing. Keep it disabled until 6 GHz is configured before register,
+     * including the required 6 GHz-specific HE capability data.
+     */
+    prWdev->wiphy->bands[KAL_BAND_6GHZ] = NULL;
+    for (i = 0; i < KAL_P2P_NUM; i++) {
+        if (gprP2pRoleWdev[i])
+            gprP2pRoleWdev[i]->wiphy->bands[KAL_BAND_6GHZ] = NULL;
     }
 #endif
 }
@@ -7302,10 +7209,11 @@ static int initWlan(void)
 	sysInitFs();
 #endif
 
-	wlanCreateWirelessDevice();
-	if (gprWdev[0] == NULL) {
-		DBGLOG(INIT, ERROR, "initWlan: wlanCreateWirelessDevice failed\n");
-		return -ENOMEM;
+	ret = wlanCreateWirelessDevice();
+	if (ret < 0) {
+		DBGLOG(INIT, ERROR,
+		       "initWlan: wlanCreateWirelessDevice failed: %d\n", ret);
+		return ret;
 	}
 
 	prGlueInfo = (struct GLUE_INFO *)wiphy_priv(wlanGetWiphy());
