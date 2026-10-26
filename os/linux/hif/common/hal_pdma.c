@@ -56,6 +56,13 @@
  *[Author]
  *[Description]
  *    The program provides PDMA HIF APIs
+ *
+ * Local refactor revision 1 (2026-10-26):
+ *    Harden token-pool accounting, simplify timeout arithmetic, and make
+ *    recovery/debug paths easier to audit.
+ * Local refactor revision 2 (2026-10-26):
+ *    Serialize expiry reclamation, consolidate RX-buffer cleanup, and
+ *    validate token indices at the processing boundary.
  *[Copyright]
  *    Copyright (C) 2015 MediaTek Incorporation. All Rights Reserved.
  ******************************************************************************/
@@ -210,15 +217,8 @@ uint8_t halTxRingDataSelect(IN struct ADAPTER *prAdapter,
 /*----------------------------------------------------------------------------*/
 static inline bool halIsTimeout(uint32_t u4StartTime, uint32_t u4Timeout)
 {
-	uint32_t u4CurTime = kalGetTimeTick();
-	uint32_t u4Time = 0;
-
-	if (u4CurTime >= u4StartTime)
-		u4Time = u4CurTime - u4StartTime;
-	else
-		u4Time = u4CurTime + (0xFFFFFFFF - u4StartTime);
-
-	return u4Time > u4Timeout;
+	/* Unsigned subtraction naturally handles the 32-bit tick wraparound. */
+	return (uint32_t)(kalGetTimeTick() - u4StartTime) > u4Timeout;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -579,7 +579,7 @@ static void halDriverOwnTimeout(struct ADAPTER *prAdapter,
 		prAdapter->u4OwnFailedLogCount++;
 		if (prAdapter->u4OwnFailedLogCount >
 		    LP_OWN_BACK_FAILED_RESET_CNT) {
-			if (prChipDbgOps->showCsrInfo)
+			if (prChipDbgOps && prChipDbgOps->showCsrInfo)
 				prChipDbgOps->showCsrInfo(prAdapter);
 
 			/* Trigger RESET */
@@ -656,9 +656,6 @@ void halSerPollDoneInSuspend(IN struct ADAPTER *prAdapter)
  * \return (none)
  */
 /*----------------------------------------------------------------------------*/
-/* Forward declaration if not already in your headers */
-extern void mt7902_schedule_recovery_from_atomic(struct GLUE_INFO *prGlueInfo);
-
 u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 {
 	struct mt66xx_chip_info *prChipInfo;
@@ -761,13 +758,7 @@ u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 				/* Return FALSE to indicate DriverOwn failed, stopping current flow */
 				return FALSE; 
 			} else {
-				/* Check context: Defer if atomic, otherwise run directly */
-				if (in_atomic() || in_interrupt()) {
-					DBGLOG(HAL, WARN, "MMIO failure in atomic context - scheduling recovery\n");
-					mt7902_schedule_recovery_from_atomic(prAdapter->prGlueInfo);
-					return FALSE;
-				}
-
+				/* The outer branch already established process context. */
 				DBGLOG(HAL, INFO, "Running recovery directly (process context)\n");
 				fgStatus = (mt79xx_pci_function_recover(
 														prAdapter->prGlueInfo->rHifInfo.pdev,
@@ -826,12 +817,15 @@ u_int8_t halSetDriverOwn(IN struct ADAPTER *prAdapter)
 			prBusInfo->checkDummyReg(prAdapter->prGlueInfo);
 	} else {
 		DBGLOG(INIT, WARN, "DRIVER OWN Fail!\n");
-		if (prChipInfo->prDebugOps->show_mcu_debug_info)
-			prChipInfo->prDebugOps->show_mcu_debug_info(prAdapter, NULL, 0, DBG_MCU_DBG_ALL, NULL);
+		if (prChipInfo->prDebugOps &&
+		    prChipInfo->prDebugOps->show_mcu_debug_info)
+			prChipInfo->prDebugOps->show_mcu_debug_info(
+				prAdapter, NULL, 0, DBG_MCU_DBG_ALL, NULL);
 #if (CFG_SUPPORT_DEBUG_SOP == 1)
 		halGuardedShowDebugSop(prAdapter, prChipInfo->prDebugOps);
 #endif
-		if (prChipInfo->prDebugOps->showCsrInfo)
+		if (prChipInfo->prDebugOps &&
+		    prChipInfo->prDebugOps->showCsrInfo)
 			prChipInfo->prDebugOps->showCsrInfo(prAdapter);
 	}
 
@@ -1154,6 +1148,7 @@ void halUninitMsduTokenInfo(struct ADAPTER *prAdapter)
     struct HIF_MEM_OPS *prMemOps;
     struct MSDU_TOKEN_INFO *prTokenInfo;
     struct MSDU_TOKEN_ENTRY *prToken;
+    unsigned long flags;
     uint32_t i;
 
     /* Raise exception (kernel warning/stack trace) if adapter is null */
@@ -1173,7 +1168,11 @@ void halUninitMsduTokenInfo(struct ADAPTER *prAdapter)
 
         prToken = &prTokenInfo->arToken[i];
 
-        /* Steal pointers to prevent race conditions with late-firing IRQs */
+        /* Serialize the snapshot/clear with token-pool bookkeeping.  Callers
+         * must still quiesce TX/IRQs before teardown: not every TX descriptor
+         * reader takes rTokenLock.
+         */
+        spin_lock_irqsave(&prTokenInfo->rTokenLock, flags);
         local_prMsduInfo = prToken->prMsduInfo;
         local_prPacket = prToken->prPacket;
         local_rPktDmaAddr = prToken->rPktDmaAddr;
@@ -1181,6 +1180,15 @@ void halUninitMsduTokenInfo(struct ADAPTER *prAdapter)
         local_u4PktDmaLength = prToken->u4PktDmaLength;
         local_u4DmaLength = prToken->u4DmaLength;
         was_in_use = prToken->fgInUsed;
+
+        prToken->prMsduInfo = NULL;
+        prToken->prPacket = NULL;
+        prToken->rPktDmaAddr = 0;
+        prToken->u4PktDmaLength = 0;
+        prToken->rDmaAddr = 0;
+        prToken->u4DmaLength = 0;
+        prToken->fgInUsed = FALSE;
+        spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
 
         /* Skip completely empty tokens */
         if (!local_prMsduInfo && !local_prPacket &&
@@ -1190,20 +1198,6 @@ void halUninitMsduTokenInfo(struct ADAPTER *prAdapter)
         log_dbg(HAL, TRACE,
 				"[UNINIT] Tok[%u] inUse=%u msdu=%p pkt=%p\n",
 				prToken->u4Token, was_in_use, local_prMsduInfo, local_prPacket);
-
-        /* * Atomically clear the token IMMEDIATELY.
-         * If an ISR hits on another core, it will see a safely empty token.
-         */
-        prToken->prMsduInfo = NULL;
-        prToken->prPacket = NULL;
-        prToken->rPktDmaAddr = 0;
-        prToken->u4PktDmaLength = 0;
-        prToken->rDmaAddr = 0;
-        prToken->u4DmaLength = 0;
-        prToken->fgInUsed = FALSE;
-
-        /* Issue a write memory barrier so other CPU cores see the nullified token */
-        smp_wmb();
 
         /* ---- DMA unmap using isolated local variables ---- */
         if (prMemOps->unmapTxBuf) {
@@ -1236,7 +1230,9 @@ void halUninitMsduTokenInfo(struct ADAPTER *prAdapter)
 #endif
     }
 
+    spin_lock_irqsave(&prTokenInfo->rTokenLock, flags);
     prTokenInfo->u4UsedCnt = 0;
+    spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
 
     DBGLOG(HAL, INFO,
 		   "Msdu Token Uninit: Tot[%u] Used[%u]\n",
@@ -1248,13 +1244,22 @@ void halUninitMsduTokenInfo(struct ADAPTER *prAdapter)
 
 uint32_t halGetMsduTokenFreeCnt(IN struct ADAPTER *prAdapter)
 {
-	struct PERF_MONITOR_T *prPerMonitor;
+	struct PERF_MONITOR_T *prPerMonitor = &prAdapter->rPerMonitor;
 	struct MSDU_TOKEN_INFO *prTokenInfo =
 		&prAdapter->prGlueInfo->rHifInfo.rTokenInfo;
-	prPerMonitor = &prAdapter->rPerMonitor;
-	prPerMonitor->u4UsedCnt = prTokenInfo->u4UsedCnt;
+	unsigned long flags;
+	uint32_t u4UsedCnt;
 
-	return HIF_TX_MSDU_TOKEN_NUM - prTokenInfo->u4UsedCnt;
+	spin_lock_irqsave(&prTokenInfo->rTokenLock, flags);
+	u4UsedCnt = prTokenInfo->u4UsedCnt;
+	spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
+
+	/* A corrupted count must not underflow the free-count result. */
+	if (WARN_ON(u4UsedCnt > HIF_TX_MSDU_TOKEN_NUM))
+		u4UsedCnt = HIF_TX_MSDU_TOKEN_NUM;
+
+	prPerMonitor->u4UsedCnt = u4UsedCnt;
+	return HIF_TX_MSDU_TOKEN_NUM - u4UsedCnt;
 }
 
 struct MSDU_TOKEN_ENTRY *halGetMsduTokenEntry(IN struct ADAPTER *prAdapter,
@@ -1272,21 +1277,25 @@ struct MSDU_TOKEN_ENTRY *halAcquireMsduToken(IN struct ADAPTER *prAdapter)
 		&prAdapter->prGlueInfo->rHifInfo.rTokenInfo;
 	struct MSDU_TOKEN_ENTRY *prToken;
 	unsigned long flags = 0;
+	uint32_t u4UsedCnt;
 #if CFG_SUPPORT_PCIE_ASPM_IMPROVE
 	struct BUS_INFO *prBusInfo = NULL;
 
 	prBusInfo = prAdapter->chip_info->bus_info;
 #endif
 
-	if (!halGetMsduTokenFreeCnt(prAdapter)) {
+	spin_lock_irqsave(&prTokenInfo->rTokenLock, flags);
+
+	/* Recheck under the lock: another CPU may have taken the last token. */
+	u4UsedCnt = prTokenInfo->u4UsedCnt;
+	if (unlikely(u4UsedCnt >= HIF_TX_MSDU_TOKEN_NUM)) {
+		spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
 		DBGLOG(HAL, INFO, "No more free MSDU token, Used[%u]\n",
-			   prTokenInfo->u4UsedCnt);
+			   u4UsedCnt);
 		return NULL;
 	}
 
-	spin_lock_irqsave(&prTokenInfo->rTokenLock, flags);
-
-	prToken = prTokenInfo->aprTokenStack[prTokenInfo->u4UsedCnt];
+	prToken = prTokenInfo->aprTokenStack[u4UsedCnt];
 #if KERNEL_VERSION(5, 0, 0) <= LINUX_VERSION_CODE
 	ktime_get_real_ts64(&prToken->rTs);
 #else
@@ -1471,44 +1480,63 @@ static void halResetMsduToken(IN struct ADAPTER *prAdapter)
 
 
 
-void halReturnMsduToken(IN struct ADAPTER *prAdapter, uint32_t u4TokenNum)
+/* Caller holds prTokenInfo->rTokenLock. Keep all free-stack/count changes
+ * in one place so timeout reclamation cannot return a token that has already
+ * been recycled by another CPU.
+ */
+static bool halReturnMsduTokenLocked(
+	IN struct ADAPTER *prAdapter,
+	struct MSDU_TOKEN_INFO *prTokenInfo,
+	struct MSDU_TOKEN_ENTRY *prToken)
 {
-	struct MSDU_TOKEN_INFO *prTokenInfo =
-		&prAdapter->prGlueInfo->rHifInfo.rTokenInfo;
-	struct MSDU_TOKEN_ENTRY *prToken;
-	unsigned long flags = 0;
-#if CFG_SUPPORT_PCIE_ASPM_IMPROVE
-	struct BUS_INFO *prBusInfo = NULL;
-
-	prBusInfo = prAdapter->chip_info->bus_info;
-#endif
-
-	if (!prTokenInfo->u4UsedCnt) {
-		DBGLOG(HAL, WARN, "MSDU token is full, Used[%u]\n",
-			   prTokenInfo->u4UsedCnt);
-		return;
-	}
-
-	prToken = &prTokenInfo->arToken[u4TokenNum];
-	if (!prToken->fgInUsed) {
-		DBGLOG(HAL, ERROR, "Return unuse token[%u]\n", u4TokenNum);
-		return;
-	}
-
-	spin_lock_irqsave(&prTokenInfo->rTokenLock, flags);
+	if (unlikely(!prTokenInfo->u4UsedCnt ||
+		     prTokenInfo->u4UsedCnt > HIF_TX_MSDU_TOKEN_NUM ||
+		     !prToken->fgInUsed))
+		return false;
 
 	prToken->fgInUsed = FALSE;
 	prTokenInfo->u4UsedCnt--;
 	prTokenInfo->aprTokenStack[prTokenInfo->u4UsedCnt] = prToken;
 
 #if CFG_SUPPORT_PCIE_ASPM_IMPROVE
-	if (prTokenInfo->u4UsedCnt == 0)
-		if (prBusInfo->configPcieASPM)
-			prBusInfo->configPcieASPM(
-									  prAdapter->prGlueInfo, FALSE);
+	if (prTokenInfo->u4UsedCnt == 0) {
+		struct BUS_INFO *prBusInfo = prAdapter->chip_info->bus_info;
+
+		if (prBusInfo && prBusInfo->configPcieASPM)
+			prBusInfo->configPcieASPM(prAdapter->prGlueInfo, FALSE);
+	}
+#else
+	(void)prAdapter;
 #endif
+	return true;
+}
 
+void halReturnMsduToken(IN struct ADAPTER *prAdapter, uint32_t u4TokenNum)
+{
+	struct MSDU_TOKEN_INFO *prTokenInfo =
+		&prAdapter->prGlueInfo->rHifInfo.rTokenInfo;
+	struct MSDU_TOKEN_ENTRY *prToken;
+	unsigned long flags = 0;
+	uint32_t u4UsedCnt;
+	bool fgInUsed;
 
+	if (unlikely(u4TokenNum >= HIF_TX_MSDU_TOKEN_NUM)) {
+		DBGLOG(HAL, ERROR, "Invalid MSDU token index[%u]\n", u4TokenNum);
+		return;
+	}
+
+	spin_lock_irqsave(&prTokenInfo->rTokenLock, flags);
+	prToken = &prTokenInfo->arToken[u4TokenNum];
+	u4UsedCnt = prTokenInfo->u4UsedCnt;
+	fgInUsed = prToken->fgInUsed;
+	if (!halReturnMsduTokenLocked(prAdapter, prTokenInfo, prToken)) {
+		spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
+		if (unlikely(u4UsedCnt > HIF_TX_MSDU_TOKEN_NUM || !u4UsedCnt))
+			DBGLOG(HAL, WARN, "Invalid MSDU token count[%u]\n", u4UsedCnt);
+		else if (!fgInUsed)
+			DBGLOG(HAL, ERROR, "Return unused token[%u]\n", u4TokenNum);
+		return;
+	}
 	spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
 }
 
@@ -1524,7 +1552,6 @@ void halReturnMsduToken(IN struct ADAPTER *prAdapter, uint32_t u4TokenNum)
 void halReturnTimeoutMsduToken(struct ADAPTER *prAdapter)
 {
 	struct MSDU_TOKEN_INFO *prTokenInfo;
-	struct MSDU_TOKEN_ENTRY *prToken;
 #if KERNEL_VERSION(5, 0, 0) <= LINUX_VERSION_CODE
 	struct timespec64 rNowTs, rTime;
 	struct timespec64 rTimeout;
@@ -1532,33 +1559,32 @@ void halReturnTimeoutMsduToken(struct ADAPTER *prAdapter)
 	struct timeval rNowTs, rTime;
 	struct timeval rTimeout;
 #endif
-	uint32_t u4Idx = 0;
+	uint32_t u4Idx;
 
 	ASSERT(prAdapter);
 	ASSERT(prAdapter->prGlueInfo);
 
 	prTokenInfo = &prAdapter->prGlueInfo->rHifInfo.rTokenInfo;
-
 	rTimeout.tv_sec = HIF_MSDU_REPORT_RETURN_TIMEOUT;
 #if KERNEL_VERSION(5, 0, 0) <= LINUX_VERSION_CODE
 	rTimeout.tv_nsec = 0;
-#else
-	rTimeout.tv_usec = 0;
-#endif
-#if KERNEL_VERSION(5, 0, 0) <= LINUX_VERSION_CODE
 	ktime_get_real_ts64(&rNowTs);
 #else
+	rTimeout.tv_usec = 0;
 	do_gettimeofday(&rNowTs);
 #endif
 
 	for (u4Idx = 0; u4Idx < HIF_TX_MSDU_TOKEN_NUM; u4Idx++) {
-		prToken = &prTokenInfo->arToken[u4Idx];
-		if (!prToken->fgInUsed)
-			continue;
+		struct MSDU_TOKEN_ENTRY *prToken = &prTokenInfo->arToken[u4Idx];
+		unsigned long flags;
+		bool fgReturned = false;
 
-		/* Ignore now time < token time */
-		if (halTimeCompare(&rNowTs, &prToken->rTs) < 0)
+		spin_lock_irqsave(&prTokenInfo->rTokenLock, flags);
+		if (!prToken->fgInUsed ||
+		    halTimeCompare(&rNowTs, &prToken->rTs) < 0) {
+			spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
 			continue;
+		}
 
 #if KERNEL_VERSION(5, 0, 0) <= LINUX_VERSION_CODE
 		rTime = timespec64_sub(rNowTs, prToken->rTs);
@@ -1572,18 +1598,21 @@ void halReturnTimeoutMsduToken(struct ADAPTER *prAdapter)
 		rTime.tv_usec -= prToken->rTs.tv_usec;
 #endif
 
-		/* Return token to free stack */
-		if (halTimeCompare(&rTime, &rTimeout) >= 0) {
+		if (halTimeCompare(&rTime, &rTimeout) >= 0)
+			fgReturned = halReturnMsduTokenLocked(prAdapter,
+								      prTokenInfo, prToken);
+		spin_unlock_irqrestore(&prTokenInfo->rTokenLock, flags);
+
+		if (fgReturned) {
 			DBGLOG(HAL, INFO,
 			       "Free TokenId[%u] timeout[sec:%ld, usec:%ld]\n",
 #if KERNEL_VERSION(5, 0, 0) <= LINUX_VERSION_CODE
-			       u4Idx, rTime.tv_sec, rTime.tv_nsec/1000);
+			       u4Idx, rTime.tv_sec, rTime.tv_nsec / 1000);
 #else
-			u4Idx, rTime.tv_sec, rTime.tv_usec);
+			       u4Idx, rTime.tv_sec, rTime.tv_usec);
 #endif
-		halReturnMsduToken(prAdapter, u4Idx);
+		}
 	}
-}
 }
 
 bool halHifSwInfoInit(IN struct ADAPTER *prAdapter)
@@ -1664,6 +1693,11 @@ u_int8_t halProcessToken(IN struct ADAPTER *prAdapter,
 	struct HIF_MEM_OPS *prMemOps;
 	struct RTMP_DMACB *prTxCell;
 	struct RTMP_TX_RING *prTxRing;
+
+	if (unlikely(u4Token >= HIF_TX_MSDU_TOKEN_NUM)) {
+		DBGLOG(HAL, ERROR, "Reject invalid MSDU token[%u]\n", u4Token);
+		return FALSE;
+	}
 
 	prHifInfo = &prAdapter->prGlueInfo->rHifInfo;
 	prMemOps = &prHifInfo->rMemOps;
@@ -2653,6 +2687,25 @@ bool halWpdmaAllocTxRing(struct GLUE_INFO *prGlueInfo, uint32_t u4Num,
 
 
 
+static void halWpdmaFreeRxCellBuf(struct GL_HIF_INFO *prHifInfo,
+				  struct HIF_MEM_OPS *prMemOps,
+				  struct RTMP_DMACB *prRxCell)
+{
+	struct RTMP_DMABUF *prDmaBuf = &prRxCell->DmaBuf;
+
+	if (prMemOps->unmapRxBuf &&
+	    (prDmaBuf->AllocVa || prDmaBuf->AllocPa))
+		prMemOps->unmapRxBuf(prHifInfo, prDmaBuf->AllocPa,
+				     prDmaBuf->AllocSize);
+	if (prMemOps->freePacket && prRxCell->pPacket)
+		prMemOps->freePacket(prRxCell->pPacket);
+
+	prRxCell->pPacket = NULL;
+	prDmaBuf->AllocVa = NULL;
+	prDmaBuf->AllocPa = 0;
+	prDmaBuf->AllocSize = 0;
+}
+
 bool halWpdmaAllocRxRing(struct GLUE_INFO *prGlueInfo, uint32_t u4Num,
                          uint32_t u4Size, uint32_t u4DescSize,
                          uint32_t u4BufSize, bool fgAllocMem)
@@ -2679,22 +2732,9 @@ bool halWpdmaAllocRxRing(struct GLUE_INFO *prGlueInfo, uint32_t u4Num,
 	/* Free any previously allocated per-cell buffers before (re)alloc
 	 * to prevent swiotlb leaks on repeated probe/remove cycles.
 	 */
-	for (u4Idx = 0; u4Idx < pRxRing->u4RingSize; u4Idx++) {
-		struct RTMP_DMACB *prCell = &pRxRing->Cell[u4Idx];
-		struct RTMP_DMABUF *pBuf = &prCell->DmaBuf;
-
-		if (prCell->pPacket) {
-			if (prMemOps->unmapRxBuf && pBuf->AllocPa)
-				prMemOps->unmapRxBuf(prHifInfo,
-						     pBuf->AllocPa,
-						     pBuf->AllocSize);
-			if (prMemOps->freePacket)
-				prMemOps->freePacket(prCell->pPacket);
-			prCell->pPacket = NULL;
-			pBuf->AllocVa  = NULL;
-			pBuf->AllocPa  = 0;
-		}
-	}
+	for (u4Idx = 0; u4Idx < pRxRing->u4RingSize; u4Idx++)
+		halWpdmaFreeRxCellBuf(prHifInfo, prMemOps,
+				      &pRxRing->Cell[u4Idx]);
 
 	if (fgAllocMem && prMemOps->allocRxDesc)
 		prMemOps->allocRxDesc(prHifInfo, prRxDesc, u4Num);
@@ -2719,17 +2759,9 @@ bool halWpdmaAllocRxRing(struct GLUE_INFO *prGlueInfo, uint32_t u4Num,
 		 * are still mapped. Free them before reinitializing to avoid
 		 * double-mapping the same physical pages.
 		 */
-		if (!fgAllocMem && prRxCell->pPacket) {
-			if (prMemOps->unmapRxBuf && pDmaBuf->AllocPa)
-				prMemOps->unmapRxBuf(prHifInfo,
-						     pDmaBuf->AllocPa,
-						     pDmaBuf->AllocSize);
-			if (prMemOps->freePacket)
-				prMemOps->freePacket(prRxCell->pPacket);
-			prRxCell->pPacket = NULL;
-			pDmaBuf->AllocVa  = NULL;
-			pDmaBuf->AllocPa  = 0;
-		}
+		if (!fgAllocMem &&
+		    (prRxCell->pPacket || pDmaBuf->AllocVa || pDmaBuf->AllocPa))
+			halWpdmaFreeRxCellBuf(prHifInfo, prMemOps, prRxCell);
 
 		prRxCell->AllocSize = u4DescSize;
 		prRxCell->AllocVa   = RingBaseVa;
@@ -2770,17 +2802,15 @@ bool halWpdmaAllocRxRing(struct GLUE_INFO *prGlueInfo, uint32_t u4Num,
 	return true;
 
 err_cleanup:
-	for (; u4Idx > 0; u4Idx--) {
-		prRxCell = &pRxRing->Cell[u4Idx - 1];
-		if (prRxCell->pPacket) {
-			if (prMemOps->unmapRxBuf)
-				prMemOps->unmapRxBuf(prHifInfo,
-						     prRxCell->DmaBuf.AllocPa,
-						     prRxCell->DmaBuf.AllocSize);
-			if (prMemOps->freePacket)
-				prMemOps->freePacket(prRxCell->pPacket);
-			prRxCell->pPacket = NULL;
-		}
+	/* Include the cell that failed allocation: allocRxBuf may have returned
+	 * a packet even when it did not produce a usable DMA address.
+	 */
+	for (;;) {
+		prRxCell = &pRxRing->Cell[u4Idx];
+		halWpdmaFreeRxCellBuf(prHifInfo, prMemOps, prRxCell);
+		if (u4Idx == 0)
+			break;
+		u4Idx--;
 	}
 	return false;
 }
@@ -2998,21 +3028,8 @@ void halWpdmaFreeRing(struct GLUE_INFO *prGlueInfo)
 				pRxD->DMADONE = 0;
 			}
 
-			/* Unmap DMA buffer if allocated */
-			if (prMemOps->unmapRxBuf && cell->DmaBuf.AllocVa)
-				prMemOps->unmapRxBuf(prHifInfo,
-									 cell->DmaBuf.AllocPa,
-									 cell->DmaBuf.AllocSize);
+			halWpdmaFreeRxCellBuf(prHifInfo, prMemOps, cell);
 
-			/* Free any packet and clear pointer */
-			if (prMemOps->freePacket && cell->pPacket)
-				prMemOps->freePacket(cell->pPacket);
-			cell->pPacket = NULL;
-
-			/* Clear buffer pointer */
-			cell->DmaBuf.AllocVa = NULL;
-			cell->DmaBuf.AllocPa = 0;
-			cell->DmaBuf.AllocSize = 0;
 		}
 
 		/* Free the descriptor ring memory */
